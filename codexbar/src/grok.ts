@@ -1,7 +1,7 @@
 /**
  * grok 周额度的类型与**文案单一真源**。
  *
- * 数据来自仓库根的 `grok-quota`（逆向出来的 `GET /v1/billing?format=credits`，不是官方公开 API）。
+ * 数据来自仓库根的 `grok-quota`（从 xAI 客户端抓包得到的 `GET /v1/billing?format=credits`，非官方公开 API）。
  * 它与本页下半部分的 token 统计**不同源**：那边是扫本机 `~/.grok` 下的 updates.jsonl，
  * 这边是 xAI 云端的 credits 账单。两个数不可加、不可互推。
  *
