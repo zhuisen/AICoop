@@ -93,7 +93,8 @@ loopback RPC,**不联网、不消耗配额**)。没装那家 CLI 的机器上**�
   按钟点算的「续航 99 小时」对干活没有意义（2026-10-15 改）。依据是历史 5h 用完次数与 5h↔周换算比，样本不足显示 `—`，绝不写 0。
   Gemini 档仍是旧口径。
 - **卡片动作条**：点卡片从底部浮出（卡片高度不变），**5 秒后自动收回**，底边一条细线倒计时；
-  macOS 式半透明磨砂。角标 **下一个** = 真挑号器的结果，**直连** = `auth.json` 里那个号（只有不走代理的 `\codex` 才用它）。
+  macOS 式半透明磨砂。点删除（垃圾桶）后整条换成「删除 X？· 确认删除 · 取消」，不可逆的确认旁边不挨着别的按钮。
+  角标 **下一个** = 真挑号器的结果，**直连** = `auth.json` 里那个号（只有不走代理的 `\codex` 才用它）。
 - **菜单栏跟着代理走**：托盘标题与弹窗里高亮的那一行，都是**代理此刻在用的号**，不是上次 CLI 切换的号。
 - **定时探针**（2026-10-15 起在总览工具栏，Codex 与 Gemini 各一个「定时 开/关」胶囊）：点开选时间，实际在所选时刻起 **3 分钟内随机**触发（选 06:00 ⇒ 06:00–06:03）；Codex 探 Plus 号、Gemini 探参与轮换的号。⚠️ **会花钱，默认关闭**；电脑睡着错过的由 app 醒来后补跑，同一天只跑一次。
 - **Gemini 档位**：Google AI Ultra 的号在卡片 / Hero / 菜单栏名字旁标 **ULTRA**（Pro 是大多数，不标）。
@@ -214,7 +215,21 @@ loopback RPC,**不联网、不消耗配额**)。没装那家 CLI 的机器上**�
 | `traffic/agy_rotation.py` | 代理轮换 **Gemini 版块**的数据（与 `rotation.py` 同形 + `platform: "agy"`）。读 `~/.gemini/antigravity-cli/log/cli-*.log` 与 `agy.log`；纯模块、只读、不联网、不碰凭证 |
 | `traffic/discover.py` | **数据源体检**(`--json`):找本机还有哪些 AI 把用量落了盘,并现场验算它的 token 口径。纯本地只读、不联网、不碰凭证,SQLite 一律 `mode=ro`,**只出报告不自动启用**(接一家的实质是写解析器) |
 | `claude/claude_tokens.py` | ⚠️ 只统计 Claude 的旧扫描器,能力已被 `traffic/scan.py` 完全覆盖(v0.7.0 起 app 不再调用)。保留仅作 CLI |
-| `scripts/install-launchd.sh` | **生成并加载 3 个 launchd 服务**(autosync/quotad/proxy)。★ keepalive(04:30)与 refreshquota(07:00)已于 2026-08-29 按需取消 —— 前者职责由代理接手(覆盖面见上表①),后者与 quotad 的 300s 全池扫描重复。两个 CLI 子命令仍可手动跑。生成而非提交成文件:plist 内嵌绝对路径,提交的副本换台机器就是错的,且会静默漂移(旧的 `launchd/*.plist` 就漂到了写死 `/usr/bin/python3`)。★脚本会**解析并钉住 OpenSSL 版的 python3**,见「维护约定」 |
+| `scripts/install-launchd.sh` | **生成并加载 5 个 launchd 服务**(autosync/quotad/proxy + 两个定时计费探针 dawnprobe/agydawn,探针默认关)。★ keepalive(04:30)与 refreshquota(07:00)已于 2026-08-29 按需取消 —— 前者职责由代理接手(覆盖面见上表①),后者与 quotad 的 300s 全池扫描重复。两个 CLI 子命令仍可手动跑。生成而非提交成文件:plist 内嵌绝对路径,提交的副本换台机器就是错的,且会静默漂移(旧的 `launchd/*.plist` 就漂到了写死 `/usr/bin/python3`)。★脚本会**解析并钉住 OpenSSL 版的 python3**,见「维护约定」 |
+| `scripts/install-windows.ps1` | Windows 版常驻服务(计划任务),与 `install-launchd.sh` **装同一组服务**(`tests/test_installers_agree.py` 守着) |
+| `daemon/quota_daemon.py` | **quotad**:活动驱动 + rollout 尾随 + 300s 全池扫描刷额度。启动时整份加载 `codex-rotate`,所以改 `codex-rotate` 也要 kickstart 它 |
+| `connector.py` | **账号池 Connector**(设置页「账号池接入」的后端):把只装了看板的机器接进轮换 —— 准备运行时、装入口与常驻服务、写托管区配置。**绝不调用 `codex login/logout`**。v1.10.0 起逐字节比对 `<store>/runtime/` 与 App 自带脚本,不一致就要求重新接入 |
+| `<store>/runtime/` | 装机版(`.dmg`)接入时复制过去的运行时(代理/CLI/服务入口都跑这份)。**App 更新不会替换它** —— 每次更新后在设置页再点一次「接入」 |
+| `dawn_sched.py` | 定时探针「到没到点」的唯一判据(`codex-rotate` 与 `agy-rotate` 的 `dawn-probe --tick` 共用):每 60s 被拉起一次,自己读开关/时间/当天记录,所选时刻起 3 分钟内随机 |
+| `portalock.py` | `fcntl.flock` 的跨平台层(Windows 用 `LockFileEx`)。锁序 state → cred 是跨平台铁律 |
+| `resume_provenance.py` | 代理会话的不可变标记(按 CODEX_HOME + 会话 UUID 建空文件),**从不改 codex 的数据库与 rollout** |
+| `grok-quota` | grok 周额度的**只读**抓取(xAI 账单接口,`/v1/settings` 一天一次取套餐名;429 按 `Retry-After` 退避)。本仓**唯一既联网又读凭证**的脚本,**从不刷新 token** |
+| `agy-quota` | agy 额度只读抓取:走本机 agy 进程的 loopback RPC,**不联网、不读凭证** |
+| `bin/agy` | agy 的 PATH wrapper:拦 `-p` 模式把用量写进 `traffic/agy-ledger/`,并在启动前拉起额度采样器(`traffic/agy_quota_sampler.py`) |
+| `codexbar/uishot/make_harness.py` | UI 验证 harness:打桩 Tauri IPC + 脱敏夹具,用**同一份构建产物**在 Chrome headless 里渲染(`127.0.0.1:3304`)。改了组件先 `vite build --outDir uishot/app` 再跑它 |
+| `tests/` | 不变量与行为闸(`python3 -m pytest -q tests`);UI 闸跑真 bundle,harness 没起时是 **skip 不是绿** |
+| `.github/workflows/` | `ci.yml`(测试 + 双平台构建)· `release.yml`(推 `v*` tag 触发,产出 macOS `.dmg` 与 Windows `.exe/.msi` 挂到 Release) |
+| `app/CodexBar/` | ⚠️ 早期 Swift 原型,已被 `codexbar/` 取代,别在这里改 |
 | `agy-rotate` | ★ **agy(Antigravity) 账号池 CLI** —— `login` / `list` / `quota` / `switch` / `pick` / `auto` / `live` / `health` / `probe` / `rotate` / `auto-switch` / `rename` / `remove`。与 codex 池**机制完全不同**：agy 只在**进程启动时**读凭证，所以换号只对**下一次启动的 agy** 生效。★★★ 登录态在 **macOS 钥匙串**（`svce=gemini`/`acct=antigravity`），那个 `antigravity-oauth-token` 文件只是钥匙串写失败时的兜底 |
 | `agy/pool.py` | agy 池的凭证与额度层（钥匙串读写、OAuth 刷新、`retrieveUserQuotaSummary` 按账号取**完整**额度含周窗口）。OAuth client 从**本机 agy 二进制**现取，**绝不入库**（本仓公开） |
 | `auth/agy/`(gitignored) | agy 每号凭证 `<sub>.json`(0600) |
