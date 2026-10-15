@@ -468,7 +468,9 @@ STUB = """
     try {
       var _o = JSON.parse(SNAPSHOT);
       var c = _o && _o.platforms && _o.platforms.codex;
-      if (c && !c.by_provider) {
+      // ★ 无条件覆盖（2026-10-16）：原来是 `!c.by_provider` 才注入 —— 活快照自己带了 by_provider
+      //   （当天没走中转站）就不注入，`TokenDun` 消失，路由分账闸跟着日期红。夹具就该恒定。
+      if (c) {
         // ★★ 形状是 **provider → 日期 → 桶**（2026-09-10 起）。前端按当前档位求和，
         //    所以路由分账与同页的 KPI/图必然同窗口。
         // ★ 各 provider 落在**不同的日子**上 —— 全放同一天的话，「跟随档位」那条闸

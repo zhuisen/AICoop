@@ -13,6 +13,7 @@ except ImportError:
 import re
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -67,6 +68,11 @@ class TheMainWindowZoomsWithItsSize(unittest.TestCase):
     def test_the_rust_unit_tests_pass(self):
         if not shutil.which("cargo"):
             self.skipTest("没有 cargo")
+        # CI 的 invariants job 跑在 ubuntu 上，没装 gtk/gio 开发库 ⇒ tauri 依赖链编不过（v1.10.0 ci 实测
+        # `pkg-config … gio-2.0 >= 2.70` 失败）。那不是 zoom 逻辑红；Rust 的真编译在 ci.yml 的 macOS/Windows 构建 job 里。
+        if sys.platform.startswith("linux") and subprocess.run(
+                ["pkg-config", "--exists", "gio-2.0"], capture_output=True).returncode != 0:
+            self.skipTest("Linux 缺 gio-2.0 开发库，tauri 编不了")
         r = subprocess.run(["cargo", "test", "--lib", "zoom_tests", "--quiet"],
                            cwd=ROOT / "codexbar" / "src-tauri", capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stdout[-800:] + r.stderr[-800:])

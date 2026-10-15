@@ -37,7 +37,7 @@ HEAD_JS = """() => { const h = document.querySelector('[data-overview-head]'); i
 def node_eval(expr):
     r = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "-e",
                         "import('%s').then(m => console.log(JSON.stringify(%s)))"
-                        % ((SRC / "hooks" / "useOneRowHeader.ts").as_posix(), expr)],
+                        % ((SRC / "resizeMath.ts").as_posix(), expr)],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-600:]
     return json.loads(r.stdout.strip().splitlines()[-1])

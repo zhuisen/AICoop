@@ -45,11 +45,11 @@ def code(rel):
 
 class PureJudgements(unittest.TestCase):
     def test_fill_height_rounds_down_to_4(self):
-        self.assertEqual(node("hooks/useFillHeight.ts", "[0,3,4,7,157,160].map(x => m.quantizeDown(x))"),
+        self.assertEqual(node("resizeMath.ts", "[0,3,4,7,157,160].map(x => m.quantizeDown(x))"),
                          [0, 0, 4, 4, 156, 160], "★ 必须向下取：向上取图表会比容器高 1–3px")
 
     def test_header_needs_slack_to_come_back(self):
-        r = node("hooks/useOneRowHeader.ts",
+        r = node("resizeMath.ts",
                  "[m.nextCompact(true, 400, 910, 900), m.nextCompact(true, 400, 915, 900), m.nextCompact(true, 400, 916, 900)]")
         self.assertEqual(r, [True, True, False], "★ 紧凑态回全名要多出 16px 余量，否则临界点来回拖就来回翻")
 

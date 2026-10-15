@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { nextCompact } from "../resizeMath";
 
 /**
  * 总览顶栏「一行放下」（用户 2026-10-15：「最小窗口的情况下总览页面顶部要一行展示所有……
@@ -10,15 +11,6 @@ import { useLayoutEffect, useRef, useState } from "react";
  * ★ 紧凑态里量不到全名的宽度（全名不在 DOM 里），所以记住**上一次全名态量到的宽度**来判「回得去吗」。
  *   不记就会：窗口放大 → 切回全名 → 又放不下 → 切紧凑 …… 每帧来回翻（§7.2「每帧调用必须幂等」）。
  */
-/** 紧凑态要多出这么多余量才回全名（2026-10-15 三方评审）：没有死区时，宽度停在临界点 ±几 px
- *  拖动，全名/短名会跟着来回换。 */
-export const RESTORE_SLACK = 16;
-
-export function nextCompact(cur: boolean, need: number, avail: number, lastFull: number): boolean {
-  if (!cur) return need > avail;
-  return lastFull + RESTORE_SLACK > avail;
-}
-
 export function useOneRowHeader(gap: number, deps: unknown[]): {
   ref: React.RefObject<HTMLDivElement | null>; compact: boolean;
 } {
