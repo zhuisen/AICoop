@@ -760,6 +760,14 @@ function relayEntry() {
           var rs5 = __NOW__ + 18000; r5.resetTime = new Date(rs5 * 1000).toISOString();
           a0.quota_anchor = { 'gemini-5h': { state: 'floating', slides: 3, used_max: 0, reset: rs5 } };
         }
+        // ★ `?agyodd=carried`：第一个号的 Gemini 组这次云端没回来，沿用 25 分钟前那份（`seenAt`），2026-10-16。
+        //   ★ 每个号都标：当值号的卡走本机 RPC 那份（能证明归属时 `snapshotOf` 优先它），只标第一个会落空。
+        if (odd === 'carried') {
+          subs.forEach(function (sb) {
+            var qs = accs[sb].quota_summary;
+            if (qs && qs[0]) qs[0].buckets.forEach(function (b) { b.seenAt = __NOW__ - 1500; });
+          });
+        }
         if (odd === 'unknown' && a0) {
           delete a0.quota_summary[0].buckets[1].remainingFraction;
           a0.quota.gemini = { remaining: null, reset: null };

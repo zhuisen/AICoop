@@ -698,6 +698,36 @@ def fetch_tier(access_token):
             "plan": plan_of(tid)}, ""
 
 
+def carry_missing_groups(old_groups, old_at, new_groups, now=None):
+    """新读数里**整组没回来**的，沿用上次那组并标 `seenAt`（2026-10-16，用户：第二个号的 5h/周不对）。
+
+    实测云端摘要对**同一个号**几分钟内一会儿带「Gemini Models」组、一会儿不带（dbk 01:40 有、01:43 无、
+    01:47 又有）。整份替换 ⇒ Gemini 两个桶消失：卡片按窗口取各组最小值，画出的是 **Claude/GPT 组的
+    5h 100% / 周 100%**；选号投影也丢了 gemini，号被「读不到排最后」。这是 CLAUDE.md §7.0b 第 3 问：
+    **这次没返回的子字段沿用旧值，不置空**。
+
+    ★ 每个沿用的桶带 `seenAt` = 那份读数的时刻；已经带着的保持不变（连续缺失不会被刷成「刚刚」）。
+    ★ 桶的 `resetTime` 已过 ⇒ 删掉 `remainingFraction`（= 读不到，画「—」）：窗口重置过的旧数不是任何一个值。
+    ★ 只按组名补**整组**；同组里少了某个桶不在这里补 —— 那是 `quota_by_group` 的「桶在没数字」那条路。
+    """
+    now = time.time() if now is None else now
+    have = {str(g.get("displayName")) for g in new_groups or []}
+    out = list(new_groups or [])
+    for g in old_groups or []:
+        if str(g.get("displayName")) in have:
+            continue
+        buckets = []
+        for b in g.get("buckets") or []:
+            nb = dict(b)
+            nb.setdefault("seenAt", int(old_at or 0))
+            rs = _iso_ts(nb.get("resetTime"))
+            if rs is not None and rs <= now:
+                nb.pop("remainingFraction", None)
+            buckets.append(nb)
+        out.append(dict(g, buckets=buckets))
+    return out
+
+
 def quota_by_group(groups):
     """把摘要折成旧的 `{组名: {remaining, reset}}` —— 选号与 CLI 打印仍吃这个形状。
 

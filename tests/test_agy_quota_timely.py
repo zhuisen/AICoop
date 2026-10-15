@@ -101,6 +101,7 @@ class TheAccountsAreFetchedInParallel(unittest.TestCase):
             load=lambda: self.pool,
             fetch_quota=fetch_quota,
             quota_by_group=lambda g: {"gemini": {"remaining": 1, "reset": None, "who": g[0]["who"]}},
+            carry_missing_groups=lambda old, at, new, now=None: new,
             save=lambda p: saved.append(True),
             _lock=lambda path: open(os.devnull),    # 上下文管理器即可
             POOL=None,

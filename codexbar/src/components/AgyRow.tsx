@@ -7,7 +7,7 @@ import type { AgySnapshot } from "../agy";
 import {
   AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText, agyWinRows,
 } from "../agy";
-import { winNumColor } from "../helpers";
+import { winNumColor, fmtAgo } from "../helpers";
 
 const MONO = "'JetBrains Mono'";
 
@@ -129,8 +129,8 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
           if (row == null || rr == null) {
             return (
               <div key={label} className="mb-row-meta" data-agy-unknown={row ? "" : undefined}
-                   title={row ? AGY_UNKNOWN_TITLE : isCurrent ? `${label} 窗口这次没读到`
-                     : `${label} 窗口只有**当前登录**的号读得到（本机 RPC）—— 云端按账号那条只给 5h`}>
+                   title={row ? AGY_UNKNOWN_TITLE
+                     : `${label} 窗口这次没读到 —— 云端偶尔不返回这一格，下次刷新会补上`}>
                 <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>{label}</span>
                 <div className="mb-row-bar" style={{ background: t.barTrack }} />
                 <span style={{ fontSize: 9.5, fontWeight: 600, color: t.muted,
@@ -139,8 +139,12 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
               </div>
             );
           }
+          // ★★ 沿用的旧读数（`seen_at`）与 AgyCard 同一画法：降不透明度 + 标龄。
+          //   只在卡片上降级、菜单栏照常画 = 同一个状态两种画法（本仓在 grok 上栽过）。
           return (
-            <div key={label} className="mb-row-meta">
+            <div key={label} className="mb-row-meta"
+                 title={row.seen_at ? `这是 ${fmtAgo(row.seen_at)}的读数：最近一次云端没返回这一组，沿用上次的数` : undefined}
+                 style={{ opacity: row.seen_at ? .62 : 1 }}>
               <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>{row.label}</span>
               <div className="mb-row-bar" style={{ background: t.barTrack }}>
                 <div style={{ height: "100%", width: `${rr}%`, background: ringColor, borderRadius: 2,

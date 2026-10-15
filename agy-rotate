@@ -293,6 +293,9 @@ def _note_pool_anchors(sub, groups, now, billed=None):
 
 def _store_quota(sub, a, groups, err, billed=None):
     """一次额度读数落进池里这个号 → 旧形状投影 `q`（失败为 None）。`quota` 与探针共用这一份。"""
+    if not err:
+        # ★★ 云端偶尔整组不回（同一号几分钟内来回）⇒ 沿用上次那组并标 `seenAt`，见 `P.carry_missing_groups`。
+        groups = P.carry_missing_groups(a.get("quota_summary"), a.get("quota_at"), groups, now=time.time())
     q = P.quota_by_group(groups) if not err else None
     a["quota_summary"] = groups if not err else None
     a["quota"] = q if not err else None
@@ -712,6 +715,7 @@ def cmd_health(args):
         q, qerr = P.fetch_quota(cred["token"]["access_token"])
         rows.append((sub, a, "ok" if not qerr else "api_error", qerr or ""))
         if not qerr:
+            q = P.carry_missing_groups(a.get("quota_summary"), a.get("quota_at"), q, now=time.time())
             a["quota_summary"] = q
             a["quota"] = P.quota_by_group(q)
             a["quota_at"] = int(time.time())

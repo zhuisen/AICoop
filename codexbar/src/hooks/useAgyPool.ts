@@ -67,6 +67,8 @@ export interface AgyPoolAccount {
    */
   quota_summary?: { displayName?: string; buckets?: {
     bucketId?: string; window?: string; resetTime?: string; remainingFraction?: number;
+    /** 这组这次云端没回来、沿用的是这个时刻的读数（`agy/pool.py::carry_missing_groups`）。 */
+    seenAt?: number;
   }[] }[] | null;
 }
 
@@ -134,6 +136,8 @@ function toSnapshot(a: AgyPoolAccount): AgySnapshot {
         reset_at: b.resetTime ? Math.round(Date.parse(b.resetTime) / 1000) : null,
         // ★ 没它，闲置桶那个永远停在 4h5xm 的倒计时就没有任何标记（`agyResetText` 核身份后才用）。
         anchor: (b.bucketId && a.quota_anchor?.[b.bucketId]) || undefined,
+        // ★★ 沿用的旧读数必须带着标记到卡片，否则它会冒充现值（2026-10-16 dbk 那次）。
+        seen_at: typeof b.seenAt === "number" ? b.seenAt : undefined,
       })),
   })).filter((g) => g.buckets.length > 0);
   // 一个数都没有 = 形状不对，仍按读失败处理（同 `agy-quota::parse_quota`）。

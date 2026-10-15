@@ -351,14 +351,14 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                   {row ? "上游没给数" : "\"这次没读到\""}</span>
               </div>
             ) : (
-              // ★★★ `seen_at` = 这一格是**上次当值时看到的**，不是现在读到的
-              //   （2026-09-15 用户实报「两个号一个有周额度一个没有」）。
-              //   周窗口只有本机 RPC 有、只看得到当值号；云端那条**结构上没有周**（当天实测）。
-              //   所以这里画的是一个**真实发生过**的数字 —— 但必须标龄、走中性色，
+              // ★★★ `seen_at` = 这一格是**上次读到的**，不是这次读到的。
+              //   现在的来源（2026-10-16）：云端摘要偶尔整组不回（同一个号几分钟内来回），
+              //   后端沿用上次那组并标时刻（`agy/pool.py::carry_missing_groups`）。
+              //   画的是一个**真实发生过**的数字 —— 但必须标龄、降不透明度，
               //   否则它会冒充现值，而那比画空更糟（§7.0b 的反面：不许把旧值伪装成新值）。
               <div key={label}
                    title={row.seen_at
-                     ? `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}% —— 这是这个号**上次当值时**读到的（${fmtAgo(row.seen_at)}）。周窗口只有当前登录的号读得到，云端按账号那条没有周。`
+                     ? `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}% —— 这是 ${fmtAgo(row.seen_at)}的读数：最近一次云端没返回这一组，沿用上次的数，下次读到就会更新。`
                      : `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}%`}
                    style={{ display: "flex", alignItems: "center", gap: 6,
                             opacity: row.seen_at ? .62 : 1 }}>

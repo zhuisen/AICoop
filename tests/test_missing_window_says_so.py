@@ -101,11 +101,15 @@ class NoWindowRowIsSilentlyBlank(unittest.TestCase):
 class TheTwoKindsOfMissingAreNotTheSameSentence(unittest.TestCase):
     """★★★ 这一组才是重点：两种缺失的**原因不同、下一步动作也不同**。"""
 
-    def test_agy_says_only_the_live_account_can_read_it(self):
+    def test_agy_says_this_read_missed_it(self):
+        """agy 缺一格 = **这一次没取到**（见本文件 docstring）。
+        ★ 2026-10-16 更正：原断言要的是「只有当前登录的号读得到」—— 那句话 B53（2026-09-15）就证伪了
+          （云端按账号返回完整摘要含周），闸却一直守着它，菜单栏也一直在说这句假话。"""
         for name in ("AgyCard", "AgyRow"):
             with self.subTest(component=name):
                 c = code(TARGETS[name])
-                self.assertIn("当前登录", c, f"★★ {name} 没说清是「只有当值号读得到」")
+                self.assertIn("这次没读到", c, f"★★ {name} 没说清是「这一次没取到」")
+                self.assertNotIn("当前登录", c, f"★★ {name} 又在说「只有当值号读得到」—— B53 已证伪")
 
     def test_neither_borrows_the_others_wording(self):
         """★★★ 把 grok 的「上游没有」套到 agy 上 = 告诉用户"等也没用"，

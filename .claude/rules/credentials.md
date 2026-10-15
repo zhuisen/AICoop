@@ -440,3 +440,8 @@ paths:
   - ★★★ **测试默认 `AGY_KEYRING=0`**（`tests/__init__.py` + `tests/test_isolation_bootstrap.py` 两处）。
     钥匙串**没有临时目录这种东西**，重定向 `AGY_TOKEN_FILE` 对它完全无效 ——
     一条用例调到 `install_live()` 就能覆盖用户真实的 agy 登录态，代价是重走一遍浏览器 OAuth。
+
+- ★★ **agy 云端额度摘要会整组缺失（2026-10-16，B81）**：同一个号几分钟内一会儿带「Gemini Models」组、一会儿不带（dbk 200 次里 6 次）。
+  写入一律经 `agy/pool.py::carry_missing_groups` —— 缺的组沿用上次那组、每桶标 `seenAt`，重置过的桶改成读不到。
+  **新增任何写 `quota_summary` 的路径都要过它**（闸 `tests/test_agy_missing_group_carried.py::EveryWritePathCarries` 按源码逐个核）。
+  前端 `seen_at` 的画法 AgyCard / AgyRow 必须一致（降不透明度 + 标龄）。
