@@ -439,6 +439,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
       {/* ★ 与账号卡**同款浮层**（§5c 页面统一性：同一类卡必须长得一样）。
           整段理由见 `AccountCard.tsx` 同处 —— 两张卡各写一套迟早只改一边。 */}
       <CardActionBar open={!!isSelected} t={t}>
+          {!(onRemove && confirmDelete) ? (<>
           {isCurrent ? (
             <span style={{ flex: "1 1 auto", minWidth: 62, textAlign: "center", fontSize: 11,
                            fontWeight: 600, whiteSpace: "nowrap", color: t.accent, padding: "5px 0" }}>✓ 当前</span>
@@ -494,22 +495,31 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               <IcPen />
             </IconBtn>
           )}
-          {onRemove && (!confirmDelete ? (
+            {onRemove && (
             <IconBtn title={`从池里移除 ${label ?? ""}（会先要一次确认）`}
                      onClick={() => setConfirmDelete(true)} color="#E0524D" border="#E0524D40">
               <IcTrash />
             </IconBtn>
-          ) : (
+            )}
+          </>) : (
             <>
-              {/* ★ 确认态**保留文字**：移除不可逆，把「确认删除」也压成图标等于让人凭记忆点。 */}
-              <span onClick={() => { setConfirmDelete(false); onRemove(); }}
-                    style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D",
-                             padding: "5px 10px", borderRadius: 6, cursor: "pointer",
-                             whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
+              {/* ★★ 确认态**整条只剩「删除 X？/ 确认删除 / 取消」**（用户 2026-10-16 截图：点删除后乱了 ——
+                  「确认删除」+「取消」约 120px 顶替 34px 的垃圾桶，320px 宽的卡一行放不下，「取消」折成两行、
+                  「探针」被挤到 30px 截断、整条从 46px 涨到 60px）。四个图标缩到底也差 ~80px，所以不是压缩能解决的。
+                  顺带：不可逆的确认旁边不再挨着「切换 / 探针」，误触面也没了。
+                  ★ 确认态**保留文字**：删除不可逆，把「确认删除」也压成图标等于让人凭记忆点。
+                  三块都定高 28（= 探针按钮高），整条高度不随确认态变。 */}
+              <span data-confirm-delete title={`从池里移除 ${label ?? ""}`}
+                    style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, color: t.text2, whiteSpace: "nowrap",
+                             overflow: "hidden", textOverflow: "ellipsis", height: 28, display: "flex", alignItems: "center" }}>移除 {label ?? "这个号"}？</span>
+              <span onClick={() => { setConfirmDelete(false); onRemove?.(); }}
+                    style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D", padding: "0 10px", height: 28,
+                             display: "flex", alignItems: "center", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
               <span onClick={() => setConfirmDelete(false)}
-                    style={{ fontSize: 11, color: t.text2, padding: "5px 10px", cursor: "pointer" }}>取消</span>
+                    style={{ fontSize: 11, color: t.text2, padding: "0 10px", height: 28, display: "flex", alignItems: "center",
+                             cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>取消</span>
             </>
-          ))}
+          )}
       </CardActionBar>
     </div>
   );

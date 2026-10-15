@@ -172,10 +172,16 @@ class TheTranslucentBarStaysReadable(unittest.TestCase):
         """
         for name in ("AccountCard.tsx", "AgyCard.tsx"):
             src = (ROOT / "codexbar" / "src" / "components" / name).read_text(encoding="utf-8")
+            # ★ 取到**这个 span 自己的开标签**为止，不用定长切片（2026-10-16：样式一变长，
+            #   160 字的窗口就够不到 `color` 那一段，闸假红；反过来也可能滑进上一个元素假绿）。
+            #   确认态多了一段灰字「删除 X？」（`data-confirm-delete`），同一条要求。
             i = src.index(">取消</span>")
+            tag = src[src.rindex("<span", 0, i):i]
+            j = src.index("data-confirm-delete")
+            prompt = src[j:src.index(">", src.index("}}", j))]
             with self.subTest(card=name):
-                self.assertIn("color: t.text2", src[max(0, i - 160):i],
-                              f"★★ {name} 的「取消」不是 text2 —— 半透明下灰字压不住 4.5")
+                self.assertIn("color: t.text2", tag, f"★★ {name} 的「取消」不是 text2 —— 半透明下灰字压不住 4.5")
+                self.assertIn("color: t.text2", prompt, f"★★ {name} 的「删除 X？」不是 text2")
         for theme, d in self.r.items():
             with self.subTest(theme=theme):
                 self.assertGreaterEqual(d["text2"], 4.5,

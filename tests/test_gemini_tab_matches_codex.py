@@ -92,10 +92,10 @@ class TheGeminiCardHasTheSameActionBar(unittest.TestCase):
         # ⚠️ 判据不能只是「源码里有 confirmDelete / 确认删除」：把三元条件改成
         #    `false ? …` 之后那两个字符串**仍然在源码里**，闸照样绿（实测）。
         #    要打在**分支条件**和**按钮做什么**上。
-        self.assertIn("!confirmDelete ? (", c, "★★★ 删除按钮不再走二次确认的分支")
+        self.assertIn("!(onRemove && confirmDelete) ? (", c, "★★★ 删除按钮不再走二次确认的分支")
         self.assertIn("onClick={() => setConfirmDelete(true)}", c,
                       "★★★ 垃圾桶按钮直接删了 —— 不可逆操作一键就走")
-        self.assertIn("setConfirmDelete(false); onRemove();", c,
+        self.assertIn("setConfirmDelete(false); onRemove?.();", c,
                       "★★★ 真正的删除不是从确认态发出的")
 
     def test_rename_does_not_submit_on_blur(self):

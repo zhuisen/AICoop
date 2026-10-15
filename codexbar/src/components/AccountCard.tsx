@@ -355,6 +355,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
               所以这里每压缩一格,都同时在修那个排版问题。
               ★ 主操作(切换/当前)保留文字 —— 它是这张卡存在的理由,压成图标会让人找不到。
                 其余全部图标 + `title` 悬浮出全名。 */}
+          {!confirmDelete ? (<>
           {!isCurrent && !isDead && (
             <span onClick={onSwitch} title={`把当前号切到 ${a.node}`}
                   style={{ flex: "1 1 auto", minWidth: 44, textAlign: "center", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", color: t.accentText, background: t.accent, padding: "5px 8px", borderRadius: 6, cursor: "pointer" }}>切换</span>
@@ -408,16 +409,27 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
                    onClick={() => onShowDetail(a.aid)} color={t.muted} border={t.ghostBorder}>
             <IcInfo />
           </IconBtn>
-          {!confirmDelete ? (
             <IconBtn title={`删除 ${a.node}（会先要一次确认）`}
                      onClick={() => setConfirmDelete(true)} color="#E0524D" border="#E0524D40">
               <IcTrash />
             </IconBtn>
-          ) : (
+          </>) : (
             <>
-              {/* ★ 确认态**保留文字**:删除不可逆,把「确认删除」也压成图标等于让人凭记忆点。 */}
-              <span onClick={() => { setConfirmDelete(false); onRemove(a.node); }} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D", padding: "5px 10px", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
-              <span onClick={() => setConfirmDelete(false)} style={{ fontSize: 11, color: t.text2, padding: "5px 10px", cursor: "pointer" }}>取消</span>
+              {/* ★★ 确认态**整条只剩「删除 X？/ 确认删除 / 取消」**（用户 2026-10-16 截图：点删除后乱了 ——
+                  「确认删除」+「取消」约 120px 顶替 34px 的垃圾桶，320px 宽的卡一行放不下，「取消」折成两行、
+                  「探针」被挤到 30px 截断、整条从 46px 涨到 60px）。四个图标缩到底也差 ~80px，所以不是压缩能解决的。
+                  顺带：不可逆的确认旁边不再挨着「切换 / 探针」，误触面也没了。
+                  ★ 确认态**保留文字**：删除不可逆，把「确认删除」也压成图标等于让人凭记忆点。
+                  三块都定高 28（= 探针按钮高），整条高度不随确认态变。 */}
+              <span data-confirm-delete title={`删除 ${a.node}`}
+                    style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, color: t.text2, whiteSpace: "nowrap",
+                             overflow: "hidden", textOverflow: "ellipsis", height: 28, display: "flex", alignItems: "center" }}>删除 {a.node}？</span>
+              <span onClick={() => { setConfirmDelete(false); onRemove(a.node); }}
+                    style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D", padding: "0 10px", height: 28,
+                             display: "flex", alignItems: "center", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
+              <span onClick={() => setConfirmDelete(false)}
+                    style={{ fontSize: 11, color: t.text2, padding: "0 10px", height: 28, display: "flex", alignItems: "center",
+                             cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>取消</span>
             </>
           )}
       </CardActionBar>
