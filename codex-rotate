@@ -4239,6 +4239,9 @@ def main():
               "quota [--save]|sync|rename <old> <new>|rotate <label> --on|--off|refresh [label|all]|refresh-all|"
               "keepalive [days] [--dry-run]|health|credits [--force] [--json]|use-credit <label> [--json]|"
               "probe <label…|--all> [--model M] [--effort low|medium|high]|"
+              "dawn-probe [--status|--enable|--disable|--time HH:MM|--tick|--force]|"
+              "integration [--json]|next [--json]|pin <label> [--add|--remove|--toggle|--clear]|"
+              "priority [--set|--clear]|borrow [--status|--on|--off] [--json]|"
               "tokens [--days N] [--json]|ensure|current}")
         sys.exit(1)
     cmd = sys.argv[1]
