@@ -746,6 +746,48 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## v1.10.1 — 2026-10-16
+
+**修：账号卡点「删除」后动作条乱掉（「取消」折两行、「探针」被挤截断）；修 v1.10.0 的 CI 红。**
+
+v1.10.0 之后 3 个 commit。
+
+### 修复
+- **删除确认态**（codex 与 Gemini 卡）：点垃圾桶后整条换成「删除 X？· 确认删除 · 取消」，不再把两个按钮硬塞进已经满的一行；
+  动作条高度不变，确认旁边也不再挨着「切换 / 探针」。见 B80。
+- **v1.10.0 的 `ci` 红**（`release` 是绿的，安装包不受影响）：5 条测试本机绿、CI 红 —— 被测的纯函数写在 import 了 `react` 的 hook 里
+  （CI 不装 `node_modules`），以及 tauri 的 `cargo test` 在 ubuntu 上缺 gio 开发库。见 B79。
+- UI 测试夹具：路由分账的中转站夹具改为无条件注入（原来活快照自带 `by_provider` 时就不注入，闸会随当天数据红）。
+
+### 文档
+- README 文件骨架补齐（Connector、`<store>/runtime/`、`dawn_sched.py`、`portalock.py`、`grok-quota`、`agy-quota`、`bin/agy`、harness、CI 等），
+  `install-launchd.sh` 的服务数 3 → 5。
+
+---
+
+### B80 · 账号卡点「删除」后动作条乱掉 — 2026-10-16 ✅（v1.10.1）
+
+用户截图（codex 卡 `mou`，并说「各 AI 总览卡片都是一样」）：点垃圾桶后「探针」被挤成半个、「取消」竖着折成两行。
+**复现**（harness、860 与 1200 两档实量）：确认态用「确认删除」65px +「取消」~44px 顶替 34px 的垃圾桶 ⇒ 整行超 ~80px；
+flex 把「探针」从 61px 压到 30px（截断）、「取消」没写 `nowrap` 折两行、整条 46px → 60px。Gemini 卡同一段代码，同样。
+**为什么会犯**：v1.9.x 把动作条压成一行时量的是常态，确认态是点了才出现的形态，从没被任何一次布局验证覆盖（同 `?click=` 那条教训）。
+**修**：确认态整条只剩「删除 X？/ 确认删除 / 取消」，三块定高 28（= 探针按钮高）⇒ 整条高度不变；四个图标缩到底也差 ~80px，所以没走压缩那条路。
+**闸**：`tests/test_delete_confirm_one_row.py`（真 bundle、codex + Gemini × 860/1200：只有三块、不折行不截断、高度不变、点取消回到完整动作条），变异 5 个全红。
+
+---
+
+### B79 · v1.10.0 的 ci 红而 release 绿 — 2026-10-16 ✅（v1.10.1）
+
+推 tag 后 `release` 绿（四个安装包都挂上了），`ci` 红：`test_resize_less_work` / `test_overview_one_row_header` 4 条 `ERR_MODULE_NOT_FOUND`，
+`test_window_zoom` 的 `cargo test` 报 `pkg-config … gio-2.0 >= 2.70`。
+**根因**：① `quantizeDown` / `nextCompact` 写在 `hooks/useFillHeight.ts` / `hooks/useOneRowHeader.ts` 里，测试用 node 直接加载那个文件，
+而它顶层 `import … from "react"`；本机有 `node_modules` 所以绿，CI 不装依赖。② ubuntu runner 没装 gtk/gio 开发库，tauri crate 编不过。
+**为什么会犯**：发版收尾只核了 `release` workflow（CLAUDE.md 当时只写了那一条），`ci` 是收尾后才看的。
+**修**：两个纯函数搬到零 import 的 `codexbar/src/resizeMath.ts`（模拟无 `node_modules` 实测：旧路径 `ERR_MODULE_NOT_FOUND`、新路径能加载）；
+Linux 缺 gio 时 `cargo test` 那条 skip（Rust 真编译在 ci.yml 的 macOS/Windows 构建 job）。CLAUDE.md §3.6 加「两条 workflow 都绿才算收尾」，§4 加「node 测的 TS 放零 import 模块」。
+
+---
+
 ## v1.10.0 — 2026-10-16
 
 **修好 GitHub 安装包「更新后不轮换」；续航条改成「现在能连续用多久」；agy 的 5h 倒计时分真假、能定时探针；窗口缩到最小也一屏放下。**
