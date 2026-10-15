@@ -23,7 +23,9 @@ export interface Price {
 
 export const RATES: Record<string, Price> = {
   // ── Claude · platform.claude.com/docs/en/about-claude/pricing（2026-09-29 取）
-  //    缓存写取 **5m** 档(1.25×输入);1h 档是 2×,transcript 区分不出来,取常用的 5m。
+  //    缓存写 `cacheWrite` = **5m** 档(1.25×输入);**1h 档 = 2×输入**,由 `costOf` 按 `cache_write_1h` 份额另算。
+  //    ★ 2026-10-15 更正：旧注释说「transcript 区分不出来」是错的 —— `usage.cache_creation` 一直分两档，
+  //      本机实测 1h 档 625.9M、5m 档 0（Claude Code 现在全走 1h）⇒ 全按 5m 计时这一类少算 1.6 倍。
   //    ★ 缓存读**不再一律是输入价的 10%**：Fable 5.1 / Mythos 5.1 是 2.5%（$0.25），Opus 5.5 是 5%（$0.20）；
   //      Fable 5 / Mythos 5 / 其余仍是 10%。别按「输入价 ÷ 10」心算。
   "claude-fable-5-1":  { in: 10.0, cacheRead: 0.25, out: 50.0, cacheWrite: 12.5 },
@@ -75,6 +77,9 @@ export const RATES: Record<string, Price> = {
   //      ① 3.8/3.7/3.6 Flash 现在是**促销价**，2026-12-31 到期后翻倍（0.75→1.50 / 3.75→7.50）。
   //      ② 全部 Gemini 价按 **≤200k 提示词**档。超过 200k，3.1 Pro 的输入 2→4、输出 12→18。
   //         本机实测单次提示词约 17k，远未触线；长会话逼近 200k 时这里会低估一倍。
+  // ★ 用量页把 gemini 的推理档位去掉后再聚合（`scan._agy_canon`，会话库本来就不记档位），
+  //   所以**每个系列都必须有裸名一条**，否则合并后的那条带掉到兜底价（3.1 Pro 会被按 Flash 低估 2.7 倍）。
+  "gemini-3.1-pro":          { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
   "gemini-3.1-pro-high":     { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
   "gemini-3.1-pro-low":      { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
   // 无档位后缀的裸名（`gemini-3.8-flash`）真实出现在 agy 落盘的记录里（2026-09-29 实测），必须单独收一条。
@@ -82,12 +87,26 @@ export const RATES: Record<string, Price> = {
   "gemini-3.8-flash-high":   { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.8-flash-medium": { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.8-flash-low":    { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
+  // ★ `gemini-3.8-flash-n`：agy 会话库 f19 里的模型 id（10-06 起出现，至 10-14 共 565 条生成），
+  //   官方价目表**没有这个名字**（2026-10-14 核），`agy models` 也不列。按 3.8 Flash 计并标 est。
+  "gemini-3.8-flash-n":      { in: 0.75, cacheRead: 0.075, out: 3.75, est: true,
+                               note: "官方无此 id,按 3.8 Flash 计" },
+  // ── Gemini 4 Argon（2026-10-13 GA）· 官方页 2026-10-14 取：**介绍价至 2026-11-30**，
+  //    12-01 起 $4 / $20 / 缓存 $0.20。只有隐式缓存（无缓存写/存储费）。不分长上下文档。
+  //    会话库里记的是裸名 `gemini-4-argon`；`agy models` 列的是带档位的三个。
+  "gemini-4-argon":          { in: 2.0,  cacheRead: 0.10,  out: 10.0, note: "介绍价,2026-11-30 后翻倍" },
+  "gemini-4-argon-high":     { in: 2.0,  cacheRead: 0.10,  out: 10.0, note: "介绍价,2026-11-30 后翻倍" },
+  "gemini-4-argon-medium":   { in: 2.0,  cacheRead: 0.10,  out: 10.0, note: "介绍价,2026-11-30 后翻倍" },
+  "gemini-4-argon-low":      { in: 2.0,  cacheRead: 0.10,  out: 10.0, note: "介绍价,2026-11-30 后翻倍" },
+  "gemini-3.7-flash":        { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.7-flash-high":   { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.7-flash-medium": { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.7-flash-low":    { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
+  "gemini-3.6-flash":        { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.6-flash-high":   { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.6-flash-medium": { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.6-flash-low":    { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
+  "gemini-3.5-flash":        { in: 1.5,  cacheRead: 0.15,  out: 9.0 },
   "gemini-3.5-flash-high":   { in: 1.5,  cacheRead: 0.15,  out: 9.0 },
   "gemini-3.5-flash-medium": { in: 1.5,  cacheRead: 0.15,  out: 9.0 },
   "gemini-3.5-flash-low":    { in: 1.5,  cacheRead: 0.15,  out: 9.0 },
@@ -97,6 +116,13 @@ export const RATES: Record<string, Price> = {
   // claude-sonnet-4-6 / claude-opus-4-6 上面 Claude 段已登记，此处只补缺的两个。
   "claude-opus-4-6-thinking": { in: 5.0, cacheRead: 0.5, out: 25.0, cacheWrite: 6.25,
                                 est: true, note: "按 claude-opus-4-6 计" },
+  // agy 1.3.5 起 Claude 5.5 也按推理档位分 id（`agy models` 2026-10-14）。档位同价，按原厂牌价。
+  "claude-opus-5-5-high":     { in: 4.0, cacheRead: 0.2, out: 20.0, cacheWrite: 5.0 },
+  "claude-opus-5-5-medium":   { in: 4.0, cacheRead: 0.2, out: 20.0, cacheWrite: 5.0 },
+  "claude-opus-5-5-low":      { in: 4.0, cacheRead: 0.2, out: 20.0, cacheWrite: 5.0 },
+  "claude-sonnet-5-5-high":   { in: 2.0, cacheRead: 0.2, out: 10.0, cacheWrite: 2.5 },
+  "claude-sonnet-5-5-medium": { in: 2.0, cacheRead: 0.2, out: 10.0, cacheWrite: 2.5 },
+  "claude-sonnet-5-5-low":    { in: 2.0, cacheRead: 0.2, out: 10.0, cacheWrite: 2.5 },
   "gpt-oss-120b-medium":      { in: 0.1, cacheRead: 0.01, out: 0.5, est: true,
                                 note: "开源权重,无官方托管牌价;按同级开源模型粗估" },
 
@@ -181,14 +207,19 @@ export interface TokenClasses {
   cache_read: number;
   cache_write: number;
   output: number;
+  /** `cache_write` 里 1h 档的份额（**子集**，不是第五类）。只有 Claude 有；缺省 = 全按 5m 档。 */
+  cache_write_1h?: number;
 }
 
 /** 四类 token 分别乘单价 → 美元。不用构成假设。 */
 export function costOf(t: TokenClasses, model: string, platform: string): number {
   const p = priceOf(model, platform);
   const cw = p.cacheWrite ?? p.in;   // 无缓存写价的平台按输入价（该端点实测恒 0，不影响结果）
+  // ★ 1h 档 = 2× 输入（Anthropic 官方规则，只有 Claude 会带这个份额）。钳到不超过 `cache_write`：
+  //   缓存口径 `none` 把 cache_write 清零时份额跟着归零，否则会算出负的 5m 档。
+  const h1 = Math.min(t.cache_write_1h ?? 0, t.cache_write);
   return (t.uncached_in * p.in + t.cache_read * p.cacheRead
-          + t.cache_write * cw + t.output * p.out) / 1e6;
+          + (t.cache_write - h1) * cw + h1 * p.in * 2 + t.output * p.out) / 1e6;
 }
 
 /**

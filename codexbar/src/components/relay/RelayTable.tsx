@@ -13,7 +13,10 @@ import { money, type RelayEntry, type RelayRow } from "../../relay";
  * ★ 整行可点 = 切换出口；行内图标钮 `stopPropagation`（设计稿 §8）。
  */
 
-const COLS = "190px 1fr 96px 190px 150px";
+/** ★ 站点 / 还能撑两列**可让**（2026-10-14）：原来写死 190px（合计 714px + 1fr），860px 窗口下
+ *  endpoint 列被压到 ~20px 只剩「ht…」；再叠上表头折行的 min-content，网格比卡片宽、右列被裁。
+ *  让位顺序：先压这两列到下限，endpoint 最少留 60px（本来就是省略号截断的列）。 */
+const COLS = "minmax(120px,190px) minmax(60px,1fr) 96px minmax(130px,190px) 150px";
 
 /** 识别色。设计稿给每站一个点色；本仓的规矩是**同名恒同色**，所以按 id 散列。 */
 const DOTS = ["#4d9fff", "#2dd4bf", "#8b7cf6", "#E0A21C", "#27B26B", "#E0784F"];
@@ -72,7 +75,7 @@ export default function RelayTable({ t, rows, usage, activeId, acting, onPick, o
                       fontFamily: MONO, fontSize: 9.5, letterSpacing: ".08em", color: "#5b6470",
                       textTransform: "uppercase",
                       borderBottom: "1px solid rgba(255,255,255,.07)" }}>
-          <span>站点</span><span>endpoint / key</span>
+          <span>站点</span><span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>endpoint / key</span>
           <span style={{ textAlign: "right" }}>余额</span>
           <span>还能撑</span>
           <span style={{ textAlign: "right" }}>日均实扣</span>

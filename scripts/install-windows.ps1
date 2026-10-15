@@ -166,9 +166,10 @@ $PollTrigger = @"
     </TimeTrigger>
 "@
 
-# dawnprobe：每天 06:00 给 Plus 号各发一次最小计费请求，把 5h 窗口锚定上。
-# ★ 与 macOS 的 StartCalendarInterval 等价；命令侧默认关闭 + 当天幂等，
-#   所以注册了这个任务本身不会花钱，要 `codex-rotate dawn-probe --enable`。
+# dawnprobe / agydawn：每天在所选时刻起 3 分钟内随机，给 codex Plus 号 / agy 参与轮换的号各探一次。
+# ★ 2026-10-15 起与 macOS 一样**每分钟拉起、命令自己判断到点**（时间在界面上可改，见 dawn_sched.py），
+#   所以用 $PollTrigger；命令侧默认关闭 + 当天幂等，注册了任务本身不会花钱。
+#   下面的 $DawnTrigger 不再被引用，保留只为对照历史。
 $DawnTrigger = @"
     <CalendarTrigger>
       <StartBoundary>2026-01-01T06:00:00</StartBoundary>
@@ -202,7 +203,8 @@ $tasks = @(
     @{ Name = "proxy";    Args = @((Join-Path $Repo "proxy\proxy.py"));        Trig = $PersistentTrigger; Env = ($BaseEnv + @{ CRP_PORT = "8011" }) },
     @{ Name = "quotad";   Args = @((Join-Path $Repo "daemon\quota_daemon.py")); Trig = $PersistentTrigger; Env = $BaseEnv },
     @{ Name = "autosync"; Args = @((Join-Path $Repo "codex-rotate"), "sync");   Trig = $PollTrigger;       Env = $BaseEnv },
-    @{ Name = "dawnprobe"; Args = @((Join-Path $Repo "codex-rotate"), "dawn-probe"); Trig = $DawnTrigger;  Env = $BaseEnv }
+    @{ Name = "dawnprobe"; Args = @((Join-Path $Repo "codex-rotate"), "dawn-probe", "--tick"); Trig = $PollTrigger;  Env = $BaseEnv },
+    @{ Name = "agydawn";   Args = @((Join-Path $Repo "agy-rotate"), "dawn-probe", "--tick");   Trig = $PollTrigger;  Env = ($BaseEnv + @{ AGY_POOL_STORE = $Store }) }
 )
 
 foreach ($t in $tasks) {
@@ -215,7 +217,7 @@ foreach ($t in $tasks) {
     Remove-Item $tmp -Force
     # ★ 常驻服务装完立刻拉起；**计费类定时任务不 /Run** —— 装 ≠ 现在就跑一次。
     #   （它默认关闭、当天幂等，即使跑了也是空转，但"装完就触发计费任务"不该是默认语义。）
-    if ($t.Name -ne "dawnprobe") { schtasks /Run /TN "$Prefix.$($t.Name)" 2>$null | Out-Null }
+    if ($t.Name -notin @("dawnprobe", "agydawn")) { schtasks /Run /TN "$Prefix.$($t.Name)" 2>$null | Out-Null }
     Write-Host "  + $($t.Name)"
 }
 

@@ -428,6 +428,44 @@ def _write_live_file(cred):
     os.replace(tmp, LIVE)
 
 
+def clear_live():
+    """清空 agy 的登录态（钥匙串 + 兜底文件），让下一个启动的 agy 从「未登录」开始。
+    返回 True 才表示**读回来确实空了**。
+
+    ★★★ 只给 `agy-rotate login` 用，且调用方必须**先把当前号存进池**（`read_cred` 能读到）。
+      为什么要有（2026-10-14 用户实报）：旧流程是「以 A 号启动 agy → 进程内 `/logout` →
+      登 B 号」。一个号两次被拒 `VALIDATION_REQUIRED` 的会话（16:35 / 17:29）都是这条路，
+      且 A 号启动时 `ValidateAndOnboardAccount` 先报了错；成功的两次都没有那个报错
+      （其中 17:40 同样是进程内换号 —— 光「进程内换号」不足以区分成败）。n=4，
+      与「Google 那边恰好在 17:30–17:40 放行了」区分不开 —— 所以改成**两种解释下都对**的做法：
+      新号在一个从未登录过别的号的进程里完成首次登录，不在进程内换号。
+    """
+    cur = read_live()
+    if cur:
+        # ★★★ 删之前自证已备份：池里那份的 refresh_token 必须与要删的这份相同。
+        #   不靠调用方记得先 `_adopt` —— 删掉的是用户唯一的登录态，同 `is_google_issued` 把闸放在写入点。
+        rt = lambda c: ((c or {}).get("token") or {}).get("refresh_token")   # noqa: E731
+        saved = read_cred((claims(cur) or {}).get("sub") or "")
+        if not rt(cur) or rt(saved) != rt(cur):
+            return False
+    if _keyring_on():
+        try:
+            subprocess.run(
+                ["security", "delete-generic-password", "-s", KEYRING_SVC, "-a", KEYRING_ACCT],
+                capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return False
+    if LIVE.exists():
+        try:
+            bak = Path(str(LIVE) + ".codexbar-bak")
+            bak.write_bytes(LIVE.read_bytes())
+            os.chmod(bak, 0o600)
+            LIVE.unlink()
+        except OSError:
+            return False
+    return read_live() is None
+
+
 # ── token 刷新 ────────────────────────────────────────────────────────
 def refresh(cred, pool=None):
     """用 `refresh_token` 换一个新的 `access_token` -> (新 cred, 错误说明)。
@@ -499,6 +537,66 @@ def expired(cred, skew=120):
 
 
 # ── 额度 ──────────────────────────────────────────────────────────────
+class QuotaErr(str):
+    """取额度失败的说明。**就是一个 `str`**（调用方照旧 `err or None` / 拼字符串 / 写 JSON），
+    只多带两个属性：`reason`（Google 错误体里的 `ErrorInfo.reason`）与 `url`（验证链接）。
+
+    ★ 存在的理由：一个 403 可能是「要先去验证账号」「没有许可」「别的禁止」—— 下一步动作
+      完全不同（点链接 / 换号 / 等），而旧实现把三者折成同一串 `额度 HTTP 403: {...前 120 字节`，
+      链接被截掉，用户只看得到「403」。
+    """
+    reason = None
+    url = None
+
+
+def _google_url(u):
+    """只收 `https://*.google.com` —— 这个字符串会被交给系统 `open`，不收任意主机。"""
+    try:
+        pu = urllib.parse.urlparse(str(u))
+    except ValueError:
+        return None
+    host = (pu.hostname or "").lower()
+    if pu.scheme == "https" and (host == "google.com" or host.endswith(".google.com")):
+        return str(u)
+    return None
+
+
+def parse_google_error(raw):
+    """Google API 错误体 → `(reason, message, url)`，认不出的部分为 None。
+
+    形状是 `google.rpc.Status` 的 JSON：`{"error": {"code", "message", "status",
+    "details": [{"@type": ".../google.rpc.ErrorInfo", "reason", "metadata": {...}},
+                {"@type": ".../google.rpc.Help", "links": [{"url"}]}]}}`。
+    ★ 链接的落点**没有实测样本**（cockpit-tools 读 `validation_url`，未核其在哪一层），
+      所以按 ErrorInfo.metadata 里名字带 url 的键 → Help.links → message 里的链接 依次找，
+      每一处都过 `_google_url`。找不到就是 None：原因照样显示，只是没有按钮。
+    """
+    try:
+        err = (json.loads(raw) or {}).get("error") or {}
+    except (ValueError, AttributeError):
+        return None, None, None
+    if not isinstance(err, dict):
+        return None, None, None
+    msg = err.get("message") if isinstance(err.get("message"), str) else None
+    reason, url = None, None
+    for d in err.get("details") or []:
+        if not isinstance(d, dict):
+            continue
+        if reason is None and isinstance(d.get("reason"), str):
+            reason = d["reason"]
+        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+        for k, v in meta.items():
+            if url is None and "url" in k.lower():
+                url = _google_url(v)
+        for ln in d.get("links") or []:
+            if url is None and isinstance(ln, dict):
+                url = _google_url(ln.get("url"))
+    if url is None and msg:
+        m = re.search(r"https://[^\s\"'<>]+", msg)
+        url = _google_url(m.group(0)) if m else None
+    return reason, msg, url
+
+
 def fetch_quota(access_token):
     """-> (额度摘要的 `groups` 列表, 错误说明)。
 
@@ -530,7 +628,14 @@ def fetch_quota(access_token):
     except Exception as e:                            # noqa: BLE001
         return None, "取额度失败: %s" % e
     if r.status != 200:
-        return None, "额度 HTTP %s: %s" % (r.status, raw[:120].decode("utf-8", "replace"))
+        reason, msg, url = parse_google_error(raw)
+        if reason or msg:
+            e = QuotaErr("额度 HTTP %s%s: %s" % (r.status, " " + reason if reason else "",
+                                              (msg or "")[:160]))
+        else:
+            e = QuotaErr("额度 HTTP %s: %s" % (r.status, raw[:120].decode("utf-8", "replace")))
+        e.reason, e.url = reason, url
+        return None, e
     try:
         groups = (json.loads(raw).get("groups") or [])
     except ValueError:
@@ -542,21 +647,79 @@ def fetch_quota(access_token):
     return groups, ""
 
 
+LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist"
+#: 档位一天读一次就够 —— 它随订阅变，不随用量变。每 3 分钟的额度刷新顺带读它是纯浪费。
+TIER_TTL = 24 * 3600
+
+
+def plan_of(tier_id):
+    """`paidTier.id` → `"ultra"` / `"pro"` / `"free"`。认不出的照原样返回（不猜成 pro）。
+
+    实测（2026-10-15，3 个号）：`g1-pro-tier`「Google AI Pro」×2、`g1-ultra-lite-tier`「Google AI Ultra」×1。
+    ★ 按**子串**认 `ultra` / `pro`：`-lite` 这类后缀是 Google 自己的细分，显示上都是那一档。
+    """
+    if not tier_id:
+        return "free"
+    t = str(tier_id).lower()
+    if "ultra" in t:
+        return "ultra"
+    if "pro" in t:
+        return "pro"
+    return t
+
+
+def fetch_tier(access_token):
+    """-> (`{"id", "name", "plan"}`, 错误说明)。走 `loadCodeAssist`（agy 每次启动自己也调，只读、零消耗）。
+
+    ★ 看的是 `paidTier`（订阅档），**不是** `currentTier` —— 后者三个号都是 `free-tier`「Antigravity」，
+      那是 Code Assist 自己的层级，与 Google AI Pro / Ultra 无关。
+    ★ 失败返回 `(None, 说明)`，调用方**保留上次读到的**（§7.0b：读不到 ≠ 没有）。
+    """
+    try:
+        c = HTTPSConnection(QUOTA_API_HOST, timeout=TIMEOUT)
+        c.request("POST", LOAD_CODE_ASSIST_PATH, body=json.dumps({"metadata": {
+                      "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED",
+                      "pluginType": "GEMINI"}}),
+                  headers={"Authorization": "Bearer " + access_token,
+                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+    except Exception as e:                            # noqa: BLE001
+        return None, "取档位失败: %s" % e
+    if r.status != 200:
+        return None, "档位 HTTP %s" % r.status
+    try:
+        paid = (json.loads(raw) or {}).get("paidTier") or {}
+    except (ValueError, AttributeError):
+        return None, "档位响应不是 JSON"
+    tid = paid.get("id") if isinstance(paid, dict) else None
+    return {"id": tid, "name": paid.get("name") if isinstance(paid, dict) else None,
+            "plan": plan_of(tid)}, ""
+
+
 def quota_by_group(groups):
     """把摘要折成旧的 `{组名: {remaining, reset}}` —— 选号与 CLI 打印仍吃这个形状。
 
     ★ 它是 `groups` 的**投影**，不是第二份事实：只在这里算一次，
       所以不会出现"摘要说 97%、选号按 100% 排"这种分叉。
     ★ 每组取**最紧的那个桶**（与卡片、Hero 同一条口径：取第一个桶等于把真正的约束藏起来）。
+    ★★ 桶在、却没有数字的 `remainingFraction` ⇒ 整组 `remaining: None`（读不到），
+      **不丢桶**。proto3 JSON 会省略零值字段，所以「缺」可能正是 0（见底）；
+      上游客户端的缺省又是 1.0（满格）。两种读法方向相反，只有「不知道」在两边都成立 ——
+      跳过它则等于拿剩下那个桶的数冒充最紧，见底的号会被当成有余量挑走。
     """
     out = {}
     for g in groups or []:
-        buckets = [b for b in (g.get("buckets") or [])
-                   if isinstance(b.get("remainingFraction"), (int, float))]
+        buckets = g.get("buckets") or []
         if not buckets:
             continue
-        tight = min(buckets, key=lambda b: b["remainingFraction"])
+        known = [b for b in buckets if isinstance(b.get("remainingFraction"), (int, float))]
         name = "gemini" if str(g.get("displayName", "")).lower().startswith("gemini") else "claude"
+        if len(known) < len(buckets):
+            out[name] = {"remaining": None, "reset": None}
+            continue
+        tight = min(known, key=lambda b: b["remainingFraction"])
         out[name] = {"remaining": tight["remainingFraction"], "reset": tight.get("resetTime")}
     return out
 
@@ -661,6 +824,14 @@ def _left(ts, now):
     return f"{int(h // 24)}d{int(h % 24)}h" if h >= 24 else f"{int(h)}h{int((h % 1) * 60):02d}m"
 
 
+def _floating(v, reset):
+    """锚点账本说这个窗口**没启动**（reset 跟着「现在」滑）—— 与前端 `agyResetText` 同一条口径：
+    `floating` + 零消耗 + 判定核得上这个 reset（±60s）。`unknown` 一律照旧画倒计时。"""
+    return bool(v and reset and v.get("state") == "floating"
+                and float(v.get("used_max") or 0) < 2
+                and v.get("reset") and abs(float(v["reset"]) - float(reset)) <= 60)
+
+
 def _iso_ts(s):
     try:
         import datetime as _dt
@@ -683,27 +854,32 @@ def board(pool, live_sub, now=None):
 
     def ent(sub):
         a = accs.get(sub) or {}
+        anc = a.get("quota_anchor") or {}
         wins = []
         for g in a.get("quota_summary") or []:
             if not str(g.get("displayName", "")).lower().startswith("gemini"):
                 continue
             for b in g.get("buckets") or []:
                 fr = b.get("remainingFraction")
-                if not isinstance(fr, (int, float)):
-                    continue
                 wk = str(b.get("window", "")).startswith("week")
-                wins.append({"label": "周" if wk else "5h", "rem": round(fr * 100),
-                             "reset": _left(_iso_ts(b.get("resetTime")), now)})
+                # ★ 没数字的桶照样占一格、`rem: None`（画「—」），见 `quota_by_group`。
+                rs = _iso_ts(b.get("resetTime"))
+                wins.append({"label": "周" if wk else "5h",
+                             "rem": round(fr * 100) if isinstance(fr, (int, float)) else None,
+                             "reset": "未启动" if _floating(anc.get(b.get("bucketId")), rs)
+                             else _left(rs, now)})
         wins.sort(key=lambda w: w["label"] != "5h")
         cool = 0
         if is_exhausted(a):
             rs = _iso_ts(((a.get("quota") or {}).get("gemini") or {}).get("reset"))
             cool = max(0, int((rs - now) / 60)) if rs else 0
-        return {"aid": sub, "label": a.get("label"), "email": a.get("email"), "plan": None,
+        return {"aid": sub, "label": a.get("label"), "email": a.get("email"), "plan": a.get("plan"),
                 "pin": (pinned.index(sub) + 1) if sub in pinned else None,
                 "off": bool(a.get("rotate_off")), "dead": is_dead(a), "cool_min": cool,
-                "wins": wins, "tightest": min([w["rem"] for w in wins], default=None),
-                "weekly": next((w["rem"] for w in wins if w["label"] == "周"), None)}
+                "wins": wins, "tightest": None if any(w["rem"] is None for w in wins)
+                else min([w["rem"] for w in wins], default=None),
+                "weekly": next((w["rem"] for w in wins if w["label"] == "周"), None),
+                "eta5h": None}   # 与 codex 同形；agy 没有「用完」历史可预测
 
     queue = [ent(s) for s, _ in sort_avail([(s, a) for s, a in accs.items() if usable(s, a)], pool)]
     rest = [ent(s) for s, a in accs.items() if not usable(s, a)]
@@ -715,6 +891,7 @@ def board(pool, live_sub, now=None):
         "next_reason": why,
         "queue": queue, "rest": rest,
         "weekly_left_pp": sum(e["weekly"] for e in queue if e["weekly"] is not None),
-        "burn_pp_per_active_hour": None, "runway_active_hours": None,
+        "burn_pp_per_hour": None, "runway_hours": None, "rate_span_h": None, "burst": None,
+        "first_reset_h": None, "outlasts_reset": False,
         "samples": 0, "last_sample_min": None,
     }

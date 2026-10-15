@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isWindowsUI, CARD_ACTIONS_LIFE_MS } from "./helpers";
-import { THEMES } from "./theme";
+import { THEMES, CARD_TYPE, CARD_TYPE_COMPACT } from "./theme";
 import Toast from "./components/Toast";
 import GhostButton from "./components/GhostButton";
 import AccountCard from "./components/AccountCard";
@@ -28,17 +28,21 @@ import { useGrokQuota } from "./hooks/useGrokQuota";
 import GrokCard from "./components/GrokCard";
 import { useAgyQuota } from "./hooks/useAgyQuota";
 import AgyCard from "./components/AgyCard";
+import DawnChip from "./components/DawnChip";
+import { agyAction, agyProbeToast } from "./agy";
 import IntegrationBanner from "./components/IntegrationBanner";
 import { useIntegration } from "./hooks/useIntegration";
 import { useCardOrder, applyOrder } from "./hooks/useCardOrder";
 import { useCardDrag } from "./hooks/useCardDrag";
 import RunwayHero from "./components/RunwayHero";
 import { useRotationBoard } from "./hooks/useRotationBoard";
-import { IcRefresh } from "./components/CardIcons";
+import { IcRefresh, IcKey, IcRotate } from "./components/CardIcons";
+import { useOneRowHeader } from "./hooks/useOneRowHeader";
 import ProviderTabs from "./components/ProviderTabs";
 import { POOL_PLATFORMS, loadPoolKey, savePoolKey, type PoolKey } from "./platforms";
 import { useAgyPool } from "./hooks/useAgyPool";
 import ProbeButton from "./components/ProbeButton";
+import { CardTypeContext, useCompactCards } from "./hooks/useCardType";
 import "./App.css";
 
 // 平台详情页不进导航栏,只能从流量总览钻取(图例行 / 卡片「明细→」/ 点图层),用户定稿 2026-08-09。
@@ -153,6 +157,11 @@ export default function App() {
   const [autoSwitch, setAutoSwitch] = useState(() => getSettings().autoSwitchEnabled);
   // 侧栏折叠态。**默认折叠**（DEFAULTS.navOpen = false），选择会记住 —— 每次启动都弹回默认的开关很烦人。
   const [navOpen, setNavOpen] = useState(() => getSettings().navOpen);
+  // 小窗口下总览卡片换紧凑标尺（用户 2026-10-14：「最小尺寸下，总览页面里面的账号卡片要缩小」）
+  const compactCards = useCompactCards();
+  // 顶栏一行放不下 ⇒ 动作条换短名 + 图标（见 `useOneRowHeader`）。
+  const head = useOneRowHeader(12, [provider]);
+  const cb = head.compact;
 
   /**
    * ★★ **窄窗自动折叠侧栏**（用户 2026-08-24 定稿：「尺寸小到一定程度后，需要折叠起侧边栏」）。
@@ -486,12 +495,14 @@ export default function App() {
         {/* Content */}
         <div style={{ flex: 1, minWidth: 0, padding: "16px 20px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {page === "overview" && (
-            <>
+            <CardTypeContext.Provider value={compactCards ? CARD_TYPE_COMPACT : CARD_TYPE}>
               {/* ★ `flexWrap` + `rowGap`:空间不够时**整块**换行,而不是把里面的按钮压扁。
                   断字是 bug(见 GhostButton/ProbeButton 的 nowrap),换行只是变高、零信息损失。 */}
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+              <div ref={head.ref} data-overview-head={cb ? "compact" : "full"}
+                   style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
                             marginBottom: 12, flexWrap: "wrap", rowGap: 8, columnGap: 12 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+                {/* ★ 两块都 `flexShrink: 0`：`useOneRowHeader` 量的是**自然宽度**，被压缩过的宽度会让它误判「放得下」。 */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flexShrink: 0 }}>
                   {/* ★ 标题**永不断字**。窄窗下曾被劈成「总 / 览」(用户 2026-08-24 截图)。 */}
                   <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-.01em",
                                  whiteSpace: "nowrap", flexShrink: 0 }}>总览</span>
@@ -510,38 +521,39 @@ export default function App() {
                     }))}
                     onAdd={(k) => showToast(POOL_PLATFORMS.find((p) => p.key === k)!.addHint)} />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
                 {/* ★★★ 这一排全是 **codex 池**的动作（刷新全池 / 检查 token / 探针全池 /
                     自动切号），所以只在 Codex 档显示。
                     最要命的是「探针 全池」——它**是花钱的**；挂在 Google 档上，
                     用户看着 agy 的卡按下去，扣的是 codex 的额度。 */}
                 {provider === "codex" && (
-                <div style={{ display: "flex", gap: 7, alignItems: "center",
+                <div style={{ display: "flex", gap: cb ? 5 : 7, alignItems: "center",
                               flexWrap: "wrap", justifyContent: "flex-end", rowGap: 7 }}>
-                  <GhostButton t={t} onClick={() => void run("refresh-all", ["refresh-all", "--notify"], `已刷新全池 · ${counts.total} 个号`)} loading={loadingAction === "refresh-all"} loadingText="刷新中…"><IconRefresh spin={loadingAction === "refresh-all"} />刷新全池</GhostButton>
-                  <GhostButton t={t} onClick={() => void run("health", ["health"], "已检查各号 token")} accent loading={loadingAction === "health"} loadingText="检查中…">
-                    检查 token
+                  <GhostButton t={t} onClick={() => void run("refresh-all", ["refresh-all", "--notify"], `已刷新全池 · ${counts.total} 个号`)} loading={loadingAction === "refresh-all"} loadingText="刷新中…" title={cb ? "刷新全池" : undefined} dense={cb} headAction><IconRefresh spin={loadingAction === "refresh-all"} />{cb ? "刷新" : "刷新全池"}</GhostButton>
+                  <GhostButton t={t} onClick={() => void run("health", ["health"], "已检查各号 token")} accent loading={loadingAction === "health"} loadingText="检查中…" title={cb ? "检查 token" : undefined} dense={cb} headAction>
+                    {cb ? <><IcKey />检查</> : "检查 token"}
                   </GhostButton>
-                  <ProbeButton t={t} label="探针 全池"
+                  <ProbeButton t={t} label={cb ? "探针" : "探针 全池"} dense={cb} headAction
                     hint={`对 ${counts.total} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"——token 有效但订阅到期/模型权限被撤/被限流,只有这个测得出来。⚠️ 消耗周额度(实测单次 <1%),约 ${counts.total * 7}s`}
                     loading={loadingAction === "probe-all"} loadingText="探测中…"
                     onConfirm={() => run("probe-all", ["probe", "--all"], "探针 全池")} />
+                  <DawnChip t={t} kind="codex" active={page === "overview" && provider === "codex"} compact={cb} />
                   <span onClick={() => {
                     const next = !autoSwitch;
                     setAutoSwitch(next);
                     const s = getSettings(); s.autoSwitchEnabled = next;
                     localStorage.setItem("codexbar_settings", JSON.stringify(s));
                     showToast(next ? "✓ 自动切号 已开启" : "自动切号 已关闭");
-                  }} style={{
-                    display: "flex", alignItems: "center", gap: 6, padding: "5px 13px", borderRadius: 8, cursor: "pointer", userSelect: "none", fontSize: 11.5, fontWeight: 600, transition: "all .2s",
+                  }} data-head-action="" title={cb ? (autoSwitch ? "自动切号 开" : "自动切号 关") : undefined} style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: cb ? "5px 8px" : "5px 13px", whiteSpace: "nowrap", borderRadius: 8, cursor: "pointer", userSelect: "none", fontSize: 11.5, fontWeight: 600, transition: "all .2s",
                     border: `1px solid ${autoSwitch ? t.accentBorder : t.ghostBorder}`,
                     color: autoSwitch ? t.accent : t.ghostText,
                     background: autoSwitch ? t.accentSoft : "transparent",
                   }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: autoSwitch ? t.accent : t.muted, animation: autoSwitch ? "cbDotPulse 2s ease-in-out infinite" : "none" }} />
-                    {autoSwitch ? "自动切号 开" : "自动切号"}
+                    {!cb && <span style={{ width: 8, height: 8, borderRadius: "50%", background: autoSwitch ? t.accent : t.muted, animation: autoSwitch ? "cbDotPulse 2s ease-in-out infinite" : "none" }} />}
+                    {cb ? <><IcRotate off={!autoSwitch} />{autoSwitch ? "切号 开" : "切号 关"}</> : autoSwitch ? "自动切号 开" : "自动切号"}
                   </span>
-                  <span style={{ width: 1, height: 18, background: t.divider, margin: "0 1px" }} />
+                  {!cb && <span style={{ width: 1, height: 18, background: t.divider, margin: "0 1px" }} />}
                 </div>)}
                 {/* ★ 新鲜度数的是 **codex 池**的快照覆盖度（`6/7 新鲜`）——
                     在 Google 档上它描述的是另一家，与摘要那行同一条理由。 */}
@@ -555,15 +567,15 @@ export default function App() {
                        之前（wrapper 里），不是 app 能开关的运行期行为。给一个点了没用的
                        开关，比没有这个开关糟。 */}
                 {provider === "gemini" && (
-                <div style={{ display: "flex", gap: 7, alignItems: "center",
+                <div style={{ display: "flex", gap: cb ? 5 : 7, alignItems: "center",
                               flexWrap: "wrap", justifyContent: "flex-end", rowGap: 7 }}>
                   <GhostButton t={t} onClick={() => { agyPool.refresh(); showToast(`已刷新 Gemini · ${agyPool.accounts.length} 个号`); }}
-                               loading={agyPool.busy} loadingText="刷新中…">
-                    <IconRefresh spin={agyPool.busy} />刷新全池
+                               loading={agyPool.busy} loadingText="刷新中…" title={cb ? "刷新全池" : undefined} dense={cb} headAction>
+                    <IconRefresh spin={agyPool.busy} />{cb ? "刷新" : "刷新全池"}
                   </GhostButton>
                   <GhostButton t={t} accent onClick={() => agyPool.health()}
-                               loading={agyPool.running === "health"} loadingText="检查中…">
-                    检查 token
+                               loading={agyPool.running === "health"} loadingText="检查中…" title={cb ? "检查 token" : undefined} dense={cb} headAction>
+                    {cb ? <><IcKey />检查</> : "检查 token"}
                   </GhostButton>
                   {/* ★★★ **agy 的探针与 codex 的是两套机制，扣的也是两家不同的额度。**
                       codex 直接打 `/responses`；agy 没有"指定号发一次请求"这种东西
@@ -571,23 +583,25 @@ export default function App() {
                       花的是 **agy 自己**的额度（实测一次约 15k token、约 30s）。
                       ⚠️ 2026-09-13 我曾把「Gemini 档不该有探针」写成闸 —— 那条闸锁死的是
                          「探针只能是 codex 那一套」这个**错误前提**，已按事实改写。 */}
-                  <ProbeButton t={t} label="探针 全池"
+                  <ProbeButton t={t} label={cb ? "探针" : "探针 全池"} dense={cb} headAction
                     hint={`对 ${agyPool.accounts.length} 个号各起一次 agy 真跑一句（问 hi 要求答 ok），证明"真的还能干活"——凭证有效但订阅到期/模型权限被撤/被限流，只有这个测得出来。⚠️ 花的是 **agy 自己**的额度（实测单次约 15k token），每号约 30s`}
                     loading={(agyPool.running ?? "").startsWith("probe:")} loadingText="探测中…"
-                    onConfirm={() => agyPool.probe()} />
-                  <span onClick={() => agyPool.setAuto(!(agyPool.autoOn ?? true))}
+                    onConfirm={() => { showToast("探针 全池…");
+                      void agyPool.probe().then(r => r && showToast(agyProbeToast(r), 8000)); }} />
+                  <DawnChip t={t} kind="agy" active={page === "overview" && provider === "gemini"} compact={cb} />
+                  <span data-head-action="" onClick={() => agyPool.setAuto(!(agyPool.autoOn ?? true))}
                         title={agyPool.autoOn
                           ? "自动切号开着：下次启动 agy 时，额度低于阈值会自动换一个号（由 `bin/agy` wrapper 在拉起真身前决定）"
                           : "自动切号已关：wrapper 不再替你换号，`agy` 一律用当前登录的那个"}
-                        style={{ fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 8,
+                        style={{ fontSize: 11.5, fontWeight: 700, padding: cb ? "5px 8px" : "5px 11px", borderRadius: 8,
                                  cursor: "pointer", whiteSpace: "nowrap", userSelect: "none",
                                  display: "inline-flex", alignItems: "center", gap: 6,
                                  color: agyPool.autoOn ? t.accent : t.muted,
                                  border: `1px solid ${agyPool.autoOn ? t.accent + "55" : t.ghostBorder}`,
                                  background: agyPool.autoOn ? "rgba(45,212,191,.07)" : "transparent" }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%",
-                                   background: agyPool.autoOn ? t.accent : t.muted }} />
-                    自动切号 {agyPool.autoOn === null ? "—" : agyPool.autoOn ? "开" : "关"}
+                    {cb ? <IcRotate off={agyPool.autoOn === false} /> : <span style={{ width: 7, height: 7, borderRadius: "50%",
+                                   background: agyPool.autoOn ? t.accent : t.muted }} />}
+                    {cb ? "切号" : "自动切号"} {agyPool.autoOn === null ? "—" : agyPool.autoOn ? "开" : "关"}
                   </span>
                 </div>)}
                 {/* ★ 与 codex 档同位同形的新鲜度行（用户 2026-09-24 点名的不统一）。
@@ -780,6 +794,8 @@ export default function App() {
                             <AgyCard key={a.sub} t={t} color={colorOf(traffic, "agy")}
                                      aid={a.sub}
                                      snap={agyPool.snapshotOf(a, agySnap)}
+                                     action={agyAction(a.quota_err_reason, a.quota_err_url)}
+                                     plan={a.plan}
                                      label={a.label} email={a.email ?? undefined}
                                      isCurrent={a.sub === agyPool.liveSub}
                                      onSwitch={a.sub === agyPool.liveSub ? undefined
@@ -809,7 +825,8 @@ export default function App() {
                                         另有一道拒绝删当值号的守卫（删掉它 = 既不在池里、
                                         也没有别的登录态可回）。 */
                                      onRemove={() => agyPool.removeIt(a.label)}
-                                     onProbe={() => agyPool.probe(a.label)}
+                                     onProbe={() => { showToast(`探针 ${a.label}…`);
+                                       void agyPool.probe(a.label).then(r => r && showToast(agyProbeToast(r), 8000)); }}
                                      probing={agyPool.running === `probe:${a.label}`}
                                      /* ★ 池里存的是反向的 `rotate_off`：缺省必须等于"参与轮换"，
                                         否则存量号要写迁移，漏迁移的会**静默退出轮换池**。 */
@@ -876,7 +893,7 @@ export default function App() {
                   </div>
                 );
               })()}
-            </>
+            </CardTypeContext.Provider>
           )}
 
           {page === "relay" && <RelayPage t={t} />}

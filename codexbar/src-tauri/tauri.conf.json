@@ -46,6 +46,7 @@
     "resources": {
       "../../codex-rotate": "scripts/codex-rotate",
       "../../portalock.py": "scripts/portalock.py",
+      "../../dawn_sched.py": "scripts/dawn_sched.py",
       "../../resume_provenance.py": "scripts/resume_provenance.py",
       "../../grok-quota": "scripts/grok-quota",
       "../../grok-quota-sampler": "scripts/grok-quota-sampler",

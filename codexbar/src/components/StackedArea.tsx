@@ -12,6 +12,9 @@ export interface Layer {
 
 /** 交接稿 §1:viewBox 1130×224,绘图区左移 34 留 y 轴标签位 → 可绘宽 1096(hover 吸附公式用的就是它)。 */
 const VW = 1130, PL = 34, PW = VW - PL;
+/** 图区之外的固定高度：顶部留给 `token`/caption 那一行 + 横轴标签行。撑满剩余高度时要扣掉它。 */
+const TOP_GAP = 14, AXIS_GAP = 4, AXIS_H = 16;
+export const CHART_CHROME_H = TOP_GAP + AXIS_GAP + AXIS_H;
 
 /**
  * 单调三次插值(Fritsch–Carlson)。
@@ -147,7 +150,7 @@ export default function StackedArea({
   const hv = hover != null && hover >= 0 && hover < n ? hover : null;
 
   return (
-    <div style={{ position: "relative", paddingLeft: 0, marginTop: 14 }}
+    <div style={{ position: "relative", paddingLeft: 0, marginTop: TOP_GAP }}
          onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${VW} ${height}`} preserveAspectRatio="none"
            style={{ width: "100%", height, display: "block" }}>
@@ -234,7 +237,7 @@ export default function StackedArea({
       </div>
 
       {/* 横轴标签:居中于数据点 x */}
-      <div style={{ position: "relative", height: 16, marginTop: 4 }}>
+      <div style={{ position: "relative", height: AXIS_H, marginTop: AXIS_GAP }}>
         {/* 抽稀序列**从末尾锚定**:最后一个标签一定落在节奏上,不会与倒数第二个挤在一起
             (实测 30d 档 `08-08` 与 `08-09` 重叠 —— 那是"强制渲染最后一个"造成的) */}
         {labels.map((d, i) => ((n - 1 - i) % Math.max(1, xTick ?? Math.ceil(n / MAX_X_LABELS)) === 0 ? (

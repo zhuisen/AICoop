@@ -71,6 +71,11 @@ clone 到**哪个目录都行**：`install-launchd.sh` 与 `quota_daemon.py` 自
 ⚠️ 「让 `codex` 本身也走轮换」是**单独一项、默认不勾** —— 它会改变裸 `codex` 的行为。
 不勾也能用，日常敲 `cxp` 即可。
 
+★ **App 每次更新后要再点一次「接入」**（勾「准备运行时」和「装常驻服务」）。装机版接入时把运行时**复制**到
+数据目录的 `runtime/`，代理、常驻服务、终端里的 `codex-rotate` 跑的都是那份拷贝；App 更新只换 App 自己。
+v1.10.0 起总览会标红「运行时与 App 同版本 ✗」并给「去接入 →」；v1.9.6 及更早不会提示，
+手动刷新的一行命令见 [TROUBLESHOOTING](TROUBLESHOOTING.md#已接入但还是觉得没轮换) 第 4 条。
+
 **想自己动手、或想完全控制每一步，继续往下看 §2~§4。两条路等价。**
 
 ---
@@ -191,7 +196,8 @@ schtasks /Query /TN "com.doushutangmu.codex-rotate.proxy"
 | `…proxy` | KeepAlive 常驻 | 轮换代理，听 `127.0.0.1:8011` |
 | `…autosync` | WatchPaths `~/.codex/auth.json` | `codex login` 新号秒级入池 |
 | `…quotad` | RunAtLoad + KeepAlive | 活动驱动读官方 usage API 刷额度（零消耗）+ 300s 全池扫描兜底 |
-| `…dawnprobe` | 每日 06:00 | 清晨计费探针，让 Plus 的 5h 窗口走动。⚠️ **本仓唯一会自动花钱的东西，默认关闭**（`dawn_probe.enabled` 缺省假），装了也不会自己跑 |
+| `…dawnprobe` | 每 60s 醒一次，自己判到点 | 定时计费探针，让 Plus 的 5h 窗口走动。时间在总览 Codex 档工具栏「定时」胶囊里选（默认 06:00），实际在所选时刻起 3 分钟内随机。⚠️ **会自动花钱，默认关闭**（`dawn_probe.enabled` 缺省假），装了也不会自己跑；空转不写日志 |
+| `…agydawn` | 同上 | Gemini（agy）版：给参与轮换的号各跑一次 agy 探针（每号约 15k token），开关与时间在 Gemini 档的「定时」胶囊里。同样**默认关闭** |
 
 两个平台注册的是**同一组服务**（名字、入口脚本、端口都一致），由 `tests/test_installers_agree.py` 守着 —— 只改一边会让某个平台**静默少一个常驻进程**，而症状是「额度不更新」这类看起来跟安装器无关的现象。
 
@@ -282,7 +288,7 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 
 ```bash
 # 服务
-for s in proxy autosync quotad dawnprobe; do
+for s in proxy autosync quotad dawnprobe agydawn; do
   launchctl bootout gui/$(id -u)/com.doushutangmu.codex-rotate.$s 2>/dev/null
   rm -f ~/Library/LaunchAgents/com.doushutangmu.codex-rotate.$s.plist
 done

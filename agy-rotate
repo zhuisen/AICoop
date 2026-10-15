@@ -146,9 +146,10 @@ def _adopt(label=None, quiet=False):
 def cmd_login(args):
     """加一个号：先保住当前的，再起 agy 让你登录新号，回来自动收编。
 
-    ★★★ **必须先把当前号收进池再让用户去 `/logout`。** agy 的登录态只有一份，
-      `/logout` 会就地把它清掉 —— 没有先备份的话，那个号就此丢了，用户要重新走一遍
-      浏览器 OAuth 才能拿回来。这一步不是"顺手做的"，它是这条命令存在的理由之一。
+    ★★★ **必须先把当前号收进池再清登录态。** agy 的登录态只有一份，清掉
+      （我们的 `clear_live` 或用户的 `/logout`）就没了 —— 没有先备份的话，那个号就此丢了，
+      用户要重新走一遍浏览器 OAuth 才能拿回来。这一步不是"顺手做的"，它是这条命令存在的理由之一。
+    ★★ 2026-10-14 起由我们先清空、agy 从未登录启动，不再让用户在进程内 `/logout` 换号。
 
     ★ agy **没有** login/logout 子命令（`agy --help` 实测），登录只能在 TUI 里走。
       所以我们不"代替"用户登录，只是把他前后那两步（保住旧的、收编新的）接上。
@@ -163,21 +164,30 @@ def cmd_login(args):
         return
 
     pool = P.load()
+    before_label = _accounts(pool).get(before, {}).get("label")
+    real = Path(os.environ.get("AGY_REAL", str(Path.home() / ".local" / "bin" / "agy")))
+    if not real.exists():
+        sys.exit("找不到 agy（%s）" % real)
+    # ★★ 先清空登录态，让 agy **从未登录开始**，不在进程内 `/logout` 换号（见 `P.clear_live`）。
+    #   前提是旧号已经真的存进池 —— 存不进就不清，退回旧流程，宁可多一步也不丢号。
+    saved = before is None or P.read_cred(before) is not None
     print("\n接下来会启动 agy。在里面：")
-    print("  1. 输入 `/logout`")
-    print("  2. 按提示在浏览器里登录**另一个** Google 账号")
-    print("  3. 退出 agy（Ctrl-D / `/quit`）——回来我会自动把新号收进池")
-    print("\n★ 刚才那个号（%s）已经存进池里了，随时可以 `agy-rotate switch` 切回去。"
-          % _accounts(pool).get(before, {}).get("label"))
+    if saved:
+        print("  1. 按提示在浏览器里登录**新的** Google 账号（不用 `/logout`）")
+    else:
+        print("  1. 输入 `/logout`，再按提示在浏览器里登录**另一个** Google 账号")
+    print("  2. 退出 agy（Ctrl-D / `/quit`）——回来我会自动把新号收进池")
+    if before:
+        print("\n★ 刚才那个号（%s）已经存进池里了，没登成会自动装回去。" % before_label)
+    print("★ 先退掉其它开着的 agy —— 它们可能把旧号写回钥匙串，新开的 agy 就又是旧号了。")
     try:
         input("准备好就按回车（Ctrl-C 放弃）… ")
     except (EOFError, KeyboardInterrupt):
         print("\n已放弃 —— 池里那份没动。")
         return
 
-    real = Path(os.environ.get("AGY_REAL", str(Path.home() / ".local" / "bin" / "agy")))
-    if not real.exists():
-        sys.exit("找不到 agy（%s）" % real)
+    if saved and before and not P.clear_live():
+        print("  ⚠️ 没清掉当前登录态 —— 进去之后先 `/logout` 再登新号。")
     # ★ 用 subprocess 而不是 execv：execv 之后本进程就没了，**回不来收编**。
     #   交互态要保住 TTY，所以不接管任何一条流。
     subprocess.run([str(real)], check=False)
@@ -188,13 +198,20 @@ def cmd_login(args):
         # ★ 这条曾是**假阴性**（2026-09-13 用户实报）：登录其实成功了，
         #   只是我们读的是文件、而 agy 把新凭证写进了钥匙串。`read_live()` 现在
         #   钥匙串优先，所以走到这里才是真的没读到。措辞也跟着改成两种可能。
-        print("\n✗ 回来之后读不到登录态 —— 登录没完成，或者钥匙串读不出来。"
-              "\n  池里那份没丢：`agy-rotate switch %s` 装回去。"
-              % _accounts(pool).get(before, {}).get("label"))
+        # ★★ 登录态是我们清的，没登成就得装回去 —— 否则用户退出来发现 agy 谁都没登。
+        old = P.read_cred(before) if before else None
+        if old and P.read_live() is None:
+            where = P.install_live(old)
+            print("\n✗ 没有登录新号 —— 已把原来那个号（%s）装回去（落点 %s）。"
+                  "\n  池里那份没丢。" % (before_label, where))
+        else:
+            print("\n✗ 回来之后读不到登录态 —— 登录没完成，或者钥匙串读不出来。"
+                  "\n  池里那份没丢：`agy-rotate switch %s` 装回去。" % before_label)
         return
     if after == before:
         # ★ 三态里最容易被讲错的那个：**没换号** ≠ 失败，也 ≠ 成功加号。
-        print("\n还是原来那个号（没有 `/logout`，或者又登了同一个账号）—— 池没有变化。")
+        print("\n还是原来那个号（又登了同一个账号，或者别的 agy 进程把它写回了钥匙串）"
+              "—— 池没有变化。")
         return
     sub, fresh = _adopt(label)
     print("  ★ 新号已成为当前登录态。" if fresh else "  ★ 这个号本来就在池里，已更新凭证。")
@@ -223,6 +240,101 @@ def _refresh_one(sub, acc, pool):
     return fresh, ""
 
 
+def _quota_anchors_mod():
+    """锚点账本模块（`traffic/quota_anchors.py`），按路径加载；取不到返回 None。
+    **纯附加，绝不抛** —— 同 `agy-quota::_quota_anchors_mod` 与 2026-09-05「附加功能搞挂主路径」。"""
+    try:
+        import importlib.util
+        f = Path(os.path.realpath(__file__)).parent / "traffic" / "quota_anchors.py"
+        if not f.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("quota_anchors", str(f))
+        if spec is None or spec.loader is None:
+            return None
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+    except Exception:       # noqa: BLE001 — 纯附加
+        return None
+
+
+def _note_pool_anchors(sub, groups, now, billed=None):
+    """按号、按桶记一次读数进锚点账本 → `{bucketId: verdict}`（带它描述的 `reset`）。
+
+    ★★ 存在的理由（2026-10-15 实测）：云端摘要里**没用过的桶** `resetTime` 恒为「读数时刻 + 整窗」，
+      每 3 分钟刷新就往后挪 3 分钟 —— 卡上那个 ↻4h5xm 永远走不到 0。本机 RPC 时代
+      `agy-quota::_note_anchors` 记过账、UI 能说「未启动」；额度改走云端按账号读之后这条没接上，
+      倒计时就又成了没有任何标记的假值。判据不变，只是换了个喂数的地方。
+    ★ key 带 `sub`：云端是**按账号**读的，一个号的窗口与另一个号无关（本机 RPC 只有当值号）。
+    ★ `billed` = 这次探针真的计进了这个桶 ⇒ `note_billed`（同 codex `_mark_billed_anchor`）：
+      窗口是我们亲手启动的，这是演绎，不必再等 900s 从时间序列里推一遍。
+    """
+    try:
+        mod = _quota_anchors_mod()
+        if mod is None:
+            return None
+        out = {}
+        for g in groups or []:
+            for b in g.get("buckets") or []:
+                bid = b.get("bucketId") or b.get("window")
+                fr, rs = b.get("remainingFraction"), P._iso_ts(b.get("resetTime"))
+                if not bid or not isinstance(fr, (int, float)) or not rs:
+                    continue
+                key = "pool/%s/%s" % (sub, bid)
+                v = mod.note("agy", key, rs, 100.0 * (1 - float(fr)), now=now)
+                if billed and bid == billed:
+                    v = mod.note_billed("agy", key, rs, now=now)
+                v["reset"] = int(rs)
+                out[bid] = v
+        return out or None
+    except Exception:       # noqa: BLE001 — 纯附加
+        return None
+
+
+def _store_quota(sub, a, groups, err, billed=None):
+    """一次额度读数落进池里这个号 → 旧形状投影 `q`（失败为 None）。`quota` 与探针共用这一份。"""
+    q = P.quota_by_group(groups) if not err else None
+    a["quota_summary"] = groups if not err else None
+    a["quota"] = q if not err else None
+    a["quota_err"] = err or None
+    a["quota_err_reason"] = getattr(err, "reason", None)
+    a["quota_err_url"] = getattr(err, "url", None)
+    a["quota_at"] = int(time.time())
+    if not err:
+        # ★ 判定是**兄弟键**且自带它描述的 `reset`（同 codex `slot["quota_anchor"]`）：
+        #   前端核身份，对不上就不用 —— 拿旧窗口的判定解释新窗口，渲染出来一模一样。
+        anc = _note_pool_anchors(sub, groups, a["quota_at"], billed=billed)
+        if anc:
+            a["quota_anchor"] = anc
+    return q
+
+
+def _maybe_tier(a, cred, now=None):
+    """档位（Pro / Ultra）一天最多读一次；读不到就**留着上次的**，绝不清空成 free。"""
+    now = time.time() if now is None else now
+    if a.get("plan") and now - float((a.get("tier") or {}).get("at") or 0) < P.TIER_TTL:
+        return
+    try:
+        tier, err = P.fetch_tier(cred["token"]["access_token"])
+    except Exception:       # noqa: BLE001 — 档位是附加信息，绝不拖垮额度刷新
+        return
+    if tier and not err:
+        a["tier"] = {"id": tier["id"], "name": tier["name"], "at": int(now)}
+        a["plan"] = tier["plan"]
+
+
+def _gemini_5h(groups):
+    """Gemini 组的 5h 桶 → `(bucketId, 剩余 0~1, reset epoch)`；没有就 `(None, None, None)`。"""
+    for g in groups or []:
+        if not str(g.get("displayName", "")).lower().startswith("gemini"):
+            continue
+        for b in g.get("buckets") or []:
+            if str(b.get("window", "")) == "5h" and isinstance(b.get("remainingFraction"), (int, float)):
+                return (b.get("bucketId") or "5h", float(b["remainingFraction"]),
+                        P._iso_ts(b.get("resetTime")))
+    return None, None, None
+
+
 def cmd_quota(args):
     want_json = "--json" in args
     pool = P.load()
@@ -244,11 +356,16 @@ def cmd_quota(args):
         if err:
             return sub, a, None, err, True
         groups, err = P.fetch_quota(cred["token"]["access_token"])
+        _maybe_tier(a, cred)
         return sub, a, groups, err, False
 
     with ThreadPoolExecutor(max_workers=max(1, min(8, len(accs)))) as ex:
         fetched = list(ex.map(_fetch, list(accs.items())))
     for sub, a, groups, err, cred_failed in fetched:
+        # ★ 错误的**结构**（reason / 验证链接）落兄弟键，成败都写 —— 成功时清掉，
+        #   否则一个早已验证过的号会一直挂着「需验证」。
+        a["quota_err_reason"] = getattr(err, "reason", None)
+        a["quota_err_url"] = getattr(err, "url", None)
         if cred_failed:
             a["quota_err"] = err
             out.append({"sub": sub, "label": a.get("label"), "err": err})
@@ -258,11 +375,7 @@ def cmd_quota(args):
         # ★★★ `quota_summary` 是**完整摘要**（含周窗口，2026-09-15 起）；
         #    `quota` 是它的投影，只为选号与 CLI 打印保留旧形状。
         #    两者只在 `quota_by_group` 里算一次 —— 不会分叉成两份事实。
-        q = P.quota_by_group(groups) if not err else None
-        a["quota_summary"] = groups if not err else None
-        a["quota"] = q if not err else None
-        a["quota_err"] = err or None
-        a["quota_at"] = int(time.time())
+        q = _store_quota(sub, a, groups, err)
         out.append({"sub": sub, "label": a.get("label"), "live": sub == live_sub,
                     "quota": q, "err": err or None})
     # ★★★ **池级「上次尝试过」的时刻，成败都写。**
@@ -280,7 +393,7 @@ def cmd_quota(args):
         P.save(pool)
     for _s, _a in _accounts(pool).items():
         _log("quota [%s] %s" % (_a.get("label"),
-             ("✓ " + "、".join("%s %.1f%%" % (k, v["remaining"] * 100)
+             ("✓ " + "、".join("%s %s" % (k, _fmt_pct(v["remaining"]))
                                for k, v in (_a.get("quota") or {}).items()))
              if not _a.get("quota_err") else "✗ " + str(_a.get("quota_err"))[:70]))
     if want_json:
@@ -757,6 +870,54 @@ def _probe_one(label):
     return True, note, d.get("usage"), _run_identity(started_at)
 
 
+#: 探后读 5h 的次数与间隔。云端摘要的入账有没有延迟**没有实测**，所以读到下降就停，最多等 ~10s。
+PROBE_AFTER_TRIES = int(os.environ.get("AGY_PROBE_AFTER_TRIES", "3"))
+PROBE_AFTER_GAP = float(os.environ.get("AGY_PROBE_AFTER_GAP", "5"))
+
+
+def _probe_after(sub, a, pool, ok, before):
+    """探后免费读 5h，判「窗口启动了没有」→ `{before, after, reset, started}` 或 None（读不到）。
+
+    ★★ 判据是 **5h 剩余真的降了**（`remainingFraction` 带 7 位小数，一次 ~15k token 的探针看得见），
+      不是「重置时间变了」：刚启动的窗口 reset ≈ 启动时刻 + 5h，和闲置浮动的「读数时刻 + 5h」
+      只差探针那 ~30s，单看一次读数**分不开**（同 `quota_anchors.py` 头部那条天花板）。
+    ★ 只有「探针成功 **且** 5h 降了」才 `note_billed`（同 codex：没证到就不下断言 ——
+      多声称一次是把一个假倒计时说成真的）。归属不符时 `ok` 已被翻成 False，自然不标。
+    """
+    last = None
+    for i in range(max(1, PROBE_AFTER_TRIES)):
+        if i:
+            time.sleep(PROBE_AFTER_GAP)
+        cred, err = _refresh_one(sub, a, pool)
+        if not cred:
+            break
+        groups, err = P.fetch_quota(cred["token"]["access_token"])
+        if err:
+            continue
+        bid, after, reset = _gemini_5h(groups)
+        last = (groups, bid, after, reset)
+        if after is not None and after < before:
+            break
+    if last is None:
+        return None
+    groups, bid, after, reset = last
+    started = after is not None and after < before
+    _store_quota(sub, a, groups, "", billed=bid if (ok and started) else None)
+    return {"before": round(before * 100, 2), "after": None if after is None else round(after * 100, 2),
+            "reset": int(reset) if reset else None, "started": started}
+
+
+def _q5_text(q5):
+    """探针结果行里的 5h 那一段。读不到就**说读不到**，不写 0、也不写「没变」。"""
+    if not q5 or q5.get("after") is None:
+        return " · 5h 没读到（无法判断窗口是否启动）"
+    b, a = q5["before"], q5["after"]
+    if q5["started"]:
+        at = time.strftime("%H:%M", time.localtime(q5["reset"])) if q5.get("reset") else "?"
+        return " · 5h %.1f%% → %.1f%%（Δ%+.1f）· 窗口已启动，%s 重置" % (b, a, a - b, at)
+    return " · 5h 仍 %.1f%%（未见下降：这次消耗还没计进 5h，稍后 ↻ 再看）" % a
+
+
 def cmd_probe(args):
     """计费探针。★★★ **这是 Gemini 档唯一会花钱的动作，花的是 agy 自己的额度。**
 
@@ -786,13 +947,18 @@ def cmd_probe(args):
     try:
         for sub in subs:
             a = accs[sub]
+            # ★★ 探前先**免费**读一次这个号的 5h（云端按账号读，不用切号）—— 同 codex 探针的基线 GET。
+            #   没有基线就答不了用户真正想问的那句：「探完之后 5h 窗口启动了没有」。
+            cred0, _e0 = _refresh_one(sub, a, pool)
+            g0 = P.fetch_quota(cred0["token"]["access_token"])[0] if cred0 else None
+            _bid, before, _r0 = _gemini_5h(g0)
             if sub != (P.claims(P.read_live()) or {}).get("sub"):
                 cred, err = _refresh_one(sub, a, pool)
                 if err:
-                    out.append((a, False, "切不过去：%s" % err, None))
+                    out.append((a, False, "切不过去：%s" % err, None, None))
                     continue
                 if P.install_live(cred) != "keyring":
-                    out.append((a, False, "只写了兜底文件，agy 多半还在用别的号", None))
+                    out.append((a, False, "只写了兜底文件，agy 多半还在用别的号", None, None))
                     continue
             ok, note, usage, ran_as = _probe_one(a.get("label"))
 
@@ -816,13 +982,14 @@ def cmd_probe(args):
                 ok = False
                 note = "归属不符：实际跑的是 %s（本次结果属于那个号，不计在本号上）" % ran_as
                 usage = None          # ★ 用量也不能记 —— 它不是这个号花的
+            q5 = _probe_after(sub, a, pool, ok, before) if before is not None else None
             a["last_probe"] = {"at": int(time.time()), "ok": ok, "note": note,
-                               "usage": usage,
+                               "usage": usage, "q5h": q5,
                                # 证据本身要落盘：事后"到底跑成了谁"只能从这里查。
                                "ran_as": ran_as,
                                "attributed": bool(ran_as and want and ran_as == want),
                                "via": os.environ.get("CODEX_ROTATE_CALLER") or "cli?"}
-            out.append((a, ok, note, usage))
+            out.append((a, ok, note, usage, q5))
     finally:
         # ★★ 把用户放回他原来的号。放在 finally 里：中途炸了也不能把他留在别处。
         if live and live in accs and (P.claims(P.read_live()) or {}).get("sub") != live:
@@ -834,15 +1001,149 @@ def cmd_probe(args):
             P.save(pool)
 
     if want_json:
-        print(json.dumps([{"label": a.get("label"), "ok": ok, "note": n, "usage": u}
-                          for a, ok, n, u in out], ensure_ascii=False))
-        return
-    for a, ok, note, usage in out:
+        print(json.dumps([{"label": a.get("label"), "ok": ok, "note": n, "usage": u, "q5h": q}
+                          for a, ok, n, u, q in out], ensure_ascii=False))
+        return out
+    for a, ok, note, usage, q5 in out:
         tok = ("（%s token）" % format(usage.get("total_tokens", 0), ",")) if usage else ""
         # ★ 探针是花钱的动作，**成败与用量都要留痕** —— 事后"到底探成没有、花了多少"
         #   只能从这里查（codex 那侧为同一件事栽过一次，见 CLAUDE.md §8 的 `last_probe`）。
-        _log("probe [%s] %s %s%s" % (a.get("label"), "✓" if ok else "✗", note, tok))
-        print("  [%s] %s %s%s" % (a.get("label"), "✓" if ok else "✗", note, tok))
+        _log("probe [%s] %s %s%s%s" % (a.get("label"), "✓" if ok else "✗", note, tok, _q5_text(q5)))
+        print("  [%s] %s %s%s%s" % (a.get("label"), "✓" if ok else "✗", note, tok, _q5_text(q5)))
+    return out
+
+
+DAWN_KEY = "dawn_probe"
+#: 超过这个秒数的 `running` 视为进程遗骸（`kill -9` 连 `failed` 都写不下）。同 codex 的 `DAWN_STALE_SECS`。
+DAWN_STALE_SECS = 1800
+
+
+def _dawn_sched():
+    """与 `codex-rotate` 共用的到点判据（`dawn_sched.py`）。"""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("dawn_sched", Path(os.path.realpath(__file__)).parent / "dawn_sched.py")
+    m = _il.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _dawn_targets(pool):
+    """定时探针探哪些号：**全部参与轮换**的（用户 2026-10-15 选定），停用轮换 / 凭证失效的跳过。"""
+    return [s for s, a in _accounts(pool).items() if not a.get("rotate_off") and not P.is_dead(a)]
+
+
+def _dawn_save(patch):
+    """持池锁、重读再写 —— `cmd_probe` 中途也会存池，拿手里的旧对象写回会把它的结果冲掉。"""
+    with P._lock(P.POOL):
+        pool = P.load()
+        cur = dict(pool.get(DAWN_KEY) or {})
+        cur.update(patch)
+        pool[DAWN_KEY] = cur
+        P.save(pool)
+
+
+def cmd_dawn_probe(args):
+    """每天定时给 agy 池里**参与轮换的号**各跑一次探针，把 5h 窗口启动起来。
+
+    ★★★ **这是 Gemini 档唯一会自动花钱的东西**（每号约 15k token / 30s，花 agy 自己的额度）。
+      护栏与 `codex-rotate dawn-probe` 逐条对齐，一条都不能省：
+      ① **默认关闭**（`enabled` 缺省假）—— 仓库公开，默认开启的计费定时器会在别人机器上悄悄花钱；
+      ② ★★ **先占天再探** —— launchd 每分钟一次与 app 内补跑两条路都调它，占天写在探针**之前**、
+         持池锁，否则并发窗口里就是整池双重计费；`--force` 也不放行「另一个进程正在跑」；
+      ③ **每次运行都落痕**（成功 / 失败 / 无号可探都写），设置里看得到「上次运行」。
+    ★ 时间可选、区间内随机（`dawn_sched.py`，用户 2026-10-15）。
+    ★ 探针会**临时切换钥匙串里的登录号**，结束后在 `finally` 里切回（见 `cmd_probe`）。
+
+    用法：dawn-probe [--no-wait] | --force | --enable | --disable | --time HH:MM | --status
+    """
+    DS = _dawn_sched()
+    pool = P.load()
+    rec = dict(pool.get(DAWN_KEY) or {})
+    today = time.strftime("%Y-%m-%d")
+    if "--time" in args:
+        i = args.index("--time")
+        hhmm = DS.parse_time(args[i + 1] if i + 1 < len(args) else "")
+        if not hhmm:
+            sys.exit("用法: agy-rotate dawn-probe --time HH:MM（24 小时制）")
+        _dawn_save({"time": hhmm})
+        print("Gemini 定时探针时间已设为 %s（区间内随机）" % DS.window_text({"time": hhmm}))
+        return
+    if "--enable" in args or "--disable" in args:
+        on = "--enable" in args
+        _dawn_save({"enabled": on})
+        print("Gemini 定时探针已%s" % ("启用" if on else "停用"))
+        return
+    if "--status" in args:
+        rec.setdefault("enabled", False)
+        rec["time"] = DS.parse_time(rec.get("time")) or DS.DEFAULT_TIME
+        rec["window"] = DS.window_text(rec)
+        rec["due_at"] = int(DS.due_at(rec, "agy"))
+        rec["targets_today"] = [_accounts(pool)[s].get("label") or s[:8] for s in _dawn_targets(pool)]
+        print(json.dumps(rec, ensure_ascii=False))
+        return
+
+    # ★ `--tick` = 定时任务每 60s 那一下：空转（未启用 / 已跑过 / 未到点）**不出声**，
+    #   否则日志每分钟多一行、日志页被刷屏。真跑时照常输出。
+    say = (lambda *_: None) if "--tick" in args else print
+    force = "--force" in args
+    if not force and not rec.get("enabled"):
+        say("agy dawn-probe 未启用（agy-rotate dawn-probe --enable）")
+        return
+    if not force and rec.get("date") == today:
+        say("agy dawn-probe 今天（%s）已跑过：%s/%s 可用" % (today, rec.get("ok", 0), rec.get("total", 0)))
+        return
+    if not force:
+        left = DS.due_at(rec, "agy") - time.time()
+        if left > 0 and ("--no-wait" in args or left > DS.WAIT_SECS):
+            say("agy dawn-probe 未到点（%s 内随机，还差 %ds）" % (DS.window_text(rec), int(left)))
+            return
+        if left > 0:
+            time.sleep(left)
+
+    targets = _dawn_targets(pool)
+    claimed = {"n": 0, "state": None, "age": 0}
+    # ★★ 先占天，再探。持池锁读-改-写，所以占坑是原子的（同 codex `_mutate_state(_claim)`）。
+    with P._lock(P.POOL):
+        cur_pool = P.load()
+        cur = dict(cur_pool.get(DAWN_KEY) or {})
+        if cur.get("date") == today:
+            claimed.update(n=1, state=cur.get("state"), age=int(time.time()) - int(cur.get("at") or 0))
+        else:
+            cur.update({"date": today, "at": int(time.time()), "state": "running",
+                        "ok": None, "total": len(targets), "started": None, "note": ""})
+            cur_pool[DAWN_KEY] = cur
+            P.save(cur_pool)
+    if claimed["n"]:
+        if claimed["state"] == "running" and claimed["age"] < DAWN_STALE_SECS:
+            print("agy dawn-probe 正在另一个进程里运行（%ds 前认领），本次跳过 —— "
+                  "`--force` 也不放行，并发会让整池双重计费。" % claimed["age"])
+            return
+        if not force:
+            say("agy dawn-probe 今天（%s）已被认领，本次跳过（防双重计费）。确实要重跑用 --force" % today)
+            return
+
+    if not targets:
+        # ★ 没号可探是**事实**不是故障 —— 照样落痕，否则明天分不出「跑了没号」和「压根没跑」。
+        _dawn_save({"date": today, "at": int(time.time()), "state": "done", "ok": 0, "total": 0,
+                    "started": 0, "note": "池里没有参与轮换的号"})
+        print("没有参与轮换的 agy 号可探")
+        return
+    labels = [_accounts(pool)[s].get("label") or s for s in targets]
+    print("Gemini 定时探针 · %d 个号：%s" % (len(targets), " ".join(labels)))
+    try:
+        os.environ["CODEX_ROTATE_CALLER"] = "dawn"      # ★ 这一路的计费必须认得出来
+        # ★ 传 sub 不传 label：`_by_label` 先认 sub，label 撞名/叫 `--all` 都不会扩成全池。
+        out = cmd_probe(list(targets)) or []
+    except BaseException as e:
+        # ★ 释放成 failed 而不是抹掉：「今天跑过但崩了」可能已经花过钱，抹掉会让重跑二次计费。
+        _dawn_save({"date": today, "at": int(time.time()), "state": "failed",
+                    "note": ("%s: %s" % (type(e).__name__, e))[:200]})
+        raise
+    ok_n = sum(1 for r in out if r[1])
+    started = sum(1 for r in out if r[4] and r[4].get("started"))
+    _dawn_save({"date": today, "at": int(time.time()), "state": "done",
+                "ok": ok_n, "total": len(out), "started": started, "note": ""})
+    _log("dawn [%d/%d 可用 · 5h 启动 %d]" % (ok_n, len(out), started))
 
 
 def cmd_rotate(args):
@@ -934,7 +1235,7 @@ def cmd_live(args):
 
 CMDS = {"login": cmd_login, "list": cmd_list, "quota": cmd_quota, "switch": cmd_switch,
         "pick": cmd_pick, "auto": cmd_auto, "rename": cmd_rename, "remove": cmd_remove,
-        "live": cmd_live, "health": cmd_health, "probe": cmd_probe,
+        "live": cmd_live, "health": cmd_health, "probe": cmd_probe, "dawn-probe": cmd_dawn_probe,
         "rotate": cmd_rotate, "auto-switch": cmd_autoswitch,
         "next": cmd_next, "pin": cmd_pin, "borrow": cmd_borrow}
 

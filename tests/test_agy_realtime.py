@@ -39,6 +39,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -246,6 +247,12 @@ class AgyDoesPersistTokensAndScanIsWiredToIt(unittest.TestCase):
                 d = json.loads(line)
             except ValueError:
                 continue
+            # ★ 跳过 agy 自己报了全 0 的行（`bin/agy` 现在标 `usage_missing`；旧行没标，按全 0 认）。
+            #   2026-10-14：467/472 的那 5 个全是这种 —— db 有真数，是**账本**错了，不是字段号变了。
+            #   拿它们比只会把「agy 没给」误报成「解码漂移」。
+            toks = ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens")
+            if d.get("usage_missing") or not any(d.get(k) for k in toks):
+                continue
             if d.get("conv"):
                 led[d["conv"]] = d
         if not led:
@@ -315,6 +322,37 @@ def _pb(b):
             break
         out.setdefault(f, []).append(v)
     return out
+
+
+class AnAllZeroUsageIsMarkedMissing(unittest.TestCase):
+    """★ agy 偶尔在 `-p` 输出里报全 0 的 usage（2026-10-13/14 五次，db 里有真数）。
+    账本照写但标 `usage_missing` —— 「agy 没给」不能和「用了 0」长得一样。"""
+
+    def _record(self, usage):
+        import importlib.machinery
+        import importlib.util
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("AGY_LEDGER_DIR")
+            os.environ["AGY_LEDGER_DIR"] = tmp
+            try:
+                name = "agy_wrap_%s" % os.urandom(4).hex()
+                loader = importlib.machinery.SourceFileLoader(name, str(ROOT / "bin" / "agy"))
+                m = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+                loader.exec_module(m)
+                m.record({"usage": usage, "conversation_id": "c1", "status": "SUCCESS"},
+                         "gemini-3.8-flash-high", 0.0)
+                return json.loads((Path(tmp) / "usage.jsonl").read_text().splitlines()[-1])
+            finally:
+                if old is None:
+                    os.environ.pop("AGY_LEDGER_DIR", None)
+                else:
+                    os.environ["AGY_LEDGER_DIR"] = old
+
+    def test_all_zero_is_marked(self):
+        self.assertTrue(self._record({"input_tokens": 0, "output_tokens": 0}).get("usage_missing"))
+
+    def test_real_usage_is_not_marked(self):
+        self.assertNotIn("usage_missing", self._record({"input_tokens": 5, "output_tokens": 1}))
 
 
 class TheSamplerDoesNotSpinWhenAgyIsAbsent(unittest.TestCase):

@@ -12,6 +12,7 @@
   ③ 自己会死：单实例锁 + grok 不在就退出 + 空闲超时 + 24h 硬上限。
   ④ 内容没变就不写 sidecar（mtime 不变 ⇒ 不广播），否则 15s 一轮会把两个
      webview 变成空转。比较时剔掉 `fetched_at`。
+     但每 `SIDECAR_HEARTBEAT_SECS` 仍写一次，让 `fetched_at` 前进（2026-10-14）。
 
 ★ 放仓库根、不放 `traffic/`：它会联网且（经由 grok-quota）读凭证，
   与 `traffic/`「不碰凭证不联网」的安全线相反。同 `grok-quota`。
@@ -44,6 +45,14 @@ POLL_SECS = int(os.environ.get("GROK_SAMPLER_POLL", "15"))
 POLL_FAST_SECS = int(os.environ.get("GROK_SAMPLER_POLL_FAST", "5"))
 FAST_PHASE_SECS = int(os.environ.get("GROK_SAMPLER_FAST_PHASE", "45"))
 HEARTBEAT_SECS = int(os.environ.get("GROK_SAMPLER_HEARTBEAT", "1800"))
+#: ★★ sidecar 的心跳，与上面**账本**的心跳分开（2026-10-14）。
+#:   原来 sidecar 只在内容变了才写，`fetched_at` 就停在上一次整数跳变那一刻 ——
+#:   采样器每 15s 都在取，前端却看到一份"10 分钟前"的快照，于是 `useGrokQuota` 的
+#:   `FRESH_MS`（10 分钟）一到就**自己再起一次 `grok-quota`**，与采样器重复打外网。
+#:   实测账本：整数停在 54% 时 30 分钟心跳行照写，而 sidecar 一直没动。
+#:   ★ 必须 **< `FRESH_MS`**，否则采样器活着时前端仍会判过期去重取。闸在 `tests/test_grok_realtime.py`。
+#:   不并进账本那条 1800：账本每写一行都是永久数据，sidecar 是覆盖写，成本不同。
+SIDECAR_HEARTBEAT_SECS = int(os.environ.get("GROK_SAMPLER_SIDECAR_HEARTBEAT", "300"))
 IDLE_SECS = int(os.environ.get("GROK_SAMPLER_IDLE_SECS", "180"))
 MAX_LIFETIME_SECS = int(os.environ.get("GROK_SAMPLER_MAX_LIFETIME", str(24 * 3600)))
 FETCH_TIMEOUT = int(os.environ.get("GROK_SAMPLER_FETCH_TIMEOUT", "30"))
@@ -70,30 +79,34 @@ def fetch():
 
 
 _last_sidecar = None
+_last_sidecar_at = 0.0
 
 
 def _write_sidecar(snap):
-    """原子写 sidecar。**只在内容真的变了时写。**
+    """原子写 sidecar。**内容变了才写，外加每 `SIDECAR_HEARTBEAT_SECS` 一次心跳。**
 
     ★ 原子写(tmp + rename)：直接覆写会让正在读的 webview 拿到半截 JSON，
       半截 JSON 解析失败在 UI 上表现为「额度读不到」—— 与真的读不到同形。
 
     ★★ **必须比内容，不能每次都写。** Rust 侧靠 mtime 变化广播。
+    ★★ 但内容不变也要定期写一次，让 `fetched_at` 前进 —— 理由见 `SIDECAR_HEARTBEAT_SECS`。
     """
-    global _last_sidecar
+    global _last_sidecar, _last_sidecar_at
     try:
         key = json.dumps({k: v for k, v in (snap or {}).items()
                           if k not in ("fetched_at", "pid")},
                          ensure_ascii=False, sort_keys=True)
     except Exception:
         key = None
-    if key is not None and key == _last_sidecar:
+    now = time.time()
+    if key is not None and key == _last_sidecar \
+            and now - _last_sidecar_at < SIDECAR_HEARTBEAT_SECS:
         return
     try:
         tmp = SIDECAR.with_name(SIDECAR.name + ".tmp%d" % os.getpid())
         tmp.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, SIDECAR)
-        _last_sidecar = key
+        _last_sidecar, _last_sidecar_at = key, now
     except OSError:
         pass                                # 写不了 sidecar 不影响账本
 

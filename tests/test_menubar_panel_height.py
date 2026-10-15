@@ -159,9 +159,14 @@ class BothTabsRenderAtTheSameHeight(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # ★★ 按真实流程来：先量今日页，再把量到的数**预置**给账号页（`?h=`，app 里是 localStorage）。
+        #   原来两次都是空 localStorage ⇒ 账号页恒用 `PANEL_H_FALLBACK=580`，于是这条闸只在
+        #   「今天恰好 7 家有流量、今日页自然高正好 580」时才绿 —— 2026-10-14 只剩几家 ⇒ 547 vs 580 红，
+        #   红的是夹具不是代码。判别力不能押在当天的流量分布上。
         try:
-            cls.acc = probe(BASE)
             cls.today = probe(BASE + "&tab=today")
+            th = final_height(cls.today)
+            cls.acc = probe(BASE + ("&h=%d" % th if th else ""))
         except Exception as e:                      # noqa: BLE001
             raise unittest.SkipTest("harness 不可达: %s" % e)
         if cls.acc.get("_fatal") or cls.today.get("_fatal"):

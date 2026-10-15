@@ -463,12 +463,18 @@ class SummaryStripIsCompact(unittest.TestCase):
 
     def test_the_summary_is_the_one_that_gives_way(self):
         """★★ 指定**唯一让位者**。不给汇总条 `flex: 1 1 0` 的话,空间不够时浏览器会把
-        右边的窗口分段控件整项换到第二行 —— 实测「1h 6h 24h 7d」独占一整行,看着像画错了。"""
+        右边的窗口分段控件整项换到第二行 —— 实测「1h 6h 24h 7d」独占一整行,看着像画错了。
+
+        ⚠️ 2026-10-14 让位方式变了（合同被取代，不是被违反）：原来汇总条 `flex: 1 1 0` 在**内部折行**，
+          860px 下实测被挤成竖着的 6 行；用户要「标题一行处理完」后改成**整条**挪到标题下面一行。
+          「唯一让位者是汇总条」不变 —— 行为闸在 `test_one_screen_layout.py::test_rotation_summary_is_one_whole_line`
+          （标题行其余各项同一行、汇总条整条一行），这里守源码形态。"""
         src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
         i = src.index("<Stat")
         head = src[max(0, i - 700):i]
-        self.assertIn('flex: "1 1 0"', head,
-                      "汇总条不是可收缩的 —— 让位的会变成右边的控件")
+        self.assertIn('order: 1, flexBasis: "100%"', head,
+                      "汇总条放不下时不是整条让到下一行 —— 让位的会变成右边的控件")
+        self.assertIn('flexWrap: "nowrap"', head, "汇总条又在内部折行了（860px 下会竖成 6 行）")
         self.assertIn("minWidth: 0", head)
 
     def test_duplicate_subtitle_is_gone(self):

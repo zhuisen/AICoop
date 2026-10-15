@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::fs;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
@@ -450,6 +450,97 @@ async fn run_rotate(app: AppHandle, args: Vec<String>) -> Result<String, String>
 /// 用户在设置页开没开「在程序坞显示」。**策略要按"开关 AND 主窗可见"两个条件合成**,所以得
 /// 在 Rust 侧记住这个偏好 —— 它存在前端 localStorage 里,Rust 读不到。
 static DOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// 主窗口随窗口大小**整体缩放**的基准尺寸（逻辑像素）。窗口不超过它时缩放 = 1（即 8-26 定的 D 档字号）。
+const ZOOM_BASE_W: f64 = 1200.0;
+const ZOOM_BASE_H: f64 = 740.0;
+const ZOOM_MAX: f64 = 1.6;
+
+/// 窗口逻辑尺寸 → 页面缩放倍率（用户 2026-10-14：「界面随窗口大小调整，字体也要调整」）。
+///
+/// ★★ 走引擎级 `pageZoom`（WKWebView `setPageZoom`，= Safari ⌘+），**不是** CSS `zoom` ——
+///   后者 8-24 试过：WKWebView 与 Chrome 语义不同，真机把版面撑爆、harness 却全绿（CHANGELOG 归档 B 区）。
+///   pageZoom 下 CSS 视口 = 窗口 ÷ 倍率，所以**布局看到的永远是 ≤ 基准尺寸的视口**：
+///   字号、列宽、间距等比放大，版面比例不变 —— 列宽按字号量过的那些表不会串位。
+/// ★ 取宽高两个比值的**较小**者：只拉宽不拉高时不放大，否则内容会在纵向被挤出窗口。
+/// ★ 不缩小（下限 1）：D 档字号就是「字太小」之后选的，再缩回去等于撤销那次决定。
+/// ★ 量化到 0.05：拖动窗口时不每个像素都重排一次。
+fn zoom_for(w: f64, h: f64) -> f64 {
+    if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return 1.0;
+    }
+    let z = (w / ZOOM_BASE_W).min(h / ZOOM_BASE_H).clamp(1.0, ZOOM_MAX);
+    (z * 20.0).floor() / 20.0
+}
+
+/// 上一次设下去的倍率 ×1000（0 = 还没设过）。
+static LAST_ZOOM: AtomicU64 = AtomicU64::new(0);
+
+/// 放大方向的滞回：新倍率比当前**大**不到这么多就不调。
+const ZOOM_HYST: f64 = 0.1;
+/// 拖动停下多久才调（毫秒）。
+const ZOOM_SETTLE_MS: u64 = 150;
+
+/// 当前倍率 `cur`（0 = 还没设过）→ 该不该改成 `target`。纯函数，见 `zoom_tests`。
+///
+/// ★★ 2026-10-15 三方评审 + 用户选方案 ①：拖动途中每跨一档 0.05 就整页 `set_zoom`，
+///   CSS 视口在 ~1200–1259 之间锯齿往复、字号一跳一跳。现在拖动中不调、停稳后调一次，
+///   且**只对放大**加滞回 ——
+/// ★ 缩小方向永远照调：保留偏大的倍率 = CSS 视口 = 窗口 ÷ 倍率 被压到窗口以下，
+///   最小窗口 860 时会压到 819 < `minWidth`，版面直接被裁。
+fn zoom_next(cur: f64, target: f64) -> Option<f64> {
+    if cur <= 0.0 || target < cur - 1e-9 || target - cur >= ZOOM_HYST - 1e-9 {
+        return if (target - cur).abs() < 1e-9 { None } else { Some(target) };
+    }
+    None
+}
+
+fn apply_main_zoom(win: &tauri::WebviewWindow) {
+    let (Ok(size), Ok(sf)) = (win.inner_size(), win.scale_factor()) else { return };
+    let l = size.to_logical::<f64>(sf);
+    let cur = LAST_ZOOM.load(Ordering::Relaxed) as f64 / 1000.0;
+    if let Some(z) = zoom_next(cur, zoom_for(l.width, l.height)) {
+        LAST_ZOOM.store((z * 1000.0).round() as u64, Ordering::Relaxed);
+        let _ = win.set_zoom(z);
+    }
+}
+
+/// 拖动去抖：每个 `Resized` 只把截止时刻往后推，**一个**常驻线程等到它过期才调一次 `apply_main_zoom`。
+/// ★ 不按事件起线程/定时器：拖动时 Resized 每帧一个，按事件起会同时挂着十来个。
+struct ZoomSettle {
+    due: Mutex<Option<std::time::Instant>>,
+    cv: std::sync::Condvar,
+}
+static ZOOM_SETTLE: std::sync::OnceLock<std::sync::Arc<ZoomSettle>> = std::sync::OnceLock::new();
+
+fn schedule_main_zoom(app: &AppHandle) {
+    let zs = ZOOM_SETTLE.get_or_init(|| {
+        let zs = std::sync::Arc::new(ZoomSettle { due: Mutex::new(None), cv: std::sync::Condvar::new() });
+        let (z2, app2) = (zs.clone(), app.clone());
+        std::thread::spawn(move || loop {
+            let Ok(mut g) = z2.due.lock() else { return };
+            loop {
+                match *g {
+                    None => match z2.cv.wait(g) { Ok(n) => g = n, Err(_) => return },
+                    Some(t) => {
+                        let now = std::time::Instant::now();
+                        if now >= t { *g = None; break; }
+                        match z2.cv.wait_timeout(g, t - now) { Ok((n, _)) => g = n, Err(_) => return }
+                    }
+                }
+            }
+            drop(g);
+            if let Some(w) = app2.get_webview_window("main") {
+                apply_main_zoom(&w);
+            }
+        });
+        zs
+    });
+    if let Ok(mut g) = zs.due.lock() {
+        *g = Some(std::time::Instant::now() + Duration::from_millis(ZOOM_SETTLE_MS));
+        zs.cv.notify_one();
+    }
+}
 
 /// 按当前状态重算激活策略。**唯一改 activation policy 的地方**,别在别处零散调用。
 ///
@@ -1150,7 +1241,9 @@ async fn run_agy_rotate(args: Vec<String>) -> Result<String, String> {
     const ALLOWED: &[&str] = &["quota", "switch", "live", "rename", "remove",
                                "health", "probe", "rotate", "auto-switch",
                                // 2026-09-24：与 codex 对齐的置顶插队 / 池子空时借用开关（写池，不联网）
-                               "pin", "borrow"];
+                               "pin", "borrow",
+                               // 2026-10-15：Gemini 定时探针（开关 / 时间 / 状态 / app 内补跑）
+                               "dawn-probe"];
     let sub = args.first().cloned().unwrap_or_default();
     if !ALLOWED.contains(&sub.as_str()) {
         return Err(format!("disallowed agy-rotate subcommand: {:?}", sub));
@@ -1487,6 +1580,7 @@ const LOG_SOURCES: &[(&str, &str)] = &[
     ("quotad", "quotad.log"),
     ("autosync", "autosync.log"),
     ("dawnprobe", "dawnprobe.log"),
+    ("agydawn", "agydawn.log"),
     // agy 不是 launchd 任务，是 `bin/agy` wrapper 与 `agy-rotate` 的运行留痕。
     // 2026-09-14 加入：此前 agy 那一侧**一个字都不落盘**，界面上点了探针/刷新/切号、
     // 结果如何，事后完全无从复盘（用户实报要它）。
@@ -2547,8 +2641,13 @@ pub fn run() {
             if let Some(w) = handle.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.center();
+                apply_main_zoom(&w);
                 let handle_close = handle.clone();
                 w.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Resized(_)
+                                       | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                        schedule_main_zoom(&handle_close);
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         if let Some(win) = handle_close.get_webview_window("main") {
@@ -2639,6 +2738,62 @@ pub fn run() {
         });
 }
 
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::{zoom_for, zoom_next, ZOOM_BASE_H, ZOOM_BASE_W, ZOOM_MAX};
+
+    #[test]
+    fn at_or_below_the_base_it_is_one() {
+        assert_eq!(zoom_for(860.0, 560.0), 1.0, "最小窗口不许缩小 —— D 档字号是用户定的下限");
+        assert_eq!(zoom_for(ZOOM_BASE_W, ZOOM_BASE_H), 1.0);
+    }
+
+    #[test]
+    fn it_grows_with_the_smaller_ratio() {
+        // 1920×1050（本机 4K 屏的逻辑全屏）：宽比 1.6、高比 1.42 ⇒ 取高 ⇒ 1.4（量化到 0.05）
+        assert_eq!(zoom_for(1920.0, 1050.0), 1.4);
+        // 只拉宽不拉高 ⇒ 不放大，否则纵向被挤出窗口
+        assert_eq!(zoom_for(2400.0, ZOOM_BASE_H), 1.0);
+    }
+
+    #[test]
+    fn the_css_viewport_never_drops_below_the_base() {
+        // ★★ pageZoom 下布局看到的是 窗口 ÷ 倍率。它若小于基准，窄窗折叠等布局阈值会被提前触发。
+        for (w, h) in [(1300.0, 800.0), (1700.0, 1100.0), (2560.0, 1440.0), (5000.0, 3000.0)] {
+            let z = zoom_for(w, h);
+            assert!(w / z >= ZOOM_BASE_W - 1e-6 && h / z >= ZOOM_BASE_H - 1e-6,
+                    "{w}x{h} → {z}: CSS 视口 {}x{} 小于基准", w / z, h / z);
+        }
+    }
+
+    #[test]
+    fn first_time_always_applies() {
+        assert_eq!(zoom_next(0.0, 1.0), Some(1.0));
+        assert_eq!(zoom_next(0.0, 1.4), Some(1.4));
+    }
+
+    #[test]
+    fn small_growth_is_held_back() {
+        assert_eq!(zoom_next(1.0, 1.05), None, "★ 放大不到 0.1 不调 —— 否则每 60px 整页一跳");
+        assert_eq!(zoom_next(1.0, 1.1), Some(1.1));
+        assert_eq!(zoom_next(1.2, 1.2), None, "同一倍率不重设");
+    }
+
+    #[test]
+    fn shrinking_always_applies() {
+        // ★★ 缩回最小窗口时还留着 1.05 ⇒ CSS 视口 860/1.05 = 819 < minWidth，版面被裁。
+        assert_eq!(zoom_next(1.05, 1.0), Some(1.0));
+        assert_eq!(zoom_next(1.6, 1.55), Some(1.55));
+    }
+
+    #[test]
+    fn it_is_capped_and_survives_garbage() {
+        assert_eq!(zoom_for(10000.0, 10000.0), ZOOM_MAX);
+        assert_eq!(zoom_for(f64::NAN, 900.0), 1.0);
+        assert_eq!(zoom_for(0.0, 0.0), 1.0);
+    }
+}
 
 #[cfg(test)]
 mod popover_tests {

@@ -50,7 +50,7 @@ PROXY_PORT = int(os.environ.get("CRP_PORT", "8011"))
 
 #: 运行时需要哪些文件。★ 少一个的症状是「服务装上了但起不来」，而 launchd 只会安静地反复重启。
 RUNTIME_FILES = [
-    "codex-rotate", "portalock.py", "resume_provenance.py", "connector.py",
+    "codex-rotate", "portalock.py", "resume_provenance.py", "connector.py", "dawn_sched.py",
     "proxy/proxy.py", "proxy/cxp", "proxy/cxd", "proxy/auth-token",
     "proxy/codex-profile-scope.sh",
     "daemon/quota_daemon.py",
@@ -73,6 +73,9 @@ ENTRIES = {
 }
 
 STEP_WRAPPER = "wrapper"
+
+#: `install-launchd.sh` 装的全部常驻服务（闸从安装器现解析核对，别只改一边）。
+SERVICES = ["autosync", "quotad", "proxy", "dawnprobe", "agydawn"]
 
 
 # ── 小工具 ────────────────────────────────────────────────────────────────────
@@ -292,6 +295,32 @@ def _runtime_dir(src, store):
     return store / "runtime"
 
 
+def runtime_drift(src, runtime):
+    """运行时拷贝里与 App 自带脚本**内容不同**（或缺失）的文件。空列表 = 同版本。
+
+    ★★★ 2026-10-15 外部用户报「自动轮换不轮换、切号进不去」（GitHub 下载版、更新过）。
+      `.dmg` 装机的运行时是**接入那天复制的一份**，而原来只要文件在就判 `done` ——
+      App 更新多少次，代理 / quotad / 终端里的 `codex-rotate` 都还是接入那天的代码；
+      App 自己调的却是 bundle 里的新脚本 ⇒ 同一份 state.json 两个版本在写
+      （09-21 起的「置顶」只有新代理认）。
+    ★ 比**内容**不比 mtime：`copy2` 保留 mtime，而 App 更新会刷新 bundle 的 mtime ——
+      两边 mtime 天然不同，拿它判等于恒报过期。
+    ★ 读不到算「不同」：判错的代价只是多复制一次，判对漏掉的代价是继续跑旧代码。
+    """
+    src, runtime = Path(src), Path(runtime)
+    out = []
+    for rel in RUNTIME_FILES:
+        s, d = src / rel, runtime / rel
+        if not s.exists():
+            continue                      # bundle 自己缺文件由 plan() 的 blocked 那条管
+        try:
+            if not d.exists() or s.read_bytes() != d.read_bytes():
+                out.append(rel)
+        except OSError:
+            out.append(rel)
+    return out
+
+
 def _launchctl(args, timeout=20):
     """所有 `launchctl` 调用的**唯一出口**，带隔离口 `CODEXBAR_LAUNCHCTL=0`。
 
@@ -360,10 +389,14 @@ def plan(src, store):
             f"clone 安装，直接用 {src}（不复制 —— 否则你改了仓库却不生效）")
     else:
         have = runtime.exists() and all((runtime / f).exists() for f in RUNTIME_FILES)
+        stale = runtime_drift(src, runtime) if runtime.exists() else []
         add("runtime", "准备运行时",
             "★ 复制到数据目录，**不指向 App 内部** —— 否则 App 更新/删除会把常驻服务弄断",
-            "done" if have else "todo",
-            f"{len(RUNTIME_FILES)} 个文件 → {runtime}",
+            "done" if have and not stale else "todo",
+            (f"运行时比 App 旧：{len(stale)} 个文件与 App 自带的不同（如 {stale[0]}）—— "
+             "App 更新后没同步，代理与常驻服务还在跑旧代码。勾上它重新复制，并一起勾「装常驻服务」")
+            if stale and runtime.exists() and any((runtime / f).exists() for f in RUNTIME_FILES)
+            else f"{len(RUNTIME_FILES)} 个文件 → {runtime}",
             preview=str(runtime))
 
     # ② provider 块
@@ -434,13 +467,17 @@ def plan(src, store):
         preview="\n".join(f"{n} → {runtime / rel}" for n, rel in ENTRIES.items()))
 
     # ⑤ 常驻服务
-    names = ["autosync", "quotad", "proxy", "dawnprobe"]
+    names = SERVICES
     loaded = {n: _svc_loaded(n) for n in names}
-    if any(v is None for v in loaded.values()):
+    # ★★ 运行时要重新复制时，服务**必须重装**：quotad 把 codex-rotate 整份载进内存，
+    #    只换磁盘上的文件 = 磁盘是新的、跑着的还是旧的。
+    if not inplace and runtime.exists() and runtime_drift(src, runtime):
+        st, det = "todo", "运行时要更新 —— 服务需要重新安装才会加载新代码"
+    elif any(v is None for v in loaded.values()):
         st = "todo"
         det = "查不了 launchctl —— 状态未知（这不等于没装）"
     elif all(loaded.values()):
-        st, det = "done", "四个服务都在跑"
+        st, det = "done", f"{len(names)} 个服务都在跑"
     else:
         st = "todo"
         det = "缺：" + "、".join(n for n in names if not loaded[n])
@@ -454,8 +491,8 @@ def plan(src, store):
         else "装常驻服务（Windows 计划任务）",
         "轮换代理要一直在；额度要自动刷新。**全部用户级，不需要 sudo**",
         st, det,
-        preview="com.doushutangmu.codex-rotate.{autosync,quotad,proxy,dawnprobe}\n"
-                "⚠️ dawnprobe 是唯一会自动花钱的定时器，**默认关闭**，装了也不会自己跑")
+        preview="com.doushutangmu.codex-rotate.{" + ",".join(names) + "}\n"
+                "⚠️ dawnprobe / agydawn 是仅有的会自动花钱的定时器，**默认关闭**，装了也不会自己跑")
 
     # ⑥ 让裸 `codex` 也走轮换（**单独一步，默认不选**）
     wrapper = bin_ / "codex"

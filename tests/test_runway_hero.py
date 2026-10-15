@@ -15,8 +15,9 @@
 ## 新增的那个数：还能撑多久
 
 用 `state.json` 的 `quota_marks`（额度跨整数百分点时记一条）算消耗速度。
-★★★ 口径必须**跟着数字一起显示**，否则就是骗人：它是 **活跃小时**不是自然小时
-（没在用 codex 时池子一点不掉），而且是过去 24h 的速度。样本不足时显示 `—`，
+★★★ 口径必须**跟着数字一起显示**，否则就是骗人：它是**钟点小时**，按最近 ≤24h 的
+平均速度（含空闲）算。⚠️ 2026-10-15 前这里写「活跃小时」—— 而分母一直是钟点跨度，
+**标签与公式不符**（`TheRunwayMathMatchesItsLabel` 现在直接测公式）。样本不足时显示 `—`，
 **绝不写 0** —— 「算不出来」与「撑不了多久」在这块版面上是相反的两件事。
 
 ## ★★ 高度是硬约束
@@ -162,46 +163,40 @@ class ItNeverGetsTallerThanTheBannerItReplaced(unittest.TestCase):
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class TheHonestyLineTravelsWithTheNumber(unittest.TestCase):
-    """★★★ 「5.9 小时」离开那句口径就是假话 —— 它是**活跃小时**不是自然小时。"""
+    """★★★ codex 续航按**连续使用时间**（2026-10-15 用户：「全池续航≈98.6 小时，为什么还是那么多？
+    实际使用下来会出现不到半小时几张账号额度都没了」）。旧口径（钟点小时、含空闲）对连续干活没有意义：
+    一个 Plus 号 5h 连续 ~4 分钟就见底。数字离开「连续使用」这句口径就是假话。"""
 
     @classmethod
     def setUpClass(cls):
         cls.ok = _probe(1300)
         cls.none = _probe(1300, "nav=home&runway=none")
-        #: `?runway=none` 夹具里的样本数（make_harness.py 的 `next --json` 桩）。
-        cls.none_samples = 3
         if cls.ok is None or cls.none is None:
             raise unittest.SkipTest("harness 静态服务（3304）没在跑")
 
     def test_the_unit_is_stated_next_to_the_number(self):
-        """★ 判据打在**单位自己的节点**上，不是整条 hero 的文本。
-
-        ⚠️ 第一版写的是 `assertIn("活跃小时", text)`，而下面那行披露里也有这四个字
-          （「活跃小时不是自然小时」）⇒ **把数字旁边的单位整个删掉它照样绿**。
-          本仓空守卫形态③。`unitWithNumber` 再管住「跟着」二字：同父节点。
-        """
-        self.assertEqual("活跃小时", self.ok["unit"],
-                         "★★★ 没写「活跃小时」—— 这个数会被读成自然小时")
+        """★ 判据打在**单位自己的节点**上，不是整条 hero 的文本（空守卫形态③）。"""
+        self.assertTrue(self.ok["unit"].startswith("分钟"), "★★★ 数字旁边没写单位：%r" % self.ok["unit"])
         self.assertTrue(self.ok["unitWithNumber"],
                         "★★ 单位没和数字在同一行 —— 离开那个数它就不是披露了")
-        self.assertIn("样本", self.ok["note"], "★★ 没写样本数 —— 无从判断这个估计靠不靠谱")
+        self.assertIn("连续使用", self.ok["note"], "★★★ 没说是连续使用时间 —— 会被读成钟点")
+        self.assertIn("3 次", self.ok["note"], "★★ 没写依据几次用完 —— 无从判断靠不靠谱")
+        self.assertIn("闲置", self.ok["note"], "★ 没说闲置不计")
+        self.assertNotIn("含空闲", self.ok["note"], "★★★ 旧的钟点口径回来了")
+        self.assertNotIn("全池续航", self.ok["text"], "★★★ 旧标题回来了")
+
+    def test_it_says_when_the_pool_refills_and_how_much_is_left_this_week(self):
+        self.assertIn("2.5h 后有号回满", self.ok["unit"], "★★ 见底之后要等多久，用户最需要的那句")
+        self.assertIn("本周 ≈ 2.4 小时", self.ok["text"], "★ 本周还能连续用多久")
 
     def test_when_it_cannot_be_computed_it_says_so_instead_of_zero(self):
-        """★★★ 「算不出来」与「撑不了多久」是相反的两件事，而 0 会被读成后者。
-
-        ⚠️ 这一档**必须有夹具**（`?runway=none`）—— 本机样本一直充足，
-          没有开关的话这条分支一个像素都验不到，而截图会正常渲染、探针报干净。
-        """
+        """★★★ 「算不出来」与「撑不了多久」是相反的两件事，而 0 会被读成后者。"""
         self.assertIn("—", self.none["hours"],
                       f"★★★ 算不出来时没显示「—」：{self.none['hours']!r}")
         self.assertNotIn("0", self.none["hours"], "★★★ 算不出来时写了 0")
-        # ★ 判据用「算不出来」——**只有这一支才有**的词。第一版用的是「不是」，
-        #   而另一支写着「活跃小时**不是**自然小时」⇒ 把这一支整句删掉照样绿（形态⑩：
-        #   这条断言的绿是隔壁那句给的）。变异当场抓到，顺带暴露出它是条**死分支**。
         self.assertIn("算不出来", self.none["note"],
                       f"★★ 显示「—」却没说为什么：{self.none['note']!r}")
-        self.assertIn(str(self.none_samples), self.none["note"],
-                      "★ 没写现有几条样本 —— 用户无从判断再等多久会有数")
+        self.assertIn("5h 用完的历史", self.none["note"], "★ 没说缺的是什么")
         # ★★ 反向：算得出来的时候**不许**挂着这句借口，否则它退化成常驻噪音。
         self.assertNotIn("算不出来", self.ok["note"],
                          "★★ 续航算得出来却还挂着「算不出来」")
@@ -400,6 +395,57 @@ class TheOrderComesFromTheOneImplementation(unittest.TestCase):
         self.assertIn("def usable(aid, sl, now):", code, "★ 公共判据不在了")
         self.assertIn("usable(aid, sl, now)", code.split("def _pick")[1][:900],
                       "★★ `_pick` 没走那份公共判据 —— 两边会分叉")
+
+
+def _load_cr():
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("_cr_runway", str(ROOT / "codex-rotate"))
+    spec = importlib.util.spec_from_loader("_cr_runway", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+class TheRunwayMathMatchesItsLabel(unittest.TestCase):
+    """★★★ 直接测公式（2026-10-15）：界面写了两年「活跃小时」，分母却一直是钟点跨度。
+    只测渲染的闸永远看不见这种「标签对、公式不对」的错 —— 两边各自都自洽。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cr = _load_cr()
+        cls.now = 1_900_000_000.0
+
+    def marks(self, n, hours_back, pp=1):
+        """n 条消耗，均匀落在过去 `hours_back` 小时里（**中间大段空闲也照样算进分母**）。"""
+        return [{"t": self.now - hours_back * 3600 * (1 - i / max(1, n - 1)), "from": 0, "to": pp, "w": 10080}
+                for i in range(n)]
+
+    def test_the_rate_is_per_clock_hour_including_idle(self):
+        # 20 个百分点，跨度 20 钟点小时 ⇒ 1 pp/h；就算真正在用的只是其中几小时。
+        r = self.cr._runway(self.marks(20, 20), 50, [], self.now)
+        self.assertAlmostEqual(r["burn_pp_per_hour"], 1.0, places=1)
+        self.assertAlmostEqual(r["runway_hours"], 50.0, places=1)
+        self.assertAlmostEqual(r["rate_span_h"], 20.0, places=1)
+
+    def test_too_few_samples_is_none_not_zero(self):
+        r = self.cr._runway(self.marks(5, 10), 50, [], self.now)
+        self.assertIsNone(r["runway_hours"])
+        self.assertIsNone(r["burn_pp_per_hour"])
+        self.assertFalse(r["outlasts_reset"])
+
+    def test_outlasting_the_first_weekly_reset(self):
+        resets = [self.now + 10 * 3600, self.now + 100 * 3600, None]
+        r = self.cr._runway(self.marks(20, 20), 50, resets, self.now)       # 50h 续航 vs 10h 后重置
+        self.assertEqual(r["first_reset_h"], 10.0, "★ 取的不是**最早**那一次重置")
+        self.assertTrue(r["outlasts_reset"])
+        r = self.cr._runway(self.marks(20, 20), 5, resets, self.now)        # 5h 续航
+        self.assertFalse(r["outlasts_reset"], "★★ 撑不到重置却说撑得到")
+
+    def test_no_reset_known_never_claims_outlasting(self):
+        r = self.cr._runway(self.marks(20, 20), 500, [None, None], self.now)
+        self.assertIsNone(r["first_reset_h"])
+        self.assertFalse(r["outlasts_reset"], "★ 不知道何时重置，就不能说撑得到")
 
 
 if __name__ == "__main__":

@@ -64,6 +64,14 @@ class TheCloudQuotaIsKeptFreshInTheBackground(unittest.TestCase):
         self.assertNotIn("visibilityState", body, "★★★ 又被可见性挡住了 —— 藏着时永不前进")
         self.assertNotRegex(body, r"\benabled\b", "★★★ 又被 Gemini 档挡住了")
 
+    def test_the_cadence_is_three_minutes(self):
+        """★ 用户 2026-10-14 拍板 3 分钟（原 10 分钟，单次成本从 18.6s 降到实测 2.5s）。
+        5h 窗口每 1% ≈ 3 分钟 —— 再放宽就会让人看到落后几个点的数。"""
+        src = _strip_ts((SRC / "hooks" / "useAgyPool.ts").read_text(encoding="utf-8"))
+        m = re.search(r"const QUOTA_FRESH_MS = (\d+) \* 60 \* 1000;", src)
+        self.assertIsNotNone(m, "QUOTA_FRESH_MS 的写法变了 —— 闸要跟着改，别让它静默失效")
+        self.assertLessEqual(int(m.group(1)), 3)
+
 
 def _load_cli():
     loader = importlib.machinery.SourceFileLoader("agy_rotate_timely", str(ROOT / "agy-rotate"))

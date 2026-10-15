@@ -1,9 +1,11 @@
 import Ring from "./Ring";
 import StaleMark from "./StaleMark";
+import AgyActionLink from "./AgyActionLink";
+import PlanBadge from "./PlanBadge";
 import type { Theme } from "../theme";
 import type { AgySnapshot } from "../agy";
 import {
-  agyShown, agyTightest, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText, agyWinRows,
+  AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText, agyWinRows,
 } from "../agy";
 import { winNumColor } from "../helpers";
 
@@ -34,7 +36,11 @@ const MB_WIN_SLOTS = ["5h", "周"] as const;
  * ③ **「没在跑」不染警告色**：agy 不常驻，那是常态。染了就是又造一盏长亮的灯。
  */
 export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
-                                 label, isCurrent, onSwitch, switching, isBest }: {
+                                 label, isCurrent, onSwitch, switching, isBest, action, plan }: {
+  /** 档位，只有 ULTRA 画徽章（`agyBadgePlan`，与总览卡同一口径）。 */
+  plan?: string | null;
+  /** 取额度被 Google 拒绝时的下一步动作（`agyAction`）。null = 没有可说的。 */
+  action?: AgyAction | null;
   /** 「下一个」—— 下次启动 agy 会装进这个号（`agy/pool.py::pick`，与总览同源）。2026-09-24。 */
   isBest?: boolean;
   t: Theme;
@@ -76,14 +82,15 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
           <span style={{ fontSize: 12, fontWeight: 700, color: t.muted, lineHeight: 1 }}>—</span>
         </Ring>
         <div className="mb-row-info">
-          <NameLine t={t} color={color} label={label} isCurrent={isCurrent} inPool={!!onSwitch} isBest={isBest}
+          <NameLine t={t} color={color} plan={plan} label={label} isCurrent={isCurrent} inPool={!!onSwitch} isBest={isBest}
                     mark={degraded && snap
-                      ? <StaleMark t={t} note={agyReasonNote(snap)} tone={tone} size={10} />
+                      ? <StaleMark t={t} note={action ? action.note : agyReasonNote(snap)} tone={tone} size={10} />
                       : undefined} />
           <div className="mb-row-sub">
+            {action && !busy ? <AgyActionLink t={t} action={action} fontSize={10} /> : (
             <span className="mb-row-email" style={{ color: t.muted }}>
               {busy ? "正在取额度…" : snap?.reason === "no_process" ? "agy 没在运行" : "未探测"}
-            </span>
+            </span>)}
           </div>
         </div>
       </Shell>
@@ -95,16 +102,18 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
   // 环与条走平台色（同 grok 的定稿）；数字仍按阈值变色 —— 那是这行唯一还能报警的地方。
   // ★ 阈值走 `winNumColor`（helpers 的**唯一真源**），不在这里再抄一份：
   //   本仓记过「同一判据三处副本，漏改任一份都不报错」那一族。
-  const glow = rem <= 20 ? (rem <= 10 ? "#E0524D" : "#E0901C") : undefined;
+  const glow = rem != null && rem <= 20 ? (rem <= 10 ? "#E0524D" : "#E0901C") : undefined;
 
   return (
     <Shell t={t} color={color} onOpen={onOpen} switching={switching} isCurrent={isCurrent}>
-      <Ring pct={rem} r={18} sw={4.5} color={ringColor} track={t.ringTrack} size={46} glow={glow}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.text,
-                       fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{Math.round(rem)}</span>
+      <Ring pct={rem ?? 0} r={18} sw={4.5} color={rem == null ? t.ringTrack : ringColor}
+            track={t.ringTrack} size={46} glow={glow}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: rem == null ? t.muted : t.text,
+                       fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+          {rem == null ? "—" : Math.round(rem)}</span>
       </Ring>
       <div className="mb-row-info">
-        <NameLine t={t} color={color} sub={tight.group ?? undefined}
+        <NameLine t={t} color={color} plan={plan} sub={tight.group ?? undefined}
                   label={label} isCurrent={isCurrent} inPool={!!onSwitch} isBest={isBest}
                   mark={degraded && snap
                     ? <StaleMark t={t} note={agyReasonNote(snap)} tone={tone} size={10} />
@@ -116,10 +125,11 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
               空着会把「读不到」伪装成「没有这个窗口」，两者的下一步动作完全相反。 */}
         {MB_WIN_SLOTS.map((label) => {
           const row = rows.find(r => r.label === label);
-          if (!row) {
+          const rr = row?.remaining;
+          if (row == null || rr == null) {
             return (
-              <div key={label} className="mb-row-meta"
-                   title={isCurrent ? `${label} 窗口这次没读到`
+              <div key={label} className="mb-row-meta" data-agy-unknown={row ? "" : undefined}
+                   title={row ? AGY_UNKNOWN_TITLE : isCurrent ? `${label} 窗口这次没读到`
                      : `${label} 窗口只有**当前登录**的号读得到（本机 RPC）—— 云端按账号那条只给 5h`}>
                 <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>{label}</span>
                 <div className="mb-row-bar" style={{ background: t.barTrack }} />
@@ -129,7 +139,6 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
               </div>
             );
           }
-          const rr = row.remaining;
           return (
             <div key={label} className="mb-row-meta">
               <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>{row.label}</span>
@@ -175,14 +184,15 @@ function Shell({ t, color, onOpen, switching, isCurrent, children }: {
   );
 }
 
-function NameLine({ t, color, sub, mark, label, isCurrent, inPool, isBest }: {
+function NameLine({ t, color, sub, mark, label, isCurrent, inPool, isBest, plan }: {
   t: Theme; color: string; sub?: string; mark?: React.ReactNode;
-  label?: string; isCurrent?: boolean; inPool?: boolean; isBest?: boolean;
+  label?: string; isCurrent?: boolean; inPool?: boolean; isBest?: boolean; plan?: string | null;
 }) {
   return (
     <>
       <div className="mb-row-name-line">
         <span className="mb-row-name" style={{ color }}>{label ?? "agy"}</span>
+        <PlanBadge plan={agyBadgePlan(plan)} t={t} />
         {/* ★ 与 codex 行同一套：「下一个」来自真挑号器（`agy-rotate next`），不是「剩余最多」。 */}
         {isBest && <span className="mb-row-badge-use" title="下次启动 agy 会装进这个号"
                          style={{ color: t.accentText, background: t.accent, whiteSpace: "nowrap" }}>下一个</span>}

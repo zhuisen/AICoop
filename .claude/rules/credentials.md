@@ -58,21 +58,26 @@ paths:
   - **不接 quotad、无任何定时器**（自动计费探测正是被废掉的那个）。GUI 有三个入口：主界面工具栏「探针 全池」、卡片动作条「探针」（单号）、菜单栏底栏第三格。三处共用 `ProbeButton`——**琥珀 + ⚡ + 「计费」角标 + 两段确认**（单击只亮「确认?」，5s 无二次点击自动退回）。这是全 app 唯一花钱的控件，必须与旁边带「免费」角标的按钮一眼可分；确认逻辑只写一份，三个界面各自手搓迟早有一个漏掉护栏。
   - ★★ **每日清晨探针 `dawn-probe`（v1.2.0，用户 2026-09-06：「早上 6 点给 Plus 号探针，让 5h 额度走动」）—— 本仓唯一会自动花钱的东西。**
     上面那句「不接 quotad、没有任何定时器会调它」**对 `probe` 仍然成立**；`dawn-probe` 是**另一个**命令，它自带三条护栏，改它之前先读完：
-    - ★★ **先占天再探**：日期标记写在**发请求之前**（`_mutate_state` 持跨进程锁）。launchd 06:00 与 app 内补跑**两条路都会调它**，写在探测之后的话，那段窗口里第二个进程看到的仍是昨天的日期 ⇒ **双重计费**。3 进程并发实测：恰好 1 个进到探测阶段。⚠️ 代价是显式的：探测中途崩了今天不重试（日期已占）——在「少跑一次」和「可能多花一次钱」之间这个工具一律选前者。
+    - ★★ **先占天再探**：日期标记写在**发请求之前**（`_mutate_state` 持跨进程锁）。launchd 定时与 app 内补跑**两条路都会调它**，写在探测之后的话，那段窗口里第二个进程看到的仍是昨天的日期 ⇒ **双重计费**。3 进程并发实测：恰好 1 个进到探测阶段。⚠️ 代价是显式的：探测中途崩了今天不重试（日期已占）——在「少跑一次」和「可能多花一次钱」之间这个工具一律选前者。
     - **默认关闭**（`dawn_probe.enabled` 缺省假）。仓库已公开，默认开启的自动计费定时器会在别人机器上悄悄花钱。
     - **按 `plan` 判 Plus，绝不按 label** —— 老号从 Plus 升 Pro 时 label 一个字都不变，按名字挑会在升级那天开始给没有 5h 窗口的 Pro 号花钱，钱花了目的没达到且没有任何症状。
     - **模型与 effort**：走 `PROBE_MODEL` / `PROBE_EFFORT`，即上面那条钉死的 `gpt-5.6-luna` / `low`。
       ⚠️ 旧版这里写「默认值从 `models_cache.json` 现挑」，**2026-09-16 已反转**，理由见上。
-    - ★★ **为什么 launchd 之外还要 app 内补跑**：本项目的日历定时**有前科** —— keepalive/refreshquota 的 `StartCalendarInterval` 被 `install-launchd.sh` 以外的东西改写丢掉，`runs = 0`、**从未运行过**，而没有任何一处会为此报红（改写者至今未查明，见 §3）。所以那个 plist **不能是唯一触发路径**。补跑挂在**菜单栏 webview**（启动即创建、从不卸载）。判据是「今天过了 6 点、而 state 里记的日期不是今天」，**不是**「现在正好 6 点」—— Mac 凌晨多半在睡，卡点判定等于永远不触发。
-    - **开关与状态的真源是 `state.json` 的 `dawn_probe`，不是 localStorage** —— launchd 在 app 没开时也要读它，两个真源迟早分叉成「界面说开着、定时器不认」。设置页那一格因此走 CLI (`dawn-probe --status/--enable/--disable`)。
-    - ★ **设置页必须显示「上次运行」** —— 它是「定时到底跑没跑」的唯一可见证据，就是上面那个 `runs = 0` 前科的闸。闸在 `tests/test_dawn_probe.py`（15 条，3 次变异全红，全部在临时 store 上跑、不发任何请求）。
-    - Windows 侧等价任务在 `install-windows.ps1`（`CalendarTrigger` 06:00），**刻意不 `/Run`** —— 装 ≠ 现在就跑一次计费任务。两边服务集合一致由 `tests/test_installers_agree.py` 守着（这次就是它当场抓出我只改了 macOS 一边）。
+    - ★★ **时间可选、区间内随机**（2026-10-15，用户「选 6:00 就在 6:00～6:03 之间随机」）：launchd 不再写固定日历时刻，改成**每 60s 拉起一次 `dawn-probe --tick`**，命令自己读开关/时间/当天记录判到点（`dawn_sched.py`，空转约 60ms、`--tick` 不写日志）。偏移按 `(日期, 哪一家)` 定死 —— launchd 每分钟问、app 每 10 分钟问，现掷的话两边看到两个时刻。差不到 60s 就睡到那一秒；`--no-wait`（app 内补跑）不睡，它持着 IPC。
+    - ★★ **为什么 launchd 之外还要 app 内补跑**：本项目的日历定时**有前科** —— keepalive/refreshquota 的 `StartCalendarInterval` 被 `install-launchd.sh` 以外的东西改写丢掉，`runs = 0`、**从未运行过**，而没有任何一处会为此报红（改写者至今未查明，见 §3）。所以那个 plist **不能是唯一触发路径**。补跑挂在**菜单栏 webview**（启动即创建、从不卸载）。判据是「今天过了 `due_at`（所选时刻 + 当天偏移，由 `--status` 带出）、而 state 里记的日期不是今天」，**不是**「现在正好到点」—— Mac 凌晨多半在睡，卡点判定等于永远不触发。
+    - **开关与状态的真源是 `state.json` 的 `dawn_probe`，不是 localStorage** —— launchd 在 app 没开时也要读它，两个真源迟早分叉成「界面说开着、定时器不认」。开关因此走 CLI (`dawn-probe --status/--enable/--disable/--time`)；2026-10-15 起它在**总览工具栏的「定时」胶囊**里（设置页那一行已撤）。
+    - ★ **「上次运行」必须看得到**（胶囊悬浮与浮层里，`dawn.ts::dawnDesc`） —— 它是「定时到底跑没跑」的唯一可见证据，就是上面那个 `runs = 0` 前科的闸。闸在 `tests/test_dawn_probe.py`（15 条，3 次变异全红，全部在临时 store 上跑、不发任何请求）。
+    - Windows 侧等价任务在 `install-windows.ps1`（2026-10-15 起同 macOS 每分钟轮询 + `--tick`），**刻意不 `/Run`** —— 装 ≠ 现在就跑一次计费任务。两边服务集合一致由 `tests/test_installers_agree.py` 守着（这次就是它当场抓出我只改了 macOS 一边）。
   - 它**不标记 `auth_dead`**：改号池成员资格是那两个带防抖守卫的检测器的事，测试工具再插一手会把"两端点互相打架→每轮翻转→反复告警"请回来。
   - 只对 `req err`（连不上/TLS 断）重试一次；HTTP 4xx/5xx 是服务端已判决，重试只白烧额度。实测某个 Plus 号报过一次 `SSL: UNEXPECTED_EOF`，紧接着连测三次全 200——不重试就会把网络打嗝写成"这号挂了"。
 - ★★ **会话粘性的 key 是 `prompt_cache_key`，不是 `previous_response_id`**（2026-08-09 实测 body 键名确认）。codex 每个 `POST /responses` 都带前者、从不带后者——所以老的 `_affinity` **一次都没命中过**（2291/2291），每轮都在重新挑号。`prompt_cache_key` 正是 OpenAI 标识 prompt cache 血缘的字段，同一会话恒定，拿它做粘性等于"同一段对话恒定落同一个号"的硬保证。选号优先级：`conv` > `affinity` > 迟滞 > 最少使用者，**每一层都先过 `ok()`**（dead/冷却/本轮已试过一律不粘），所以粘性永远挡不住 failover。
   - ⚠️ **别把它当"省额度"的措施**（我 2026-08-09 一度这么写，错了）。`total_tokens` 本来就**包含**缓存命中的部分，冷启动改变的是这些 token 的**价格**而非**数量**；订阅制下只有额度百分比、没有价格，所以换号在额度上不多花。它的价值是**可预测性**（一段对话恒定落一个号）+ 对冲「计量是否折价缓存」这个未定量。
   - ★ **「6 次比 139 次还贵」是分母不同，不是冷缓存**（用户纠正，实测证实）：Pro 周预算约 **1.85B** token、Plus 约 **250M**，差 7~8 倍，所以同样烧 6~7M token 在 Plus 上是 3%、在 Pro 上不到 0.4%。用 token 对齐后三个 plus 号的缓存命中率 **92~98%**，与那个 Pro 号的 95.3% 无差异——切过去并没有冷启动。
   - **额度计量算不算缓存,尚未定论**：n=3、Δ% 只有 2~3（整数量化 ±50%）。方向性证据是「每 1% 对应的 **total** token」离散 1.5 倍、「对应的**未命中** token」离散 6.6 倍 ⇒ 更像按 total 计量。已加 `state.json` 的 `quota_marks`（跨整数百分点时记一条）攒每请求级样本。**在有结论前，别用"省缓存=省额度"做任何决策。**
+  - ★★ **`quota_marks` 自 2026-10-15 起两个窗口都记、带 `w`（窗口分钟）**，上限 800 条。此前只记 primary 不带窗口，而 primary 在 Plus 上是 5h、Pro 上是周 —— `codex-rotate::_runway` 拿 5h 消耗除周余量，全池续航**低估约 4 倍**（推断：24h 457pp 全是 Plus 5h，周窗同期约 4.4pp/h；区分实验 = 攒满 24h 周窗 mark 后对比）。现在 `_runway` 只认 `w ≥ 10000`，不带 `w` 的旧 mark 不认（宁可显示 —）。
+  - ★★ **codex 续航条改按连续使用时间**（2026-10-15，用户：「全池续航≈98.6 小时，实际不到半小时几张号都没了」）：`codex-rotate::_burst` 给 `next --json` 的 `burst` —— 现在能连续用 = Σ 可挑号 min(5h 剩余分钟, 周剩余分钟)、本周 = Σ 周剩余分钟、回满 = 5h 没满的号里最早重置；周↔5h 换算比 `_wk_per_5h` 只用有 5h 窗口的号（实测 0.156，2 号 77pp），5h 消耗 <50pp ⇒ None。钟点口径 `_runway` 只剩 CLI 内部字段，界面不再显示。闸 `tests/test_burst_runway.py` + `test_runway_hero::TheHonestyLineTravelsWithTheNumber`。
+  - 5h 跨进 ≥99 时代理往 `state.json` 的 `exhaust_log`（≤200 条）落一条「用完」事件 `{aid,t,active_s,pp}`，`active_s` 只累加 ≤5 分钟的间隔；`codex-rotate next` 每号给 `eta5h`（本号 ≥3 次用本号、否则借全池、都不够 ⇒ null）。只在续航条显示全池口径（用户：账号卡上不显示）。闸 `tests/test_exhaust_eta.py`。
+  - grok：429 ⇒ `reason: rate_limited` + `retry_at`（`Retry-After` 秒或 HTTP 日期，夹 [1,3600]，缺省 120s），退避期内**不发请求**；套餐名读 `GET /v1/settings` 的 `subscription_tier_display`，24h 一次、读不到留旧值。仍只读 GET、不碰 refresh_token。闸 `tests/test_grok_rate_limit_and_plan.py`。
 - ★★ **选号策略 C：Plus 优先、Pro 保底**（用户 2026-09-07 定；`proxy.py::_plan_tier` + `_tightest_used`）。
   Plus 平时承担轮换，**Pro 只在没有任何可用 Plus 时才动**。读不到 `plan` 的归 **Plus 档** ——
   归到保底档会让刚入池、还没解出 plan 的号永远排最后、拿不到流量。
@@ -357,6 +362,22 @@ paths:
     `tests/test_agy_pool.py::TheQuotaComesFromTheSummaryEndpoint`。
   - **绝不补一个假的格**：上游 `remainingFraction` 缺省恰好是 1.0，
     这条链路上「没有」和「满格」只隔一个默认值。失败一律 `(None, 说明)`，200 但无 `groups` 也当失败。
+    ★ **桶在、`remainingFraction` 缺席 ⇒ 读不到，不丢桶**（2026-10-15）：proto3 JSON 省略零值，缺的可能正是 0；
+    丢掉它，同组另一格就成了「最紧」，见底的号会被当成有余量挑走。`quota_by_group` 整组 `remaining: None`，
+    选号排已知之后、不判见底；前端画「—」。截至当天 2889 次读数从未出现过（最低 79.4%），纯预防。
+    闸 `tests/test_agy_unknown_fraction.py`。
+  - ★ **403 要说出是哪一种**（2026-10-15）：`parse_google_error` 读 `ErrorInfo.reason`（`VALIDATION_REQUIRED` /
+    `SUBSCRIPTION_REQUIRED` …）+ 验证链接（只收 `https://*.google.com`，会交给系统 `open`），
+    `fetch_quota` 的错误仍是 `str`（`QuotaErr`）只多带 `.reason`/`.url`，落兄弟键 `quota_err_reason`/`quota_err_url`
+    （成功时清空）。⚠️ 链接在错误体里的确切位置**没有实测样本**（来源是读 cockpit-tools），解析按
+    metadata → Help.links → message 三处找；真撞上一次 403 时拿响应体补夹具。闸 `tests/test_agy_quota_403_reason.py`。
+  - ★★ **Gemini 定时探针 `agy-rotate dawn-probe`**（2026-10-15，用户选「全部参与轮换的号」）：Gemini 档唯一会自动花钱的东西（每号约 15k token）。护栏与 codex 那条逐条对齐：默认关；**先占天再探**（持池锁写 `.agy-pool.json` 的 `dawn_probe`，3 进程并发实测只进 1 个）；`--force` 不放行「另一个进程正在跑」；崩了记 `failed` 不抹占天。目标 = 非 `rotate_off`、非失效；调 `cmd_probe` 传 **sub** 不传 label。launchd 服务 `agydawn` 必须喂 `AGY_POOL_STORE`。闸 `tests/test_dawn_schedule_and_tiers.py`（变异 41）。
+  - **档位看 `loadCodeAssist` 的 `paidTier`，不看 `currentTier`**（2026-10-15 实测 3 号：`currentTier` 全是 `free-tier`，`paidTier` 才分出 `g1-pro-tier`「Google AI Pro」×2 / `g1-ultra-lite-tier`「Google AI Ultra」×1）。`plan_of` 按子串认 ultra/pro，认不出原样返回不猜；`_maybe_tier` 24h 读一次、读不到留旧值。界面只给 Ultra 画徽章（用户拍板，同 codex 只画 PRO）。
+  - ★★ **云端摘要里闲置桶的 `resetTime` 跟着「现在」滑**（2026-10-15 实测：满格桶 `reset − quota_at` 恒 5.000h；
+    历史满格读数 95.6% 在滑，用过的 710/712 钉死）。`agy-rotate quota` 按号按桶喂锚点账本（key 带 `sub`，
+    云端是按账号读的），判定落兄弟键 `quota_anchor` 且自带 `reset`；「未启动」只由 floating 开口（board `_floating`
+    与前端 `agyResetText` 同一口径）。探针探前/探后各免费读一次 5h，**剩余真降了**才算启动、才 `note_billed` ——
+    刚启动的 reset 与闲置浮动只差探针那 ~30s，单看 reset 分不开。闸 `tests/test_agy_pool_anchors_probe.py`。
   - ★★★ **钥匙串是被多个常驻 agy 进程并发写的单槽**（2026-09-13 实测，三方评审一致）。
     本机常有 5 个跑了好几天的 agy 进程；它们**各自在自己 access token 到期时把自己的身份
     整份写回钥匙串**。实测 17:58 装进 B、18:23:17 被一个身份为 A 的旧进程冲掉。

@@ -72,6 +72,8 @@ body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-se
 @keyframes cbWipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 .cb-wipe { animation: cbWipe .7s cubic-bezier(.22,.61,.36,1) both; }
 @media (prefers-reduced-motion: reduce) { .cb-wipe { animation: none; } }
+/* KPI 数字按**终值**占宽（入场滚动的中途值更短）。见 `KpiStrip.tsx` 的 `fitFor`。 */
+.cb-kpi-v::after { content: attr(data-v); display: block; height: 0; overflow: hidden; visibility: hidden; }
 
 /* 侧栏折叠/展开的宽度过渡。系统里开了「减弱动态效果」就不过渡 —— 直接到位。 */
 @media (prefers-reduced-motion: reduce) { .cb-rail { transition: none !important; } }

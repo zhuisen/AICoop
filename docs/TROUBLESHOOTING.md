@@ -42,6 +42,18 @@ which -a codex     # 第一行必须是 ~/.local/bin/codex
 3. **`supports_websockets = false` 漏了**：codex 的 WS 端点**硬编码** `wss://chatgpt.com/...`、
    不认 `base_url`，交互式会话会完全绕过代理、只烧 `auth.json` 那一个号，
    而**代理日志里一条记录都没有**。`integration` 会把这条标红。
+4. **从 GitHub 更新过 App（`.dmg` 装机）**：接入时运行时被**复制**到数据目录的 `runtime/`，
+   ≤ v1.9.6 的 App 更新后**不会**跟着刷新 —— 代理、常驻服务、终端里的 `codex-rotate` 一直是接入那天的代码，
+   而 App 用的是新脚本（例如「置顶」只有新代理认，界面上切了代理不理）。之后的版本会在总览标红
+   「运行时与 App 同版本 ✗」，点「去接入 →」一键接入即可。v1.9.6 及更早手动刷新（一行）：
+
+   ```bash
+   S="$(plutil -extract EnvironmentVariables.CODEX_ROTATE_STORE raw ~/Library/LaunchAgents/com.doushutangmu.codex-rotate.proxy.plist)"; B=/Applications/CodexBar.app/Contents/Resources/scripts; python3 "$B/connector.py" apply --src "$B" --store "$S" --steps runtime,services --json
+   ```
+5. **`Ctrl+Z` 不是退出，是挂起**：进程还活着（`ps -axo pid,stat,command | grep -i "[c]odex"` 里 STAT 带 `T`），
+   `fg` 回去的是**同一个进程**，令牌在它内存里。退出用 `Ctrl+C` / `/quit`，再敲 `codex` 才是新进程。
+   另：界面上的「切换」改的是 `auth.json`（= **直连**入口 `cxd` 用的号）；走代理时每个请求由代理挑号，
+   想让代理优先用某个号请用卡片上的**置顶**。
 
 ---
 

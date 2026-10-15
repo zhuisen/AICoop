@@ -127,12 +127,19 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         needles = (
             (r'justifyContent:\s*"space-between",\s*\n?\s*marginBottom:\s*12,[^}]*flexWrap:\s*"wrap"',
              "总览头部容器没有 flexWrap"),
-            (r'gap:\s*7,\s*alignItems:\s*"center",\s*\n?\s*flexWrap:\s*"wrap"',
+            # ★ 2026-10-15 起紧凑顶栏把间距收到 5（`cb ? 5 : 7`），换行兜底不变。
+            (r'gap:\s*(?:cb \? 5 : )?7,\s*alignItems:\s*"center",\s*\n?\s*flexWrap:\s*"wrap"',
              "按钮行没有 flexWrap"),
         )
         for pat, msg in needles:
             with self.subTest(msg=msg):
                 self.assertRegex(self.app, pat, msg)
+        # ★ 按钮行有两条（codex / Gemini 档各一条）：只要求「有一处」的话，漏掉另一条照样绿。
+        with self.subTest(msg="每一条按钮行都要 flexWrap"):
+            rows = re.findall(r'gap:\s*(?:cb \? 5 : )?7,\s*alignItems:\s*"center",[^}]*\}', self.app)
+            self.assertGreaterEqual(len(rows), 2, "找不到两条按钮行 —— 断言可能打空了")
+            for r in rows:
+                self.assertIn('flexWrap: "wrap"', r, "有一条按钮行没有 flexWrap")
         # ★ hero 元信息行搬进了 `RunwayHero.tsx`（2026-09-21），所以它单独断言在那份文件上。
         with self.subTest(msg="续航条元信息行没有 flexWrap"):
             self.assertRegex(self.hero, r'gap:\s*11,\s*marginTop:\s*3[^}]*flexWrap:\s*"wrap"',
@@ -265,7 +272,9 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         # ★ 锚点**不要挂在字号数值上**。原来写死 `fontSize: 13.5`,2026-08-26 把字号提取成
         #   `CARD_TYPE`(用户选了 D 档)后这条立刻打空 —— 幸好有下面那句"断言可能打空了"接住,
         #   否则它会静默变成"永远通过"。改成认**被测的那个属性本身**(渲染 `{a.node}` 的 span)。
-        m = re.search(r"<span style=\{\{[^}]*\}\}>\{a\.node\}", card, re.S)
+        # ★ `<span[^>]*?` 容许 style 前面有别的属性（2026-10-14 加了 `data-card-name` 给一屏闸用，
+        #   原来写死 `<span style=` 当场打空 —— 又是下面那句"断言可能打空了"接住的）。
+        m = re.search(r"<span[^>]*? style=\{\{[^}]*\}\}>\{a\.node\}", card, re.S)
         self.assertIsNotNone(m, "找不到账号名那个 span —— 断言可能打空了")
         self.assertNotRegex(m.group(0), r"minWidth:\s*0\b",
                             "账号名 minWidth 是 0 —— flex 会把它压到消失")

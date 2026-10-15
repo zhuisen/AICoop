@@ -9,6 +9,12 @@ interface GhostButtonProps {
   disabled?: boolean;
   loading?: boolean;
   loadingText?: string;
+  /** 紧凑态只剩短名时，全名放这里（悬浮可见）。 */
+  title?: string;
+  /** 紧凑态（顶栏一行放不下时）收窄左右内边距。 */
+  dense?: boolean;
+  /** 总览顶栏的动作（`useOneRowHeader` 与它的闸按这个认）。 */
+  headAction?: boolean;
 }
 
 function Spinner({ size = 12 }: { size?: number }) {
@@ -18,16 +24,18 @@ function Spinner({ size = 12 }: { size?: number }) {
   }} />;
 }
 
-export default function GhostButton({ t, onClick, children, accent, disabled, loading, loadingText }: GhostButtonProps) {
+export default function GhostButton({ t, onClick, children, accent, disabled, loading, loadingText, title, dense, headAction }: GhostButtonProps) {
   const [hover, setHover] = useState(false);
   const isDisabled = disabled || loading;
   return (
     <span
+      title={title}
+      data-head-action={headAction ? "" : undefined}
       onClick={isDisabled ? undefined : onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px",
+        display: "inline-flex", alignItems: "center", gap: dense ? 5 : 6, padding: dense ? "7px 8px" : "7px 11px",
         // ★ 按钮**永不断字**。缺这两条时 flex 会在空间不够时压缩按钮宽度,文字只能在按钮内部
         //   折行 ——「刷新全池」变成「刷新全 / 池」,「检查 token」变成「检查 / token」。
         //   窄窗实测(用户 2026-08-24 截图)。断字是 bug,不是排版取舍:按钮该整体换行,不该被劈开。

@@ -46,6 +46,12 @@ export const IcPin = ({ on }: { on?: boolean }): React.ReactElement => (
     <path d="M12 17v5"/><path d="M9 10.8V4h6v6.8l2.5 3.2h-11z"/>
   </svg>
 );
+/** 「检查 token」的紧凑态图标（2026-10-15，用户：最小尺寸下工具栏「减少字数并附上图标」）。 */
+export const IcKey = (): React.ReactElement => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M16 7l3 3M14 9l2 2"/>
+  </svg>
+);
 export const IcPen = (): React.ReactElement => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/></svg>
 );

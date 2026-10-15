@@ -135,7 +135,7 @@ class TheBoardHasCodexShape(unittest.TestCase):
     def test_off_goes_to_rest_and_runway_is_honestly_unknown(self):
         b = P.board(self.POOL, "a", now=0)
         self.assertEqual([e["aid"] for e in b["rest"]], ["c"])
-        self.assertIsNone(b["runway_active_hours"], "★ agy 没有消耗记录 —— 算不出就是 None，不是 0")
+        self.assertIsNone(b["runway_hours"], "★ agy 没有消耗记录 —— 算不出就是 None，不是 0")
 
 
 class TheCliStoresPinAndBorrowInThePool(unittest.TestCase):

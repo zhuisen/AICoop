@@ -7,6 +7,7 @@ import Toast from "./components/Toast";
 import AccountRow from "./components/AccountRow";
 import GrokRow from "./components/GrokRow";
 import AgyRow from "./components/AgyRow";
+import { agyAction } from "./agy";
 import PlatformChips from "./components/PlatformChips";
 import { useRotationBoard } from "./hooks/useRotationBoard";
 import { useAgyPool } from "./hooks/useAgyPool";
@@ -512,6 +513,8 @@ export default function MenuBar() {
           ? agyPool.accounts.map(a => (
               <AgyRow key={a.sub} t={t} color={colorOf(traffic, "agy")}
                       snap={agyPool.snapshotOf(a, agySnap)} label={a.label}
+                      action={agyAction(a.quota_err_reason, a.quota_err_url)}
+                      plan={a.plan}
                       isCurrent={a.sub === agyPool.liveSub}
                       isBest={mbAgyBoard?.next?.aid === a.sub && a.sub !== agyPool.liveSub}
                       onSwitch={a.sub === agyPool.liveSub ? undefined

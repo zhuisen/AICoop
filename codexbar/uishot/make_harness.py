@@ -190,6 +190,19 @@ STUB = """
   // 与 state.json 同级敏感,绝不进 HTTP 伺服目录。
   // `_NOW` 由 python 侧现算,否则 `↻重置` 与「N 分钟前」会随夹具一起腐烂成"已重置"。
   var _NOW = __NOW__;
+  // 定时探针 `--status` 的形状（codex `read_dawn_status` / agy `dawn-probe --status` 共用）。
+  // `?dawn=off|on|ran`：off = 默认关；on = 开了但还没跑过；ran = 今天 06:01 跑过。
+  function DAWN_STATUS(kind) {
+    var mode = p.get('dawn') || 'off';
+    var r = { enabled: mode !== 'off', time: '06:00', window: '06:00–06:03', due_at: _NOW + 3600,
+              targets_today: kind === 'codex' ? ['qq55', 'Asen', 'Egan', 'Huo'] : ['qq55', 'Asen'] };
+    if (mode === 'ran') {
+      r.date = new Date(_NOW * 1000).toISOString().slice(0, 10); r.at = _NOW - 3 * 3600;
+      r.state = 'done'; r.ok = r.targets_today.length; r.total = r.targets_today.length;
+      if (kind === 'agy') r.started = 2;
+    }
+    return r;
+  }
   function _acc(o) {
     var base = { account_key: 'https://auth.x.ai::demo', user_id: 'u-demo',
                  email: 'grok@example.com', token_expires_at: _NOW + 3600,
@@ -680,6 +693,8 @@ function relayEntry() {
       // ★ agy 账号池。**不打桩就是假绿**：落到 default 返回 null ⇒ 池恒为空 ⇒
       //   Google 档永远退回那张只读卡，而"一号一卡 + 切换"整条路一个像素都验不到。
       //   `?agypool=n` 造 n 个号（默认 0 = 没建池，就是退回只读卡那条路）。
+      case 'read_dawn_status':
+        return Promise.resolve(JSON.stringify(DAWN_STATUS('codex')));
       case 'read_agy_pool': {
         var n = parseInt(p.get('agypool') || '0', 10);
         if (!n) return Promise.resolve(null);
@@ -690,6 +705,8 @@ function relayEntry() {
           accs[sub] = {
             label: ['qq55', 'Asen', 'Huo', 'wing'][i] || ('acc' + i),
             email: 'demo' + i + '@example.com',
+            // ★ 档位（2026-10-15）：第一个号 Ultra（当值 ⇒ Hero / 卡 / 菜单栏都看得到徽章），其余 Pro（不画）。
+            plan: i === 0 ? 'ultra' : 'pro',
             // 第二个号刻意造成**低额度**：选号阈值那条线只有在有高有低时才看得出来。
             quota: { gemini: { remaining: i === 1 ? 0.08 : 0.956,
                                reset: new Date(__NOW__ * 1000 + 4300000).toISOString() },
@@ -730,6 +747,26 @@ function relayEntry() {
         // ★ `quota_ran_at` = 「上次**尝试过** `agy-rotate quota`」。给成"刚跑过"，
         //   否则 harness 一挂载就触发自动保鲜，把打桩的 `run_agy_rotate` 卷进截图时序。
         //   ⚠️ 要验"过期会自动取"那条路径，传 `?agystale=1` 把它推回 0。
+        // ★ `?agyodd=unknown|verify` 只改**第一个**号（当值号 ⇒ Hero 也看得到）：
+        //   unknown = 周那个桶不带 `remainingFraction`（proto3 省略零值，2026-10-15 #2）；
+        //   verify  = 取额度被 403 VALIDATION_REQUIRED 拒绝，带验证链接（#3）。
+        var odd = p.get('agyodd'), a0 = accs[subs[0]];
+        // ★ `?agyodd=floating`：第一个号的 5h 闲置（reset 跟着 now 滑），账本已判 floating ⇒ 画「未启动」。
+        if (odd === 'floating' && a0) {
+          var r5 = a0.quota_summary[0].buckets[0];
+          r5.remainingFraction = 1; a0.quota.gemini.remaining = 0.934;
+          var rs5 = __NOW__ + 18000; r5.resetTime = new Date(rs5 * 1000).toISOString();
+          a0.quota_anchor = { 'gemini-5h': { state: 'floating', slides: 3, used_max: 0, reset: rs5 } };
+        }
+        if (odd === 'unknown' && a0) {
+          delete a0.quota_summary[0].buckets[1].remainingFraction;
+          a0.quota.gemini = { remaining: null, reset: null };
+        } else if (odd === 'verify' && a0) {
+          a0.quota = null; a0.quota_summary = null; a0.weekly_seen = undefined;
+          a0.quota_err = '额度 HTTP 403 VALIDATION_REQUIRED: Verify your account to continue.';
+          a0.quota_err_reason = 'VALIDATION_REQUIRED';
+          a0.quota_err_url = 'https://accounts.google.com/signin/continue?flowName=GlifWebSignIn';
+        }
         return Promise.resolve(JSON.stringify({
           accounts: accs, live_seen: subs[0],
           quota_ran_at: p.get('agystale') === '1' ? 0 : __NOW__,
@@ -768,6 +805,19 @@ function relayEntry() {
             live_seen: lsubs[0] || null,
             drifted: drift,
           }));
+        }
+        // ★ 探针（`--json`，2026-10-15 起 GUI 要拿 5h 前后对比出 toast）。回 'ok' 会 `JSON.parse` 失败、
+        //   页面挂一条「探针输出读不懂」—— 而那正好长得像探针坏了。`?agyprobe=flat` = 5h 没降那一态。
+        if ((args.args || [])[0] === 'probe') {
+          var flat = p.get('agyprobe') === 'flat';
+          return _later(JSON.stringify([{ label: /^[^-]/.test((args.args || [])[1] || '') ? args.args[1] : 'qq55', ok: true, note: '答「ok」',
+            usage: { total_tokens: 15195 },
+            q5h: { before: 100, after: flat ? 100 : 99.6, reset: __NOW__ + 17970, started: !flat } }]));
+        }
+        // ★ 定时探针胶囊的读回（2026-10-15）。不打桩 ⇒ 落到 'ok' ⇒ JSON.parse 抛 ⇒ 胶囊恒「关」，
+        //   而「关」本身是一个合法态 —— 看着完全像通过。`?dawn=on|off|ran`，缺省 off。
+        if ((args.args || [])[0] === 'dawn-probe' && (args.args || []).indexOf('--status') >= 0) {
+          return _later(JSON.stringify(DAWN_STATUS('agy')));
         }
         // ★ 借用开关的读回（设置页）。`?agyborrow=0` 渲染「已关闭」那一态。
         if ((args.args || [])[0] === 'borrow' && (args.args || []).indexOf('--status') >= 0) {
@@ -880,29 +930,34 @@ function relayEntry() {
       case 'read_agy_board':
         return invoke('read_agy_pool', {}).then(function (raw) {
           if (!raw) return JSON.stringify({ cur: null, cur_ago_min: null, next: null, next_reason: 'none',
-            queue: [], rest: [], weekly_left_pp: 0, burn_pp_per_active_hour: null,
-            runway_active_hours: null, samples: 0, last_sample_min: null });
+            queue: [], rest: [], weekly_left_pp: 0, burn_pp_per_hour: null,
+            runway_hours: null, rate_span_h: null, first_reset_h: null, outlasts_reset: false,
+            samples: 0, last_sample_min: null });
           var pool = JSON.parse(raw), accs = pool.accounts || {};
           var pins = (p.get('agypin') || '').split(',').filter(Boolean);
           var subOf = {}; Object.keys(accs).forEach(function (s2) { subOf[accs[s2].label] = s2; });
           var pinned = pins.map(function (l) { return subOf[l]; }).filter(Boolean);
           var strand = p.get('agystrand') === '1';
-          var rem = function (a) { var g = (a.quota || {}).gemini; return g ? g.remaining * 100 : null; };
+          var rem = function (a) { var g = (a.quota || {}).gemini;
+            return g && typeof g.remaining === 'number' ? g.remaining * 100 : null; };
           var usable = function (s2) { var a = accs[s2]; var r = rem(a);
             return !strand && !a.rotate_off && !(r != null && r < 15); };
           var ent = function (s2) {
             var a = accs[s2] || {}, wins = [];
             ((a.quota_summary || [])[0] || { buckets: [] }).buckets.forEach(function (b) {
               wins.push({ label: b.window === 'weekly' ? '周' : '5h',
-                          rem: Math.round(b.remainingFraction * 100),
-                          reset: b.window === 'weekly' ? '4d9h' : '1h11m' });
+                          rem: typeof b.remainingFraction === 'number' ? Math.round(b.remainingFraction * 100) : null,
+                          // 同 `agy/pool.py::_floating`：账本判 floating 的窗口说「未启动」。
+                          reset: ((a.quota_anchor || {})[b.bucketId] || {}).state === 'floating' ? '未启动'
+                            : b.window === 'weekly' ? '4d9h' : '1h11m' });
             });
             var r = rem(a), pi = pinned.indexOf(s2);
-            return { aid: s2, label: a.label, email: a.email, plan: null,
+            return { aid: s2, label: a.label, email: a.email, plan: a.plan || null,
                      pin: pi < 0 ? null : pi + 1, off: !!a.rotate_off, dead: false,
                      cool_min: (strand || (r != null && r < 15)) && !a.rotate_off ? 71 : 0,
                      wins: wins,
-                     tightest: wins.length ? Math.min.apply(null, wins.map(function (w) { return w.rem; })) : null,
+                     tightest: !wins.length || wins.some(function (w) { return w.rem == null; }) ? null
+                       : Math.min.apply(null, wins.map(function (w) { return w.rem; })),
                      weekly: (wins.filter(function (w) { return w.label === '周'; })[0] || {}).rem };
           };
           var ids = Object.keys(accs);
@@ -922,7 +977,8 @@ function relayEntry() {
             next: q[0] || null, next_reason: q.length ? 'new' : 'none',
             queue: q, rest: rest,
             weekly_left_pp: q.reduce(function (t2, e) { return t2 + (e.weekly || 0); }, 0),
-            burn_pp_per_active_hour: null, runway_active_hours: null, samples: 0, last_sample_min: null });
+            burn_pp_per_hour: null, runway_hours: null, rate_span_h: null, first_reset_h: null,
+            outlasts_reset: false, samples: 0, last_sample_min: null });
         });
       case 'read_rotation_board': {
         {
@@ -944,7 +1000,10 @@ function relayEntry() {
                      pin: pi < 0 ? null : pi + 1, off: !!sl.rotate_off, dead: !!sl.auth_dead,
                      cool_min: 0, wins: ws,
                      tightest: ws.length ? Math.min.apply(null, ws.map(function (w) { return w.rem; })) : null,
-                     weekly: _rem(sl, 'secondary') };
+                     weekly: _rem(sl, 'secondary'),
+                     // 与 `codex-rotate::_eta5h` 同形：全池 3 次用完、一整窗 4.0 分钟（2026-10-15 真机数）
+                     eta5h: _rem(sl, 'primary') == null || sl.plan === 'pro' ? null
+                       : { left_min: Math.round(40 * _rem(sl, 'primary') / 100) / 10, per_window_min: 4.0, n: 3, scope: 'pool' } };
           };
           var _ids = Object.keys(STATE.slots || {});
           // ★★★ `?pool=stranded` 专验「池子见底」那一支 —— 一个号都不可用时，
@@ -976,6 +1035,8 @@ function relayEntry() {
           // ★ `?runway=none` 专验「取不到写 —，不写 0」那一支 —— 没有这个开关，
           //   那条分支一个像素都验不到（本仓反复记的假绿）。
           var _none = p.get('runway') === 'none';
+          // ★ `?runway=reset` 专验「续航长过最早一次周重置 ⇒ 只说撑得到重置」那一支。
+          var _past = p.get('runway') === 'reset';
           return Promise.resolve(JSON.stringify({
             // ★ 见底时 `cur` 必须是一个**不可用**的号 —— 那正是「临时借用」要说的事。
             //   给 `_q[0]`（空）会让左侧整块不渲染，那条分支就又验不到了。
@@ -989,9 +1050,15 @@ function relayEntry() {
                       : (_q[0] || (_strand ? _rest[0] : null)),
             cur_ago_min: _rec ? 180 : 7, next: _q[0] || null,
             queue: _q, rest: _rest, weekly_left_pp: _wk,
-            burn_pp_per_active_hour: _none ? null : 39.3,
-            runway_active_hours: _none ? null : Math.round(_wk / 39.3 * 10) / 10,
-            samples: _none ? 3 : 226, last_sample_min: _none ? null : 181 }));
+            burn_pp_per_hour: _none ? null : 39.3,
+            runway_hours: _none ? null : Math.round(_wk / 39.3 * 10) / 10,
+            rate_span_h: _none ? null : 22.4,
+            first_reset_h: _past ? 2.5 : 134.1,
+            outlasts_reset: !_none && _past,
+            samples: _none ? 3 : 226, last_sample_min: _none ? null : 181,
+            // 连续使用口径（`codex-rotate::_burst`，2026-10-15 真机数）；`?runway=none` ⇒ 没有用完历史
+            burst: _none ? null : { now_min: 16.5, week_min: 146.3, refill_h: 2.46, n: 6,
+                                    wk_per_5h: 0.156, events: 3, per_window_min: 4.0 } }));
         }
       }
       // run_rotate 的桩。默认什么都不做(返回 null),只有 `priority --set` 要真的改 STATE ——
@@ -1813,6 +1880,33 @@ def redacted_state():
         if a not in off:
             out_slots[a]["rotate_off"] = True
             off.append(a)
+    # ★★ 「快到期的重置卡」同理不能靠运气（2026-10-14：真状态里没有 3 天内到期的卡 ⇒
+    #   `test_card_left_wording` 没有一张「剩 N 天」角标可比，闸失去判别力而红）。
+    #   没有就从**末尾**挑一个没卡的活号补一张 30 小时后到期的（「剩1天」），不动前面的号 ——
+    #   置顶 / 用卡弹窗（3 张卡那个号）等夹具依赖它们。30h 而不是整 24h：落在天与小时的分界之外，
+    #   免得 harness 生成到测试运行之间的几分钟把它推过边界。
+    now_s = time.time()
+
+    def _soon(sl):
+        for c in (sl.get("credits_detail") or {}).get("credits") or []:
+            try:
+                t = time.mktime(time.strptime(c.get("expires_at", "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            except (ValueError, TypeError):
+                continue
+            if c.get("status") == "available" and c.get("id") and 0 < t - now_s <= 3 * 86400:
+                return True
+        return False
+    if not any(_soon(out_slots[a]) and (out_slots[a].get("credits") or {}).get("available")
+               for a in alive_ids):
+        for a in reversed(alive_ids):
+            sl = out_slots[a]
+            if (sl.get("credits") or {}).get("available"):
+                continue
+            sl["credits"] = {**(sl.get("credits") or {}), "available": 1}
+            sl["credits_detail"] = {"credits": [{
+                "id": "card-demo-soon", "status": "available",
+                "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_s + 30 * 3600))}]}
+            break
     active = idmap.get(raw.get("active"), "")
     # ★★ `last_aid`（代理最近一次真的用了谁）**必须与 `active` 不同**（2026-09-23）。
     #   菜单栏/托盘改成跟代理走之后，判据就是「高亮落在 last_aid 而不是 active 上」——

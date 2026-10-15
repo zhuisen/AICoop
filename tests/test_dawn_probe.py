@@ -35,6 +35,7 @@ except ImportError:
     import _isolation  # noqa: F401
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,9 @@ INSTALLER = ROOT / "scripts" / "install-launchd.sh"
 
 
 def run(store, *args, **kw):
-    env = dict(os.environ, CODEX_ROTATE_STORE=store)
+    # ★ 2026-10-15 起命令自己判「到点没有」（`dawn_sched.py`）。夹具把时间钉在 00:00 且不随机，
+    #   否则这些行为测试在凌晨 0~6 点会因为「未到点」而变红 —— 测的是护栏，不是钟。
+    env = dict(os.environ, CODEX_ROTATE_STORE=store, CODEX_ROTATE_DAWN_JITTER="0")
     env.pop("CODEXBAR_QUOTA_ANCHORS", None) if kw.pop("no_anchor_iso", False) else None
     return subprocess.run([sys.executable, CLI, "dawn-probe", *args],
                           env=env, capture_output=True, text=True, timeout=120)
@@ -57,7 +60,7 @@ def store_with(slots, dawn=None):
     d = tempfile.mkdtemp(prefix="dawn-test-")
     st = {"slots": slots, "active": next(iter(slots), None)}
     if dawn is not None:
-        st["dawn_probe"] = dawn
+        st["dawn_probe"] = {"time": "00:00", **dawn}
     Path(d, "state.json").write_text(json.dumps(st), encoding="utf-8")
     Path(d, "auth").mkdir(exist_ok=True)
     return d
@@ -129,7 +132,7 @@ class DayIdempotence(unittest.TestCase):
         同时进入探测 ⇒ 三倍计费。判据直接钉死:**恰好 1 个**打印出探测抬头。
         """
         d = store_with(PLUS_POOL, dawn={"enabled": True})
-        env = dict(os.environ, CODEX_ROTATE_STORE=d)
+        env = dict(os.environ, CODEX_ROTATE_STORE=d, CODEX_ROTATE_DAWN_JITTER="0")
         ps = [subprocess.Popen([sys.executable, CLI, "dawn-probe"], env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
               for _ in range(3)]
@@ -187,14 +190,14 @@ class LeavesATrace(unittest.TestCase):
 
 
 class WiredIntoTheSystem(unittest.TestCase):
-    def test_launchd_job_is_installed_at_six(self):
+    def test_launchd_job_polls_every_minute_and_is_quiet(self):
+        """2026-10-15 取代「launchd 06:00 日历时刻」：时间可在界面上改、且区间内随机，
+        所以 launchd 每 60s 拉起一次、由命令判到点（`dawn_sched.py`）。`--tick` 让空转不写日志。"""
         src = INSTALLER.read_text(encoding="utf-8")
-        self.assertIn("emit dawnprobe", src)
         i = src.index("emit dawnprobe")
-        seg = src[i:i + 400]
-        self.assertIn("StartCalendarInterval", seg)
-        self.assertRegex(seg, r"<key>Hour</key><integer>6</integer>")
-        self.assertIn("dawn-probe", seg)
+        seg = src[i:i + 300]
+        self.assertIn("<key>StartInterval</key><integer>60</integer>", seg)
+        self.assertIn("dawn-probe --tick", seg)
 
     def test_installer_verifies_the_new_job(self):
         """★ 装完要能在末尾那份清单里看到它,否则「装了没装上」看不出来。"""
@@ -207,22 +210,24 @@ class WiredIntoTheSystem(unittest.TestCase):
         self.assertIn('"dawn-probe"', rs[i:i + 500])
 
     def test_ui_surfaces_the_last_run(self):
-        """★★ 「上次运行」必须显示在设置页 —— 它是「定时到底跑没跑」的唯一可见证据。
-        本项目的日历定时被外力改写丢过 StartCalendarInterval,runs = 0、从未运行过,
-        而没有任何一处会为此报红。"""
-        ts = (ROOT / "codexbar" / "src" / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
-        self.assertIn("dawnDesc", ts)
-        i = ts.index("function dawnDesc")
+        """★★ 「上次运行」必须显示 —— 它是「定时到底跑没跑」的唯一可见证据。
+        2026-10-15 起它在总览工具栏「定时」胶囊的悬浮与浮层里（`dawn.ts::dawnDesc`），设置页那行已搬走。"""
+        ts = (ROOT / "codexbar" / "src" / "dawn.ts").read_text(encoding="utf-8")
+        i = ts.index("export function dawnDesc")
         body = ts[i:ts.index("\n}", i)]
         self.assertIn("上次运行", body, "没有显示上次运行时刻 —— 静默不跑就看不出来")
         self.assertIn("d.at", body)
+        chip = (ROOT / "codexbar" / "src" / "components" / "DawnChip.tsx").read_text(encoding="utf-8")
+        self.assertIn("title={desc}", chip)
+        self.assertIn("data-dawn-desc", chip)
 
     def test_ui_reads_state_not_localstorage(self):
-        """★★ 开关的真源必须是 `state.json`:launchd 在 app 没开时也要读它。
-        存进 localStorage 就是两个真源,迟早分叉成「界面说开着、定时器不认」。"""
-        ts = (ROOT / "codexbar" / "src" / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
-        i = ts.index("const toggleDawn")
-        self.assertIn("run_rotate", ts[i:i + 400], "开关走了 localStorage 而不是 CLI")
+        """★★ 开关的真源必须是 `state.json`:launchd 在 app 没开时也要读它。"""
+        raw = (ROOT / "codexbar" / "src" / "hooks" / "useDawnStatus.ts").read_text(encoding="utf-8")
+        # 注释里正写着「不是 localStorage」—— 断言打在剥掉注释的代码上（verification.md 形态⑫）。
+        ts = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", raw, flags=re.S))
+        self.assertIn('invoke("run_rotate", { args: ["dawn-probe", ...args] })', ts)
+        self.assertNotIn("localStorage", ts, "开关走了 localStorage 而不是 CLI")
 
 
 if __name__ == "__main__":

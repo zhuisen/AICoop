@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type Theme, modelColor } from "../theme";
 import { fmtUSD } from "../rates";
-import StackedArea, { type Layer } from "../components/StackedArea";
+import StackedArea, { type Layer, CHART_CHROME_H } from "../components/StackedArea";
+import { useFillHeight } from "../hooks/useFillHeight";
 import KpiStrip, { type Kpi, UP, DOWN } from "../components/KpiStrip";
 import CacheChip from "../components/CacheChip";
 import PageSub from "../components/PageSub";
@@ -11,10 +12,14 @@ import RangeBar from "../components/RangeBar";
 import Toast from "../components/Toast";
 import { todayOf, resolveRange, diffDays, prevTotals, prevNote, effGran, granLabel, md,
        } from "../traffic";
-import { rangeLabel, bucketsFor, sumBuckets, costOfBucket, savingOfBucket, fmtTok, topModels, colorOf, countsCacheRead, orderedKeys, coveragePct, coverageNote } from "../traffic";
+import { rangeLabel, bucketsFor, sumBuckets, costOfBucket, savingOfBucket, fmtTok, topModels, colorOf, countsCacheRead, orderedKeys, coveragePct, coverageNote, sortCardsByToday, cardTodayOf } from "../traffic";
 import type { Coverage } from "../traffic";
 
 const AMBER = "#E0A21C";
+/** 图区高度下限 = 改成撑满之前的固定值。 */
+const CHART_MIN = 156;
+/** 底部框至少露出图例的前 3 行（28px × 3）—— 再矮整页滚，不让它缩没。 */
+const LIST_MIN = 84;
 
 /** AI用量信息 · 总览（交接稿 §1–§4）。数据源是各 CLI 自己写在本机的 transcript,零额度消耗。 */
 const IconRefresh = ({ spin }: { spin?: boolean }) => (
@@ -43,6 +48,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
 }): React.ReactElement {
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [chartHost, chartH] = useFillHeight<HTMLDivElement>();
   const isToday = st.preset === "today";
   /** 数据里的"今天"。★ 不用挂钟 —— 桶是 scan.py 按本地日切的，午夜前后会差一天。 */
   const today = useMemo(() => todayOf(data), [data]);
@@ -183,7 +189,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
     { k: isToday ? "较昨日" : "日均", v: "—" },
     { k: "总费用", v: "—", c: AMBER },
     { k: isToday ? "费用较昨日" : "日均费用", v: "—", c: AMBER },
-    { k: "最大占比", v: "—" },
+    { k: "最大占比", v: "—", optional: true },
   ] : [
     { k: "总 token", v: fmtTok(view?.grand ?? 0), n: view?.grand ?? 0, fmt: fmtTok,
       // 今日档环比行隐藏（§5：改注在「较昨日」那一格下面）
@@ -215,7 +221,9 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
           n: (view?.grandCost ?? 0) / Math.max(1, view?.labels.length ?? 1), fmt: fmtUSD, c: AMBER,
           sub: dCost ? `环比 ${dCost.txt}` : undefined,
           subC: dCost ? (dCost.up ? UP : DOWN) : t.muted },
-    { k: "最大占比",
+    // ★ `optional`：窄时第一个让出去（用户 2026-10-14「最小尺寸下去掉最大占比」）——
+    //   同一个数在下方平台列表第一行就有，去掉它零信息损失，换回其余 6 格的原字号。
+    { k: "最大占比", optional: true,
       v: top ? `${top.name} ${((top.total / Math.max(1, view!.grand)) * 100).toFixed(1)}%` : "—",
       c: top ? colorOf(data, top.key) : undefined },
   ];
@@ -274,13 +282,19 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
 
       {err && <div style={{ fontSize: 11, color: "#E0524D", marginBottom: 8 }}>✗ {err}</div>}
       {busy && !data && <div style={{ fontSize: 12, color: t.muted }}>首次扫描三家 transcript 中(约 18s,之后走缓存)…</div>}
+      {/* ★★ 一屏仪表盘（用户 2026-10-14 从两档 demo 里选的「仪表盘式一屏」）：页面本身不滚，
+          图表吃掉剩余高度、**下限仍是原来的 156px**（只会变大不会变小），平台图例+卡片在自己的框里滚。
+          分配顺序由 flex 决定：空间不够时先压底部框（它会滚），够了底部先长到自然高，多出来的才给图表。 */}
+      <div ref={chartHost} style={{ flex: "1 1 0", minHeight: CHART_MIN + CHART_CHROME_H,
+                                    display: "flex", flexDirection: "column" }}>
       {!!view?.labels.length && (
         // ★ `key={range}` 不是可有可无的:图表的 hover 是"某个数据集里的索引",换档必须让实例作废。
         //    详见 StackedArea 里 `hv` 上方的注释(靠组件自清试过两次,都被用户实测推翻)。
         <div className={introEnabled() ? "cb-wipe" : undefined} key={`w:${st.preset}:${range.s}:${range.e}:${st.gran}`}>
         <StackedArea caption={capt}
                      key={`${st.preset}:${range.s}:${range.e}:${st.gran}:${view.labels[0]}`}
-                     labels={view.labels} layers={layers} height={156} fmt={fmtTok} t={t}
+                     labels={view.labels} layers={layers}
+                     height={Math.max(CHART_MIN, chartH - CHART_CHROME_H)} fmt={fmtTok} t={t}
                      dimmed={hoverKey} onPick={onDrill}
                      /* ★ 标签带 `T` = 小时桶（今日档，或选中的某一天）。
                         原来只给「今日」特判，于是选中昨天时 tooltip 会印原始的
@@ -292,6 +306,9 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
                      }} />
         </div>
       )}
+      </div>
+
+      <div data-traffic-list style={{ flex: "0 1 auto", minHeight: LIST_MIN, overflowY: "auto" }}>
 
       {/* ★★ 平台图例：**主次双区**（用户 2026-08-26 从 4 档 demo 里选的 D 档）。
           起因：「现在模型多起来，会导致我的窗口要上下要很长」。本机快照已经是 **7 个平台**
@@ -391,7 +408,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
       {/* 平台卡片 / 今日饼图卡片 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 11, marginTop: 10,
                     paddingBottom: 4 }}>
-        {view?.list.map((p) => (
+        {sortCardsByToday(view?.list ?? [], isToday).map((p) => (
           <PlatformCard key={p.key} t={t} name={p.name} color={colorOf(data, p.key)} buckets={p.buckets}
                         total={p.total} cost={p.cost} isToday={isToday}
                         yTotal={isToday ? yesterdayOf(data, p.key) : 0}
@@ -409,6 +426,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
             <span style={{ fontSize: 10 }}>在 traffic/scan.py 的注册表加一行</span>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
@@ -428,8 +446,7 @@ function PlatformCard({ t, name, color, buckets, total, cost, isToday, yTotal, o
 }): React.ReactElement {
   const [hov, setHov] = useState(false);
   const c = color;
-  const cur = buckets.length ? buckets[buckets.length - 1].total : 0;
-  const shown = isToday ? total : cur;
+  const shown = cardTodayOf({ total, buckets }, isToday);
   const d = yTotal ? ((total - yTotal) / yTotal) * 100 : null;
   const tops = topModels(buckets, 3);
 
@@ -441,7 +458,7 @@ function PlatformCard({ t, name, color, buckets, total, cost, isToday, yTotal, o
   };
 
   return (
-    <div style={box} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onDrill}>
+    <div data-plat-card={name} data-today={shown} style={box} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onDrill}>
       {/* ★ 名字长时(Antigravity)会把「覆盖 14%」徽章和「明细 →」挤出卡片右缘(900/1000px 实测)。
           让**名字**做唯一的让位者(省略号) —— 名字截一点还认得出,徽章少一半就读不出是什么。 */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7, minWidth: 0 }}>

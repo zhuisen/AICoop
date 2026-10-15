@@ -288,17 +288,21 @@ def parse_quota(payload):
             if not isinstance(b, dict):
                 continue
             rf = b.get("remainingFraction")
-            if not isinstance(rf, (int, float)):
-                continue                        # ★ 没有数就跳过,不补默认值
+            # ★ 没有数就写 None(读不到),不补默认值、也不丢桶 —— 丢了它,同组剩下那个桶
+            #   就成了「最紧」,而缺的那个可能正是 0(proto3 省略零值)。同 `pool.quota_by_group`。
+            num = isinstance(rf, (int, float))
             buckets.append({
                 "bucket_id": b.get("bucketId"),
                 "window": b.get("window"),
-                "remaining_percent": round(float(rf) * 100, 2),
+                "remaining_percent": round(float(rf) * 100, 2) if num else None,
                 "reset_at": iso_epoch(b.get("resetTime")),
             })
         if buckets:
             groups.append({"name": g.get("displayName"), "buckets": buckets})
-    return {"groups": groups} if groups else None
+    # 一个数都没有 = 形状不对,仍走 bad_payload(不是「四格全读不到」的成功)。
+    if not any(b["remaining_percent"] is not None for g in groups for b in g["buckets"]):
+        return None
+    return {"groups": groups}
 
 
 def iso_epoch(s):

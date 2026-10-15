@@ -181,13 +181,23 @@ emit proxy \
 #      `StartCalendarInterval` 曾被本脚本以外的东西改写掉,`runs = 0`、**从未运行过**,
 #      而没有任何一处会为此报红(改写者至今未查明)。所以这个 plist**不能是唯一的触发路径**。
 #      发现定时不跑时先比对 plist 形态(单行 vs 逐行美化 + 空 EnvironmentVariables),别先怀疑脚本。
+#    ★★ 2026-10-15 起**每 60s 拉起一次**，不再是固定的 06:00 日历时刻：用户要能在界面上选时间、
+#      且在所选时刻起 3 分钟内随机。时刻写死在 plist 里就得在界面上改 plist —— 本脚本是 plist 的唯一生成者。
+#      所以由命令自己判断到没到点（`dawn_sched.py`），空转一次约 60ms，同 `autosync` 的形态。
 emit dawnprobe \
-    '  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>' \
-    "$ROT" dawn-probe || FAILED="$FAILED dawnprobe"
+    '  <key>StartInterval</key><integer>60</integer>' \
+    "$ROT" dawn-probe --tick || FAILED="$FAILED dawnprobe"
+
+# ★★ Gemini（agy）定时探针。与上面同一套护栏（默认关、先占天再探、落痕），见 `agy-rotate::cmd_dawn_probe`。
+#    ★ 必须喂 `AGY_POOL_STORE`：agy 池按 `__file__` 推目录，不吃 `CODEX_ROTATE_STORE`（credentials.md）。
+ENV_EXTRA="    <key>AGY_POOL_STORE</key><string>$STORE</string>"
+emit agydawn \
+    '  <key>StartInterval</key><integer>60</integer>' \
+    "$REPO/agy-rotate" dawn-probe --tick || FAILED="$FAILED agydawn"
 
 echo
 echo "==> loaded:"
-for n in autosync quotad proxy dawnprobe; do
+for n in autosync quotad proxy dawnprobe agydawn; do
     printf '  %-13s %s\n' "$n" \
         "$(launchctl print "gui/$UID_NUM/$PREFIX.$n" 2>/dev/null | awk '/^\tstate = /&&!f{print $3; f=1}' || echo '?')"
 done

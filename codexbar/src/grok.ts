@@ -19,7 +19,8 @@ export type GrokReason =
   | "auth_file_empty"
   | "bad_payload"
   | "http_error"
-  | "network_error";
+  | "network_error"
+  | "rate_limited";
 
 export interface GrokQuota {
   /** ★★ 0–100 的**已用**百分比，不是剩余。喂进 `quotaColor()` 前必须换向 —— 见 `grokRemPct`。 */
@@ -47,6 +48,10 @@ export interface GrokAccount {
   quota: GrokQuota | null;
   /** 降级时搬运的上一次成功读数。**字段名不同**，消费方不可能误当现值。 */
   last_good: { used_percent: number; fetched_at: number; period_end: number | null } | null;
+  /** 套餐名（`/v1/settings` 的 `subscription_tier_display`，一天读一次，读不到留上次的）。旧 sidecar 没有。 */
+  plan?: { name: string; at: number } | null;
+  /** 被 429 后，到这个 epoch 秒之前 `grok-quota` 不再发请求。 */
+  retry_at?: number | null;
 }
 
 export interface GrokSnapshot {
@@ -99,6 +104,12 @@ export function grokReasonTone(a: GrokAccount): GrokTone {
  * ② **给出下一步动作** —— 项目吃过亏的反例是 erp-v3 那条让用户"重试"的提示，
  *    而重试根本修不了它指的那个状态。
  */
+/** 套餐徽章文字：免费档不画（同 codex 只画 PRO、agy 只画 ULTRA —— 常态不值得占位）。 */
+export function grokBadgePlan(a: GrokAccount | null | undefined): string {
+  const n = a?.plan?.name ?? "";
+  return /^free$/i.test(n) ? "" : n;
+}
+
 export function grokReasonNote(a: GrokAccount): string {
   const when = a.token_expires_at
     ? new Date(a.token_expires_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -124,6 +135,13 @@ export function grokReasonNote(a: GrokAccount): string {
       return `xAI 返回了 200，但响应里没有额度字段（接口可能改了）。这不是「额度为 0」。`;
     case "http_error":
       return `xAI 返回 HTTP ${a.http_status ?? "?"}。这不是「额度为 0」，下次刷新会自动重试。`;
+    case "rate_limited": {
+      const at = a.retry_at
+        ? new Date(a.retry_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "";
+      return `xAI 限流了（HTTP 429）${at ? `，要求 ${at} 之后再取` : ""}。`
+        + `这不是「额度为 0」，到点前不再发请求，到点后自动重试。`;
+    }
     case "network_error":
       return `连不上 xAI${a.detail ? `（${a.detail.split("\n")[0].slice(0, 80)}）` : ""}。`
         + `这不是「额度为 0」，下次刷新会自动重试。`;

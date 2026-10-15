@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getSettings } from "../pages/SettingsPage";
-import type { AgyQuota, AgySnapshot } from "../agy";
+import type { AgyProbeResult, AgyQuota, AgySnapshot } from "../agy";
+import type { AnchorVerdict } from "../helpers";
 
 /**
  * 「现在钥匙串里是谁」的**跨 webview 广播**。
@@ -35,8 +36,16 @@ export interface AgyPoolAccount {
   email?: string | null;
   /** 云端按账号读到的额度。★ **只有 5h 窗口** —— 周窗口只有本机 RPC 有，
    *  而那条只看得到当值那个号（见 `toSnapshot`）。 */
-  quota?: Record<string, { remaining: number; reset: string; models?: string[] }> | null;
+  quota?: Record<string, { remaining: number | null; reset: string | null; models?: string[] }> | null;
   quota_err?: string | null;
+  /** 取额度被拒时 Google 错误体里的 `ErrorInfo.reason` 与验证链接（`agy-rotate quota` 写，成功时清空）。 */
+  /** 档位（`ultra` / `pro` / `free`），来自 `loadCodeAssist` 的 `paidTier`，一天最多读一次。 */
+  plan?: string | null;
+  tier?: { id?: string | null; name?: string | null; at?: number } | null;
+  quota_err_reason?: string | null;
+  /** 按桶的锚点判定（`agy-rotate quota` 写，`{bucketId: verdict}`，自带它描述的 `reset`）。 */
+  quota_anchor?: Record<string, AnchorVerdict> | null;
+  quota_err_url?: string | null;
   quota_at?: number | null;
   /** 反向：`true` = 这个号被摘出自动轮换。**缺省（没有这个键）= 参与轮换**。 */
   rotate_off?: boolean;
@@ -112,18 +121,23 @@ function toSnapshot(a: AgyPoolAccount): AgySnapshot {
   //   （2026-09-15：`retrieveUserQuotaSummary` 按账号返回，实测两个号都 200。）
   const groups = (a.quota_summary ?? []).map((g) => ({
     name: g.displayName || "?",
+    // ★★ 没有数字的桶**不丢**，落成 `null`（读不到）。丢掉它，同组剩下那格就成了「最紧」，
+    //   而缺的那格可能正是 0（proto3 省略零值）。同 `agy/pool.py::quota_by_group`。
     buckets: (g.buckets ?? [])
-      .filter((b) => typeof b.remainingFraction === "number")
       .map((b) => ({
         bucket_id: b.bucketId ?? null,
         window: b.window ?? null,
         // ★ 上游是 0~1 的 fraction，我们对外一律 0~100 的百分比。
         //   这层换算丢了会画出一条 0.99% 的条 —— 看着像"快用光了"，方向还挺合理，肉眼极难发现。
-        remaining_percent: Math.round((b.remainingFraction as number) * 1000) / 10,
+        remaining_percent: typeof b.remainingFraction === "number"
+          ? Math.round(b.remainingFraction * 1000) / 10 : null,
         reset_at: b.resetTime ? Math.round(Date.parse(b.resetTime) / 1000) : null,
+        // ★ 没它，闲置桶那个永远停在 4h5xm 的倒计时就没有任何标记（`agyResetText` 核身份后才用）。
+        anchor: (b.bucketId && a.quota_anchor?.[b.bucketId]) || undefined,
       })),
   })).filter((g) => g.buckets.length > 0);
-  const ok = groups.length > 0 && !a.quota_err;
+  // 一个数都没有 = 形状不对，仍按读失败处理（同 `agy-quota::parse_quota`）。
+  const ok = groups.some((g) => g.buckets.some((b) => b.remaining_percent != null)) && !a.quota_err;
   return {
     schema: 1, fetched_at: a.quota_at ?? 0, available: ok,
     // ★ 失败时 `quota` 恒 `null`（不是空对象）—— 卡片据此走降级态而不是画一条满格的条。
@@ -156,15 +170,18 @@ const PROBE_FRESH_MS = 8000;
  *   而同机 `.agy-quota.json`（本机 RPC，有采样器）是 **0.4 分钟前** —— 一冷一热。
  *   所以这里加的是**缺失的那一半**，不是把某个数字改小（§7.1：先问信息是不是被丢掉了）。
  *
- * ★ 10 分钟的来历是**实测成本**：一次 `agy-rotate quota` = **18.6s / 3 个号**
- *   （34% CPU，几乎全是网络等待），占空比 18.6s ÷ 10min ≈ 3%。
- *   而 agy 的 5h 窗口每 1% ≈ 3 分钟、周窗口更慢 —— 10 分钟丢不掉任何用户看得见的精度。
- *   ⚠️ 别照抄 `useAgyQuota` 的 2 分钟：那条是**本机 loopback**，零网络零额度，成本差两个量级。
+ * ★ 阀值跟着**实测成本**走：原来一次 `agy-rotate quota` = **18.6s / 3 个号**，所以定了 10 分钟。
+ *   各号改并行后实测 **2.5s / 3 个号**（2026-10-14），用户同日拍板改 **3 分钟**
+ *   （「agy 额度更新不及时」）：5h 窗口每 1% ≈ 3 分钟，10 分钟会让人看到落后约 3 个点的数。
+ *   占空比 2.5s ÷ 3min ≈ 1.4%，零额度消耗。
+ *   ⚠️ 交接稿（`~/Downloads/codexbar-handoff-20261014`）提议在 quotad 里加 agy 循环 —— 没做：
+ *     这里本来就有后台保鲜（10-04 起 1338 次，中位间隔 10.5 分钟），而 Rust 不监视
+ *     `.agy-pool.json` 的 mtime，守护进程写了界面也看不到。慢的是阀值，不是缺触发。
  *
  * ★★ 零额度消耗、**不写钥匙串**（`cmd_quota` 用每个号自己存的 token 逐个取，不切号），
  *   所以后台跑它不会和用户当值的号抢槽 —— 这是它敢自动化的前提，不是顺带的好处。
  */
-const QUOTA_FRESH_MS = 10 * 60 * 1000;
+const QUOTA_FRESH_MS = 3 * 60 * 1000;
 
 /** 心跳只是"到点看一眼岁数"，不过期什么都不做 —— 所以 30s 节拍 ≠ 30s 取一次。 */
 const TICK_MS = 30 * 1000;
@@ -201,9 +218,9 @@ function autoRefreshEnabled(): boolean {
  *      「这次没探到」折叠成「确实没漂移」，那条琥珀告警会因为一次子进程失败而消失。
  */
 export function useAgyPool(enabled: boolean, opts?: {
-  /** ★★ 后台保鲜（用户 2026-09-23 拍板：「app 开着就每 10 分钟刷一次」）。
+  /** ★★ 后台保鲜（用户 2026-09-23 拍板：「app 开着就刷」；间隔 2026-10-14 改 3 分钟，见 `QUOTA_FRESH_MS`）。
    *  只该有**一个** webview 传 true —— 菜单栏：它开机即建、从不卸载，
-   *  两边都开会在同一个 10 分钟边界上各起一次子进程。 */
+   *  两边都开会在同一个阀值边界上各起一次子进程。 */
   background?: boolean;
 }): {
   accounts: AgyPoolAccount[];
@@ -225,7 +242,7 @@ export function useAgyPool(enabled: boolean, opts?: {
   health: () => void;
   /** ★★★ **计费探针 —— 花的是 agy 自己的额度**（起一次 `agy -p`，实测约 15k token）。
    *  回答 `health` 回答不了的那个问题：这个号**真的还能干活吗**。 */
-  probe: (label?: string) => void;
+  probe: (label?: string) => Promise<AgyProbeResult[] | null>;
   /** 按号开关自动轮换。 */
   setRotate: (label: string, on: boolean) => void;
   /** 置顶 / 取消置顶。 */
@@ -384,7 +401,7 @@ export function useAgyPool(enabled: boolean, opts?: {
    * 取一次云端每账号额度。`refresh()`（手动 ↻）与自动保鲜**共用这一条** ——
    * 两条各写一份的话，迟早只有一条带上了 `running` 守卫或广播。
    *
-   * ★ `silent`：自动那次**不点亮按钮转圈**。后台保鲜让整排卡每 10 分钟转一次圈，
+   * ★ `silent`：自动那次**不点亮按钮转圈**。后台保鲜让整排卡每个阀值周期转一次圈，
    *   用户会以为自己碰了什么；而手动点 ↻ 必须立刻有反馈。
    *   ⚠️ 但**失败仍然照常写 `err`** —— 静默的是"忙"，不是"坏了"。
    */
@@ -506,17 +523,22 @@ export function useAgyPool(enabled: boolean, opts?: {
   const renameTo = useCallback((label: string, next: string) =>
     runThen(["rename", label, next]), [runThen]);
   /** 带"正在跑"标记的写操作 —— 探针要 30s+，按钮必须能转圈。 */
-  const runTagged = useCallback((id: string, args: string[]) => {
+  const runTagged = useCallback((id: string, args: string[]): Promise<string | null> => {
     setRunningId(id);
-    void invoke<string>("run_agy_rotate", { args })
-      .then(() => read(true))
-      .catch((e: unknown) => setErr(String(e).slice(0, 200)))
+    return invoke<string>("run_agy_rotate", { args })
+      .then(async (out) => { await read(true); return out; })
+      .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return null; })
       .finally(() => setRunningId(null));
   }, [read]);
-  const health = useCallback(() => runTagged("health", ["health"]), [runTagged]);
-  const probe = useCallback((label?: string) =>
-    runTagged(`probe:${label ?? ""}`, label ? ["probe", label] : ["probe", "--all"]),
-    [runTagged]);
+  const health = useCallback(() => { void runTagged("health", ["health"]); }, [runTagged]);
+  // ★ 走 `--json`：调用方要拿探前/探后的 5h 说「窗口启动了没有」（`agyProbeToast`）。
+  const probe = useCallback(async (label?: string): Promise<AgyProbeResult[] | null> => {
+    const out = await runTagged(`probe:${label ?? ""}`,
+      label ? ["probe", label, "--json"] : ["probe", "--all", "--json"]);
+    if (!out) return null;
+    try { return JSON.parse(out.trim().split("\n").pop() ?? "") as AgyProbeResult[]; }
+    catch (e: unknown) { setErr(`探针输出读不懂：${String(e).slice(0, 80)}`); return null; }
+  }, [runTagged]);
   const setRotate = useCallback((label: string, on: boolean) =>
     runThen(["rotate", label, on ? "--on" : "--off"]), [runThen]);
   const setAuto = useCallback((on: boolean) => {

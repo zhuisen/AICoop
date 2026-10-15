@@ -153,7 +153,9 @@ class NoTwoModelsOfOnePlatformShareAColour(unittest.TestCase):
         root = S.AGY_DB_ROOT
         if not root.is_dir():
             self.skipTest("本机没有 agy 会话库")
-        for p in sorted(root.glob("*.db"))[:80]:
+        # ★ 取**最新**的 80 个，不是按文件名（uuid ≈ 随机）的前 80 个 —— 新模型只出现在新会话里，
+        #   2026-10-14 `gemini-4-argon` 就因为按名字取样而漏过了这条闸。
+        for p in sorted(root.glob("*.db"), key=lambda q: q.stat().st_mtime, reverse=True)[:80]:
             try:
                 con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=2.0)
                 gens = list(con.execute("SELECT data FROM gen_metadata ORDER BY idx"))

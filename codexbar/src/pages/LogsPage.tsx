@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Theme } from "../theme";
 import Seg from "../components/Seg";
@@ -240,8 +240,9 @@ interface Tip {
 }
 
 const LANE_H = 40;
-/** 下半区两栏的统一高度。两边共用**一个**常量 —— 各写一个数迟早只改一边。 */
-const PANEL_H = 320;
+/** 下半区两栏的**最低**高度（两栏共用一个数 —— 各写一个迟早只改一边）。
+ *  2026-10-14 起两栏撑满泳道下面的剩余高度（一屏仪表盘），原来写死 320。 */
+const PANEL_MIN = 120;
 /** 泳道左列宽。★ 字号从 13 提到 14.5 后 96px 会把 `plus4` 截成 `plu…`（截图实证）——
  *  **字号与列宽是同一件事的两半**，只改一边就是在制造截断。名字后面还要放「当前」徽章。 */
 /** 泳道左列宽。★ 三次被字号/徽章追着改，这次按**最坏情况**定死：
@@ -352,8 +353,9 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
           left: pct(s.start),
           width: Math.max(0, pct(s.end) - pct(s.start)),
           // 稿子 §1：色块透明度 = token 密度（.45–1）
-          // ★ Gemini 没有按号 token ⇒ 密度无从谈起，统一中等透明度（不是「很淡 = 用得少」）。
-          op: isAgy ? 0.8 : 0.45 + (s.tokens / Math.max(60, s.end - s.start) / maxDensity) * 0.55,
+          // ★ Gemini 没做过归属（`attributed_pct` 为 null）时密度无从谈起，统一中等透明度（不是「很淡 = 用得少」）。
+          op: isAgy && rot.coverage.attributed_pct == null ? 0.8
+            : 0.45 + (s.tokens / Math.max(60, s.end - s.start) / maxDensity) * 0.55,
         })),
         errs: rot.markers.filter(m => m.acc === a.acc && m.kind === "stream_err").map(m => pct(m.t)),
         cools: rot.markers.filter(m => m.acc === a.acc && m.kind === "cool_429").map(m => pct(m.t)),
@@ -470,10 +472,17 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
    * ★ 而这部分**是花了钱的**：按本仓的计费相位，`stream err` = 已送达上游 = **已计费**。
    *   所以它不只是"统计不全"，是"这些钱看不见"。
    */
+  /** ★ Gemini 的按号 token（2026-10-14）：后端按**会话 id** 精确归属（id 写在哪份 agy 日志里、那份日志是谁）。
+   *  只有后端真做过归属（`attributed_pct` 非 null）才显示数字；否则仍是「—」—— 「没有可归属的」不画成 0。 */
+  const agyTok = !isAgy || rot?.coverage.attributed_pct != null;
   const covNote = isAgy
     ? "Gemini 按**会话**统计：agy 没有代理，看不到逐请求记录。泳道是 agy 以这个号的身份在运行的时段"
-      + "（取自 agy 自己日志里的 `applyAuthResult`），不是「在消耗」。agy 的用量账本不带账号身份，"
-      + "按时间去拼就是猜，所以**不显示按号的 token**。"
+      + "（取自 agy 自己日志里的 `applyAuthResult`），不是「在消耗」。"
+      + (cov && cov.attributed_pct != null
+        ? `token 按**会话 id** 归属（id 写在哪份 agy 日志里、那份日志登录的是谁），`
+          + `已归属 ${cov.responses_with_tokens}/${cov.responses_seen} 次生成`
+          + `（${Math.round(cov.attributed_pct * 100)}%）。对不上的不按时间猜、不计入，所以合计是**下界**。`
+        : "窗口内没有可归属的生成记录。")
       + (cov && cov.responses_unplaced > 0 ? ` 另有 ${cov.responses_unplaced} 场会话认不出身份、未计入。` : "")
     : cov
     ? `已归属 ${cov.responses_with_tokens}/${cov.responses_seen} 次响应`
@@ -595,6 +604,26 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
         </div>
   ) : null;
 
+  const headRef = useRef<HTMLDivElement>(null);
+  const [statsOwnRow, setStatsOwnRow] = useState(false);
+  useLayoutEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    const measure = () => {
+      const kids = Array.from(head.children) as HTMLElement[];
+      const gap = parseFloat(getComputedStyle(head).columnGap) || 0;
+      const natural = (el: HTMLElement) => el.dataset.rotStats != null
+        ? Array.from(el.children).reduce((s, c) => s + (c as HTMLElement).getBoundingClientRect().width, 0)
+        : el.getBoundingClientRect().width;
+      const need = kids.reduce((s, el) => s + natural(el), 0) + gap * (kids.length - 1);
+      setStatsOwnRow(need > head.clientWidth);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(head);
+    return () => ro.disconnect();
+  }, [rot, plat, busy]);
+
   const card: React.CSSProperties = {
     background: t.cardBg, border: `1px solid ${t.cardBorder}`, borderRadius: 13,
   };
@@ -622,7 +651,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
             它和汇总条逐字重复。留着就是同一组数字在同一行说两遍。
           ★ 整行允许 `flexWrap`：窄窗口下汇总条掉到第二行，而不是把标题挤没或横向溢出。
             实测 960px 会折，1200 以上单行 —— 折了仍然可读，挤没了就不可读。 */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12,
+      <div ref={headRef} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12,
                     flexShrink: 0, flexWrap: "wrap", rowGap: 8 }}>
         <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.01em", flexShrink: 0 }}>代理轮换</span>
         <span data-rot-plat style={{ flexShrink: 0 }}>
@@ -630,16 +659,15 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
                label={(v) => (v === "codex" ? "Codex" : "Gemini")} t={t} />
         </span>
 
-        {/* ★ `flex: 1 1 auto` + `minWidth: 0` 是必需的：不给它，这条汇总是**不可收缩**的，
-            于是空间不够时被挤到第二行的会是右边的窗口分段控件（`1h 6h 24h 7d`），
-            那玩意独占一整行看着像画错了。给了之后让位者变成汇总条自己 ——
-            它内部会折成两行，而折行的数字仍然可读。**指定唯一让位者**，同卡片名字那条。 */}
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap",
-                      // ★ `flex: 1 1 **0**` 不是 `auto`：basis=auto 时浏览器优先把**整项换行**
-                      //   （实测 Seg 独占第二行），basis=0 才会让它吃剩余空间、在内部折。
-                      flex: "1 1 0", minWidth: 0, rowGap: 4,
-                      fontFamily: MONO, fontSize: 11.5, color: t.text2 }}>
-          <Stat t={t} v={rot && !isAgy ? fmtTok(rot.kpi.tokens) : "—"} k="token" title={covNote} />
+        {/* ★★ 汇总条**整条不折**：放得下就跟标题同一行，放不下就**整条**移到标题下面单独一行
+            （`order` 排到最后 + 占满整行）。2026-10-14 前它在内部折行 —— 860px 下实测被挤成
+            **竖着的 6 行**，比整条下移难读得多（用户截图：「最小的画面都能标题一行处理完」）。
+            判据在 `statsOwnRow`：按各项的**自然宽度**算，不看当前排布，所以来回切不会抖。 */}
+        <div data-rot-stats={statsOwnRow ? "row" : "inline"}
+             style={{ display: "flex", alignItems: "center", flexWrap: "nowrap",
+                      ...(statsOwnRow ? { order: 1, flexBasis: "100%" } : { flex: "1 1 auto" }),
+                      minWidth: 0, fontFamily: MONO, fontSize: 11.5, color: t.text2 }}>
+          <Stat t={t} v={rot && agyTok ? fmtTok(rot.kpi.tokens) : "—"} k="token" title={covNote} />
           <Stat t={t} v={rot ? String(rot.kpi.requests) : "—"} k={isAgy ? "会话" : "请求"} />
           {!isAgy && <Stat t={t} v={rot ? fmtTok(rot.kpi.avg_tokens) : "—"} k="均/次" />}
           <Stat t={t} v={rot ? String(rot.kpi.rotations) : "—"} k="轮换" />
@@ -792,7 +820,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
                 display: "grid", gridTemplateColumns: "58px 44px 1fr 74px", gap: 8,
                 alignItems: "center", textAlign: "right", fontFamily: MONO,
               }}>
-                <span style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{isAgy ? "—" : fmtTok(l.tokens)}</span>
+                <span style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{agyTok ? fmtTok(l.tokens) : "—"}</span>
                 <span style={{ fontSize: 12.5, color: t.text2, fontVariantNumeric: "tabular-nums" }}>{l.requests}</span>
                 {/* ★ 模型名放不下时截省略号，全名走 title —— 模型名长度不可控
                     （`gpt-5.3-codex-mini` 之类），为它加宽会挤掉右边的额度条。 */}
@@ -835,7 +863,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
               <div style={{ fontSize: 9.5, color: "#8a93a0", marginBottom: 4 }}>{tip.range} · {tip.dur}</div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
                 <span style={{ color: "#c3cad3", fontWeight: 700 }}>{tip.acc}</span>
-                <span style={{ fontWeight: 700, color: t.accent }}>{isAgy ? "" : fmtTok(tip.tokens)}</span>
+                <span style={{ fontWeight: 700, color: t.accent }}>{agyTok ? fmtTok(tip.tokens) : ""}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
                 <span style={{ color: "#8a93a0" }}>{isAgy ? "会话" : "请求"}</span><span style={{ color: "#c3cad3" }}>{tip.requests} {isAgy ? "场" : "次"}</span>
@@ -844,7 +872,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
                 {tip.models.length === 0 && (
                   // ★ 「这段没有归属到 token」不是 0 —— 请求可能失败(没有响应就没有 token 记录),
                   //   或者那些响应没走代理。写 0 会被读成"这段白跑了"。
-                  <div style={{ fontSize: 9.5, color: "#8a93a0" }}>{isAgy ? "agy 不按号记 token" : "该时段无归属到的 token"}</div>
+                  <div style={{ fontSize: 9.5, color: "#8a93a0" }}>{agyTok ? "该时段无归属到的 token" : "窗口内没有可归属的生成"}</div>
                 )}
                 {tip.models.map((m, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9.5, marginTop: 2 }}>
@@ -880,7 +908,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
             少了 `minHeight:0`，flex 子项的默认 `min-height:auto` 会让它撑破容器而**不滚动**
             （本仓菜单栏那次「裁切比溢出更糟」同一个坑）。 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12,
-                    flexShrink: 0, height: PANEL_H }}>
+                    flex: "1 1 0", minHeight: PANEL_MIN }}>
         <div style={{ ...card, padding: "12px 16px", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 8, flexShrink: 0 }}>
             <span style={{ fontSize: 14.5, fontWeight: 700 }}>轮换事件</span>

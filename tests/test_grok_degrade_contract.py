@@ -67,11 +67,13 @@ class FakeUpstream:
         self.status = 200
         self.body = json.dumps(GOOD_PAYLOAD).encode()
         self.hits = 0
+        self.paths = []
         outer = self
 
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):                      # noqa: N802 — BaseHTTPRequestHandler 的约定
                 outer.hits += 1
+                outer.paths.append(self.path)
                 outer.last_path = self.path
                 outer.last_headers = dict(self.headers)
                 self.send_response(outer.status)
@@ -163,9 +165,14 @@ class GrokDegradeContract(unittest.TestCase):
         self.assertIsNone(acc["last_good"])
 
     def test_only_get_and_correct_path(self):
+        """2026-10-15 起成功读完额度后还会读一次 `/v1/settings`（套餐名，一天一次）——
+        所以判据从「最后一个路径是账单」改成「先打账单，且只打这两条」。只 GET 由 `do_GET` 唯一处理保证。"""
         self.up.status, self.up.body = 200, json.dumps(GOOD_PAYLOAD).encode()
+        n = len(self.up.paths)
         self.run_tool(self.write_auth("ok2.json"))
-        self.assertEqual(self.up.last_path, "/v1/billing?format=credits")
+        got = self.up.paths[n:]
+        self.assertEqual(got[0], "/v1/billing?format=credits")
+        self.assertLessEqual(set(got), {"/v1/billing?format=credits", "/v1/settings"})
         self.assertEqual(self.up.last_headers.get("x-xai-token-auth"), "xai-grok-cli")
 
     # ---- 失败态 ------------------------------------------------------------

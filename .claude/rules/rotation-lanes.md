@@ -71,8 +71,11 @@ paths:
   —— React 的 `onMouseEnter` 是合成事件，靠根节点 mouseover 委托。
 - ★★ **Gemini 版块（`traffic/agy_rotation.py`，2026-09-24，B71）口径与 codex 版不同，别互相照抄**：
   段 = **agy 以这个号的身份在运行**（`cli-*.log` 文件名时间 → mtime），不是逐请求；身份只认 agy 自己日志的
-  `applyAuthResult: email=`，**认不出就不归属**（计 `responses_unplaced`，不按时间猜）。**token 恒 0**
-  —— agy 的用量账本不带身份，前端显示「—」。日表「在岗」必须取**区间并集**（本机常有多个 agy 同号并发，
+  `applyAuthResult: email=`，**认不出就不归属**（计 `responses_unplaced`，不按时间猜）。
+  ~~token 恒 0~~ **2026-10-14 起按会话 id 精确归属**：会话库 `<conv>.db` 的 id 会写进启动它的那份 `cli-*.log`，
+  那份日志此刻的 `applyAuthResult` 就是身份（实测 24h 332/332 归属；3 个 `agy --as` 已知样本 3/3 对上）。
+  id 不在任何日志里 / 两份日志对出两个号 ⇒ **不归属**，合计是下界。token = 未缓存输入 + 缓存读 + 输出（同 codex 泳道含缓存读）。
+  覆盖受日志保留期限制（本机日志只留约一周）。日表「在岗」必须取**区间并集**（本机常有多个 agy 同号并发，
   求和实测一天 139,633s）。身份变了却无换号记录 = **drift**，与 switch 分开报。Gemini 版的 `rot.log`
   就是 `agy.log` 的换号行，运行日志里**不再并一次**（否则每行两遍且错标 proxy）。harness：`?agyrot=fail`。
   闸 `tests/test_agy_rotation_lanes.py`。

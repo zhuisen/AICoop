@@ -1,9 +1,11 @@
 import Ring from "./Ring";
 import GrokStaleMark from "./GrokStaleMark";
 import { CardBadgeGhost } from "./CardBadge";
-import { CARD_TYPE as Z, type Theme } from "../theme";
+import { type Theme } from "../theme";
+import { useCardType } from "../hooks/useCardType";
 import type { GrokSnapshot, GrokAccount } from "../grok";
-import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible } from "../grok";
+import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible, grokBadgePlan } from "../grok";
+import PlanBadge from "./PlanBadge";
 import { fmtEta, fmtAgo, maskId, winNumColor } from "../helpers";
 
 const MONO = "'JetBrains Mono'";
@@ -48,6 +50,7 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
   disabled?: boolean;
   onOpen?: () => void;
 }) {
+  const Z = useCardType();
   // ★ 没装 grok / 已停用 ⇒ **零像素**。见 `grokQuotaVisible` 的注释。
   //   `err` 也在这之后判:取不到快照时我们分不清"这机器有没有 grok",
   //   对没装的人保持安静比报一个他看不懂的错更有价值。
@@ -70,7 +73,7 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
     <div onClick={onOpen} style={{
       position: "relative", background: t.cardBg,
       border: `1px solid ${hexA(color, .30)}`, borderRadius: 12,
-      padding: "16px 14px 12px", display: "flex", flexDirection: "column",
+      padding: Z.pad, display: "flex", flexDirection: "column",
       cursor: onOpen ? "pointer" : "default", userSelect: "none",
       transition: "background .2s ease, border-color .2s ease",
     }}>
@@ -102,9 +105,11 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
           </span>
         </Ring>
 
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ fontSize: Z.name, fontWeight: 700, color }}>grok</span>
+            {/* 套餐名（2026-10-15，`/v1/settings` 的 `subscription_tier_display`）。同 codex 的 PRO / agy 的 ULTRA。 */}
+            <PlanBadge plan={grokBadgePlan(a)} t={t} size={Z.planBadge} />
             {/* 与旁边三张卡唯一需要的区别:它们能切,这张不能。 */}
             <span title="grok 不在轮换池,只显示额度,不参与切号"
                   style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", borderRadius: 5,
@@ -162,15 +167,23 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
           {/* ★ 字号写在**文字自己**身上，不写在容器上：容器一改字号，里面那个行内占位盒的
               strut 就跟着变矮（实测差 2px），而账号卡的同位置容器没设字号 ——
               同一个占位盒在两张卡里会量出两个高度，对齐就差这 2px。 */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6,
-                        marginTop: 5, paddingTop: 7, borderTop: `1px solid ${t.divider}`,
+          {/* ★ 页脚**一行**，与账号卡的「到期 … 重置卡」同形（2026-10-15）：原来是竖排两行
+              （文字 + 下面一行隐形占位），卡底多出 ~26px 空白。
+              健康态也写读数时刻（用户 2026-10-15「卡片显示读数时间」）—— 原来只有降级时才说，
+              平时看不出这个数是几分钟前的。时刻取快照的 `fetched_at`：可用时它就是这次读数的时刻。 */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                        gap: 8, flexWrap: "nowrap", minWidth: 0,
+                        marginTop: Z.footTop, paddingTop: Z.footPad, borderTop: `1px solid ${t.divider}`,
                         color: degraded ? "#E0901C" : t.muted }}>
-            <span style={{ fontSize: Z.exp, fontFamily: MONO, whiteSpace: "nowrap",
-                         overflow: "hidden", textOverflow: "ellipsis" }}>{degraded
+            <span data-grok-read-at title="xAI 账单 · 不在轮换池"
+                  style={{ fontSize: Z.exp, fontFamily: MONO, whiteSpace: "nowrap", flex: "0 0 auto", maxWidth: "100%",
+                           overflow: "hidden", textOverflow: "ellipsis" }}>{degraded
               ? (lgRem != null ? `${fmtAgo(a?.last_good?.fetched_at)}的读数` : "额度暂时读不到")
-              : "xAI 账单 · 不在轮换池"}</span>
+              : (snap?.fetched_at ? `xAI 账单 · ${fmtAgo(snap.fetched_at)}` : "xAI 账单 · 不在轮换池")}</span>
             {/* grok 没有重置卡这个概念，占位只为让页脚与账号卡等高（见 CardBadgeGhost 说明）。 */}
-            <span style={{ alignSelf: "flex-end" }}><CardBadgeGhost /></span>
+            {/* 隐形占位先让、文字不缩（只靠 maxWidth 兜底截断）：按权重分摊时文字也会被削掉
+                零点几像素，那就足够触发省略号（实测 1200 宽「1 分钟…」）。 */}
+            <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", display: "flex", justifyContent: "flex-end" }}><CardBadgeGhost /></span>
           </div>
         </div>
       </div>

@@ -3,7 +3,10 @@ import type { Theme } from "../theme";
 import type { Board, BoardAcct } from "../hooks/useRotationBoard";
 import Ring from "./Ring";
 import PlanBadge from "./PlanBadge";
+import { agyBadgePlan } from "../agy";
 import { maskId } from "../helpers";
+import { burstTitle, eta5hTitle, fmtEtaMin, splitUse } from "../eta5h";
+import { fitSignature, segFits } from "../runwayFit";
 
 const MONO = "'JetBrains Mono'";
 
@@ -26,7 +29,9 @@ const MONO = "'JetBrains Mono'";
  * **还能撑多久** —— 用 `state.json` 的 `quota_marks`（额度跨整数百分点时记一条）算消耗速度。
  *
  * ★★★ 口径必须跟着数字一起显示，否则就是骗人：
- *   · 那是 **活跃小时**不是自然小时 —— 没在用 codex 的时候池子一点不掉；
+ *   · 那是**钟点小时**，按最近 ≤24h 的平均速度（含空闲）算 —— 2026-10-15 前这里写「活跃小时」，
+ *     而分母一直是钟点跨度，标签与公式不符；
+ *   · 续航长过最早那次周重置时只说「撑得到重置」（那之前池子见不了底）；
  *   · 样本数写出来；取不到时显示 `—` 而**绝不写 0**（「算不出来」与「撑不了多久」相反）。
  *
  * ## ★★ 高度是硬约束（用户：「不要增加目前的 banner 高度，可以降低但不能增加」）
@@ -61,6 +66,11 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
    *   本仓规矩：**告警放在眼睛已经在的地方，且文本要说「做什么」**。这里就是那个地方。
    */
   const stranded = board.queue.length === 0;
+  const burst = board.burst ?? null;
+  /** 5h 一整窗连续用多久见底。★ 这里讲的是**全池**，优先取按全池历史算的那份；
+   *  没有（每个号都够 3 次、各用各的）才退到正在用的号。agy 恒为 null。 */
+  const accts = [board.cur, ...board.queue, ...board.rest];
+  const eta = accts.find((e) => e?.eta5h?.scope === "pool")?.eta5h ?? board.cur?.eta5h ?? null;
   /** 最早什么时候有号回来。只看冷却中的 —— 停用/失效不会自己恢复。 */
   const backInMin = board.rest.reduce<number | null>(
     (a, e) => (e.cool_min > 0 ? (a == null ? e.cool_min : Math.min(a, e.cool_min)) : a), null);
@@ -101,21 +111,31 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
    */
   const barRef = useRef<HTMLDivElement>(null);
   const [barW, setBarW] = useState(0);
+  /** 段权重与名字 —— 与下面 `seg` / 不可用段渲染时用的**同一组**数。 */
+  const fitItems: [number, string][] = [
+    ...board.queue.map((e): [number, string] => [Math.max(e.weekly ?? 1, 5), e.label ?? ""]),
+    ...(board.rest.length ? [[restW, `不可用 ${board.rest.length}`] as [number, string]] : []),
+  ];
+  const fitKey = `${total}|${fitItems.map(([w, l]) => `${w}:${l}`).join(",")}`;
+  const fitRef = useRef({ items: fitItems, total });
+  fitRef.current = { items: fitItems, total };
   useEffect(() => {
     const el = barRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setBarW(el.clientWidth));
+    // ★ 签名（哪几段写得下名字）变了才 setState；否则拖窗口时每像素重渲染整块续航条。
+    //   存下的 `barW` 与当前宽度签名相同，所以按它渲染的结果与按当前宽度渲染的完全一致。
+    let last: string | null = null;
+    const check = () => {
+      const w = el.clientWidth;
+      const sig = fitSignature(fitRef.current.items, fitRef.current.total, w);
+      if (sig !== last) { last = sig; setBarW(w); }
+    };
+    const ro = new ResizeObserver(check);
     ro.observe(el);
-    setBarW(el.clientWidth);
+    check();
     return () => ro.disconnect();
-  }, []);
-  /** 9px JetBrains Mono 700 的字宽：ASCII 约 5.6px，CJK 是整个字身 9px。 */
-  /** ⚠️ 字宽随字号一起从 9px 抬到 10px（2026-09-21 色带加粗）——**这两个数必须一起改**，
-   *  否则「装不装得下名字」按错的字宽判，窄段上又会冒出被裁一半的名字。 */
-  const textW = (s2: string) =>
-    [...s2].reduce((a, c) => a + (c.charCodeAt(0) > 255 ? 10 : 6.2), 0);
-  const fits = (w: number, label: string) =>
-    barW > 0 && (w / total) * barW >= textW(label) + 8;
+  }, [fitKey]);
+  const fits = (w: number, label: string) => segFits(w, total, barW, label);
 
   const seg = (e: BoardAcct, i: number, dim: boolean) => (
     <span key={e.aid} data-runway-seg title={dim
@@ -190,7 +210,7 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
               临时借用
             </span>
           )}
-          <PlanBadge plan={cur.plan ?? ""} t={t} size={9} />
+          <PlanBadge plan={agy ? agyBadgePlan(cur.plan) : cur.plan ?? ""} t={t} size={9} />
           <span style={{ fontSize: 11, color: t.text2, fontFamily: MONO, minWidth: 0,
                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {maskId(cur.email ?? "", privacy)}
@@ -200,7 +220,9 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
                       color: t.text2, fontFamily: MONO, flexWrap: "wrap", rowGap: 2 }}>
           {cur.wins.map((w) => (
             <span key={w.label} style={{ whiteSpace: "nowrap" }}>
-              {w.label} <b style={{ color: sc }}>{w.rem}%</b>
+              {w.label} {w.rem == null
+                ? <b style={{ color: t.muted }} title="上游没给剩余比例 —— 读不到，不是满也不是空">—</b>
+                : <b style={{ color: sc }}>{w.rem}%</b>}
               {w.reset && <span style={{ color: t.muted }}> ↻{w.reset}</span>}
             </span>
           ))}
@@ -237,24 +259,52 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
               )}
             </>
           ) : (
+          !agy ? (
+          /* ★★★ codex 按**连续使用时间**（2026-10-15 用户：「全池续航≈98.6 小时，为什么还是那么多？
+              实际使用下来会出现不到半小时几张账号额度都没了」）。钟点小时把空闲平均进去：
+              一个 Plus 号 5h 连续 ~4 分钟就见底，全池每 5 小时只给 ~25 分钟。 */
+          <>
+          <span style={{ fontSize: 9.5, color: t.muted, fontFamily: MONO }}>现在能连续用</span>
+          <span data-runway-hours style={{ fontSize: 19, fontWeight: 700, fontFamily: MONO,
+                                           fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>
+            {burst ? `≈ ${splitUse(burst.now_min)[0]}` : "—"}
+          </span>
+          <span data-runway-unit style={{ fontSize: 10.5, color: t.text2 }}>
+            {burst ? splitUse(burst.now_min)[1] : ""}
+            {burst?.refill_h != null && ` · ${fmtRefill(burst.refill_h)} 后有号回满`}
+          </span>
+          <span data-burst-week title={burst ? burstTitle(burst, board.weekly_left_pp) : undefined}
+                style={{ fontSize: 9.5, color: t.muted, fontFamily: MONO, marginLeft: "auto",
+                         whiteSpace: "nowrap", cursor: burst ? "help" : undefined }}>
+            本周 {burst?.week_min != null ? `≈ ${splitUse(burst.week_min).join(" ")}` : "—"}
+            {eta && (
+              <span data-eta5h title={eta5hTitle(eta)}> · 5h 一窗≈{fmtEtaMin(eta.per_window_min)}</span>
+            )}
+          </span>
+          </>
+          ) : (
           <>
           <span style={{ fontSize: 9.5, color: t.muted, fontFamily: MONO }}>全池续航</span>
           {/* ★★ 取不到写 `—` **绝不写 0** —— 0 会被读成「快没了」，与「算不出来」相反。 */}
           <span data-runway-hours style={{ fontSize: 19, fontWeight: 700, fontFamily: MONO,
                                            fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>
-            {board.runway_active_hours == null ? "—" : `≈ ${board.runway_active_hours}`}
+            {board.runway_hours == null ? "—"
+              : board.outlasts_reset ? "撑得到重置" : `≈ ${board.runway_hours}`}
           </span>
           {/* ★ 单位有自己的钩子（`data-runway-unit`）而不是靠全条文本匹配：
-              下面那行披露里也有「活跃小时」四个字，拿整条 textContent 断言的话，
+              下面那行披露里也有同样的词，拿整条 textContent 断言的话，
               **把这里整个删掉闸照样绿**（本仓空守卫形态③：断言打在了另一个元素上）。 */}
-          <span data-runway-unit style={{ fontSize: 10.5, color: t.text2 }}>活跃小时</span>
+          <span data-runway-unit style={{ fontSize: 10.5, color: t.text2 }}>
+            {board.runway_hours != null && board.outlasts_reset && board.first_reset_h != null
+              ? `${fmtH(board.first_reset_h)}后有号周额度回满` : "小时"}
+          </span>
           <span style={{ fontSize: 9.5, color: t.muted, fontFamily: MONO, marginLeft: "auto",
                          whiteSpace: "nowrap" }}>
             周窗共剩 {board.weekly_left_pp}pp
-            {board.burn_pp_per_active_hour != null && ` · ${board.burn_pp_per_active_hour}pp/h`}
+            {board.burn_pp_per_hour != null && ` · ${board.burn_pp_per_hour}pp/h`}
           </span>
           </>
-          )}
+          ))}
         </div>
         <div data-runway-bar ref={barRef} style={{ display: "flex", gap: 2, marginTop: 4,
                                       borderRadius: 6, overflow: "hidden" }}>
@@ -282,7 +332,7 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
         <div data-runway-note style={{ fontSize: 9.5, color: t.muted, marginTop: 3,
                                        fontFamily: MONO, whiteSpace: "nowrap", overflow: "hidden",
                                        textOverflow: "ellipsis" }}>
-          {/* ★★ 按 `runway_active_hours == null` 分支，**不是** `samples > 0`。
+          {/* ★★ 按 `runway_hours == null` 分支，**不是** `samples > 0`。
               两者能分开：样本有几条、但跨度不够半小时时速度照样算不出来 ——
               旧写法此时显示「3 条样本 · 活跃小时不是自然小时」，而上面那个数是「—」，
               **用户看到一个破折号却拿不到任何原因**。变异验证时发现：
@@ -292,10 +342,15 @@ export default function RunwayHero({ t, board, privacy, source = "codex" }: {
           {stranded
             ? `${nCool} 个${agy ? "额度见底" : "冷却中"} · ${nOff} 个你已停用 · ${nDead} 个凭证失效`
               + (nOff > 0 ? " —— 想立刻继续用，把某个停用的号在它卡片上打开轮换" : "")
-            : board.runway_active_hours == null
+            : !agy
+            ? (burst ? `连续使用时间 · 按 ${burst.events} 次 5h 用完的配速 · 间隔 >5 分钟算闲置`
+                       + (burst.wk_per_5h != null ? ` · 5h 1pp≈周 ${burst.wk_per_5h}pp` : " · 周换算样本还不够")
+                     : "连续使用时间算不出来 —— 还没有 3 次 5h 用完的历史，不是「撑不了多久」")
+            : board.runway_hours == null
             ? (agy ? "续航算不出来 —— Gemini 还没有可估消耗速度的记录，不是「撑不了多久」"
                    : `续航算不出来 —— 不是「撑不了多久」（样本 ${board.samples} 条，还不够估速度）`)
-            : `${board.samples} 条样本 · 活跃小时不是自然小时`
+            : `按近 ${board.rate_span_h}h 平均速度（含空闲）· ${board.samples} 条样本`
+              + (board.outlasts_reset ? ` · 照这速度要 ${board.runway_hours}h` : "")
               + (board.last_sample_min != null ? ` · 最后一条 ${fmtAgo(board.last_sample_min)}` : "")}
         </div>
       </div>
@@ -312,4 +367,15 @@ function fmtAgo(min: number): string {
   if (min < 60) return `${min} 分钟前`;
   const h = Math.floor(min / 60);
   return h < 24 ? `${h} 小时前` : `${Math.floor(h / 24)} 天前`;
+}
+
+/** 5h 回满还要多久：不到 1 小时按分钟，否则一位小数小时。 */
+function fmtRefill(h: number): string {
+  return h < 1 ? `${Math.max(1, Math.round(h * 60))}m` : `${h.toFixed(1)}h`;
+}
+
+/** 小时 → 「5h」/「2d6h」。 */
+function fmtH(h: number): string {
+  const r = Math.round(h);
+  return r < 24 ? `${r}h` : `${Math.floor(r / 24)}d${r % 24 ? `${r % 24}h` : ""}`;
 }

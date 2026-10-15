@@ -149,7 +149,10 @@ class TheThingsDeliberatelyLeftOut(unittest.TestCase):
         allowed = set(re.findall(r'"([a-z-]+)"', m.group(1)))
         self.assertNotIn("login", allowed, "★★★ GUI 能跑 login —— 必然挂死")
         self.assertTrue(allowed <= {"quota", "switch", "live", "rename", "remove", "pin", "borrow",  # pin/borrow 2026-09-24 审过：只写池、不联网、不起 agy
-                                    "health", "probe", "rotate", "auto-switch"},
+                                    "health", "probe", "rotate", "auto-switch",
+                                    # dawn-probe 2026-10-15 审过：--status/--enable/--disable/--time 只写池；
+                                    # --no-wait 起的是与 `probe` 同一条 `agy -p`（非交互、不睡），默认关
+                                    "dawn-probe"},
                         f"★★ 白名单里有没审过的子命令: {sorted(allowed)}")
 
 

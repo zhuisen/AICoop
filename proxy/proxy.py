@@ -795,7 +795,7 @@ def _record_quota(aid, headers, status=None):
 
     def f(s):
         if aid in s.get("slots", {}):
-            prev = (((s["slots"][aid].get("quota") or {}).get("primary") or {}).get("used_percent"))
+            old_q = s["slots"][aid].get("quota") or {}
             if complete:
                 s["slots"][aid]["quota"] = q
                 s["slots"][aid]["quota_status"] = "ok"
@@ -807,11 +807,79 @@ def _record_quota(aid, headers, status=None):
             # 目的是攒「每 1% 对应多少 token」的样本,判定额度计量到底算不算缓存命中的部分 ——
             # 这一条决定了会话粘性/迟滞是省额度还是只省钱(订阅制下后者=什么也没省)。
             # 现有证据只有 n=3、Δ% 只有 2~3(整数量化 ±50%),不足以下结论。
-            if complete and prev is not None and pu is not None and pu != prev:
-                s.setdefault("quota_marks", []).append(
-                    {"aid": aid, "t": round(time.time(), 1), "from": prev, "to": pu})
-                del s["quota_marks"][:-400]      # 上界,避免 state.json 无限长
+            # ★★ 2026-10-15 起**两个窗口都记、且带 `w`(窗口分钟)**。此前只记 primary、不带窗口 ——
+            #    而 primary 在 Plus 上是 5h、在 Pro 上是周,`_runway` 却拿它当周消耗去除周余量:
+            #    实测 24h 里 457 pp 全是 Plus 的 5h,周窗口同期约 4.4 pp/h,续航被低估约 4 倍。
+            if complete:
+                marks = s.setdefault("quota_marks", [])
+                t = round(time.time(), 1)
+                for key in ("primary", "secondary"):
+                    ow, nw = old_q.get(key) or {}, q.get(key) or {}
+                    a, b = ow.get("used_percent"), nw.get("used_percent")
+                    w = nw.get("window_minutes")
+                    if a is None or b is None or a == b or not w or ow.get("window_minutes") != w:
+                        continue
+                    marks.append({"aid": aid, "t": t, "from": a, "to": b, "w": w})
+                    # ★ 5h 窗口刚用完（跨进 ≥99）⇒ 记一条「用完」事件（`exhaust_log`）。
+                    #   marks 只留 ~48h，预测要的是**历史用完的次数**，得单独长期存。
+                    if w < 1000 and a < 99 <= b:
+                        ev = [e for e in _exhaust_events(marks) if e["aid"] == aid and e["t"] == t]
+                        if ev:
+                            log = s.setdefault("exhaust_log", [])
+                            log.append(ev[-1])
+                            del log[:-EXHAUST_LOG_MAX]
+                del marks[:-800]      # 上界,避免 state.json 无限长（两个窗口都记,800 ≈ 原来 400 的时长）
     _mutate_state(f)
+
+
+#: 「5h 用完」事件最多留多少条（每条 ~90 字节）。
+EXHAUST_LOG_MAX = 200
+#: 两条 5h mark 间隔超过它 = 中间闲着，这段**不算进使用时间**（预测的单位是「连续使用的分钟」）。
+EXHAUST_IDLE_SECS = 300
+#: 一次用完事件里，在连续使用段内至少看到这么多 pp 才算数（太少的配速是噪声）。
+EXHAUST_MIN_PP = 20
+
+
+def _exhaust_events(marks, legacy_5h=None):
+    """quota_marks → 「5h 用完」事件 `[{aid, t, active_s, pp}]`（纯函数，`codex-rotate next` 回填也用它）。
+
+    按号把 5h mark 切成窗口（已用 % 回落 = 重置；间隔 > 5h = 必然换了窗口），
+    走到 ≥99 的那一段就是一次「用完」。`active_s` 只累加间隔 ≤ `EXHAUST_IDLE_SECS` 的段 ——
+    钟点时长里混着吃饭睡觉，配速得按**真在用**的时间算。
+    `legacy_5h`：2026-10-15 前的 mark 不带 `w`，只有这个集合里的号（当前 primary 就是 5h）才认。
+    """
+    by = {}
+    for m in marks or []:
+        if not isinstance(m, dict) or not m.get("t") or m.get("to") is None or m.get("from") is None:
+            continue
+        w = m.get("w")
+        if (w is not None and w >= 1000) or (w is None and m.get("aid") not in (legacy_5h or ())):
+            continue
+        by.setdefault(m["aid"], []).append(m)
+    out = []
+    for aid, ms in by.items():
+        seg = []
+
+        def close(seg):
+            if len(seg) < 2 or seg[-1]["to"] < 99:
+                return
+            act = pp = 0.0
+            for x, y in zip(seg, seg[1:]):
+                g = y["t"] - x["t"]
+                if g <= EXHAUST_IDLE_SECS:
+                    act += g
+                    pp += y["to"] - y["from"]
+            if pp >= EXHAUST_MIN_PP and act > 0:
+                out.append({"aid": aid, "t": seg[-1]["t"], "active_s": round(act, 1), "pp": pp})
+
+        for m in sorted(ms, key=lambda m: m["t"]):
+            if seg and (m["to"] < m["from"] or m["t"] - seg[-1]["t"] > 5 * 3600):
+                close(seg)
+                seg = []
+            if m["to"] > m["from"]:
+                seg.append(m)
+        close(seg)
+    return out
 
 
 class SendFailed(Exception):

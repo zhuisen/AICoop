@@ -36,8 +36,9 @@ export interface AgyBucket {
   bucket_id: string | null;
   /** 上游原词：`"weekly"` / `"5h"`。转展示标签走 `agyWinLabel`，别在调用点写 switch。 */
   window: string | null;
-  /** ★★ 0–100 的**剩余**百分比。与 grok 的 `used_percent` 方向相反。 */
-  remaining_percent: number;
+  /** ★★ 0–100 的**剩余**百分比。与 grok 的 `used_percent` 方向相反。
+   *  `null` = 桶在、上游没给数（proto3 省略零值 ⇒ 可能正是 0）。**读不到，不是满也不是空**。 */
+  remaining_percent: number | null;
   reset_at: number | null;
   /** 锚点账本对这个桶的判定（`traffic/quota_anchors.py`，由 `agy-quota` 写）。
    *  ★ agy 是「闲置桶的 `resetTime` 跟着 now 滑」最典型的那个：没有它，这里渲染的
@@ -122,8 +123,76 @@ export function agyBuckets(q: AgyQuota | null | undefined): { group: string | nu
 export function agyTightest(q: AgyQuota | null | undefined): { group: string | null; b: AgyBucket } | null {
   const all = agyBuckets(q);
   if (!all.length) return null;
-  return all.reduce((a, x) => (x.b.remaining_percent < a.b.remaining_percent ? x : a));
+  // ★ 有一格读不到，「最紧」就不知道 —— 缺的那格可能正是 0。读不到的那格胜出（环上画「—」）。
+  return all.find(x => x.b.remaining_percent == null)
+    ?? all.reduce((a, x) => ((x.b.remaining_percent as number) < (a.b.remaining_percent as number) ? x : a));
 }
+
+/** 取额度被 Google 拒绝时**该做什么**（来自错误体的 `ErrorInfo.reason` + 验证链接，`agy/pool.py::parse_google_error`）。
+ *  ★ 不进 `AgyReason` 闭集：那是 `agy-quota`（本机 RPC）的契约，本机 RPC 不会回这几种。 */
+export interface AgyAction { label: string; note: string; url: string | null }
+
+export function agyAction(reason: string | null | undefined, url: string | null | undefined): AgyAction | null {
+  const u = url ?? null;
+  switch (reason) {
+    case "VALIDATION_REQUIRED":
+      return { label: "需验证", url: u,
+        note: "Google 要求先验证这个号才放行（403 VALIDATION_REQUIRED）。这不是「额度耗尽」，重试也不会好："
+          + (u ? "点「需验证 →」在浏览器里完成验证，再点 ↻。"
+               : "用这个号起一次 agy，按它给的链接完成验证，再点 ↻。") };
+    case "SUBSCRIPTION_REQUIRED":
+      return { label: "无许可", url: u,
+        note: "这个号没有 Antigravity 的有效许可（403 SUBSCRIPTION_REQUIRED）。这不是「额度耗尽」，"
+          + "重试不会好：给它开通，或在卡片上把它摘出轮换。" };
+    default:
+      return u ? { label: "需处理", url: u,
+        note: `Google 拒绝了额度请求（${reason ?? "无 reason"}）并附了处理链接。这不是「额度耗尽」：`
+          + "点「需处理 →」看它要什么，再点 ↻。" } : null;
+  }
+}
+
+/**
+ * agy 账号的档位徽章画什么。★ **只画 ULTRA**（用户 2026-10-15 选定）：池里多数是 Pro，
+ * 同 codex「Plus 是多数就不画」的口径 —— 只给少数派打标。数据来自 `loadCodeAssist` 的 `paidTier`
+ * （`agy/pool.py::plan_of`），读不到就是 null，不画（不猜成 Pro）。
+ */
+export function agyBadgePlan(plan: string | null | undefined): string {
+  return plan === "ultra" ? "ultra" : "";
+}
+
+/** `agy-rotate probe --json` 的一条。`q5h` = 探前/探后的 Gemini 5h（百分比），读不到为 null。 */
+export interface AgyProbeResult {
+  label: string; ok: boolean; note: string;
+  q5h?: { before: number; after: number | null; reset: number | null; started: boolean } | null;
+}
+
+/** 探针结果 → 一句 toast。★ 用户要看的是「探完 5h 窗口启动了没有」（2026-10-15，同 codex 探针的用法）。
+ *  没读到就说没读到；没下降不说「启动了」—— 那是把一个假倒计时说成真的。 */
+export function agyProbeToast(rs: AgyProbeResult[]): string {
+  const hm = (ts: number | null) => {
+    if (!ts) return "?";
+    const d = new Date(ts * 1000);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const one = (r: AgyProbeResult): string => {
+    if (!r.ok) return `✗ ${r.label} · ${r.note.slice(0, 60)}`;
+    const q = r.q5h;
+    if (!q || q.after == null) return `✓ ${r.label} · 5h 没读到，无法判断窗口是否启动`;
+    if (q.started) return `✓ ${r.label} · 5h ${q.before.toFixed(1)}% → ${q.after.toFixed(1)}% · 窗口已启动，${hm(q.reset)} 重置`;
+    return `✓ ${r.label} · 5h 仍 ${q.after.toFixed(1)}%，未见下降（稍后 ↻ 再看）`;
+  };
+  if (rs.length === 1) return one(rs[0]);
+  const ok = rs.filter(r => r.ok);
+  const started = ok.filter(r => r.q5h?.started).length;
+  const bad = rs.filter(r => !r.ok).map(r => r.label);
+  return `探针 ${ok.length}/${rs.length} 可用 · 5h 已启动 ${started} 个`
+    + (bad.length ? ` · 失败：${bad.join("、")}` : "");
+}
+
+/** 桶在、数没给时，卡与菜单栏行共用的一句话（两个 surface 一份文案）。 */
+export const AGY_UNKNOWN_TITLE =
+  "上游这一格没给剩余比例 —— 读不到，不是满也不是空（proto3 会省略 0，所以可能正是见底）。"
+  + "选号把这个号排在有读数的号之后；点 ↻ 重取一次。";
 
 /**
  * 按窗口聚合成卡片上的条形行：每个窗口标签一行，取该窗口下**最紧**的那组。
@@ -133,7 +202,8 @@ export function agyTightest(q: AgyQuota | null | undefined): { group: string | n
  * 全 4 行铺开会把卡片撑高，破坏九宫格里与账号卡的对齐（那个对齐是像素级调过的）。
  */
 export interface AgyWinRow {
-  label: string; remaining: number; group: string | null; reset_at: number | null;
+  /** `null` = 这个窗口有桶读不到（见 `AgyBucket.remaining_percent`）。 */
+  label: string; remaining: number | null; group: string | null; reset_at: number | null;
   anchor?: AnchorVerdict;
   /** 见 `AgyBucket.seen_at` —— 有值 = 这是**上次看到的**读数，必须降级显示。 */
   seen_at?: number;
@@ -144,7 +214,8 @@ export function agyWinRows(q: AgyQuota | null | undefined): AgyWinRow[] {
   for (const { group, b } of agyBuckets(q)) {
     const label = agyWinLabel(b.window);
     const cur = byWin.get(label);
-    if (!cur || b.remaining_percent < cur.remaining) {
+    const r = b.remaining_percent;
+    if (!cur || (cur.remaining != null && (r == null || r < cur.remaining))) {
       // ★ `anchor` 必须跟着桶一起带下来。丢了它，行上渲染的就还是那个
       //   永远停在 4h5xm 的倒计时 —— 后端算了、前端没接，正是本仓点名的孤儿字段。
       byWin.set(label, { label, remaining: b.remaining_percent, group, reset_at: b.reset_at,

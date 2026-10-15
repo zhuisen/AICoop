@@ -2,14 +2,17 @@ import Ring from "./Ring";
 import DragHandle, { type DragWiring } from "./DragHandle";
 import StaleMark from "./StaleMark";
 import { CardBadgeGhost } from "./CardBadge";
-import { CARD_TYPE as Z, type Theme } from "../theme";
+import { type Theme } from "../theme";
+import { useCardType } from "../hooks/useCardType";
 import type { AgySnapshot } from "../agy";
 import {
-  agyShown, agyTightest, agyWinRows, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText,
+  AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyWinRows, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText,
 } from "../agy";
 import { fmtAgo, fmtResetDate, winNumColor } from "../helpers";
 import { IconBtn, IcPen, IcTrash, IcRotate, IcPin } from "./CardIcons";
 import ProbeButton from "./ProbeButton";
+import AgyActionLink from "./AgyActionLink";
+import PlanBadge from "./PlanBadge";
 import CardActionBar from "./CardActionBar";
 import { useRef, useState } from "react";
 
@@ -40,7 +43,11 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                                  isSelected, shortcut, isBest, bestPct,
                                  onSelect, onRename, onRemove, onProbe, probing,
                                  rotates, onToggleRotate, pinRank = null, onTogglePin, bestTitle,
-                                  label, email, isCurrent, onSwitch, switching, drag, aid }: {
+                                  label, email, isCurrent, onSwitch, switching, drag, aid, action, plan }: {
+  /** 档位（`ultra` / `pro` / `free`，`agy-rotate quota` 写）。只有 ULTRA 画徽章，见 `agyBadgePlan`。 */
+  plan?: string | null;
+  /** 取额度被 Google 拒绝时的下一步动作（`agyAction`）。null = 没有可说的。 */
+  action?: AgyAction | null;
   /** 置顶位次（0 起）；未置顶 null。与 codex 账号卡同一套语义（2026-09-24 对齐）。 */
   pinRank?: number | null;
   onTogglePin?: () => void;
@@ -103,6 +110,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
   rotates?: boolean;
   onToggleRotate?: (on: boolean) => void;
 }) {
+  const Z = useCardType();
   // 本机没有 agy / 已停用 ⇒ **零像素**。见 `agyQuotaVisible` 的注释。
   if (!agyQuotaVisible(snap, { disabled })) return null;
 
@@ -156,7 +164,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
       // 落点用描边、被拖的变淡 —— 与账号卡同一套反馈（理由见 AccountCard 那处注释）
       border: `1px solid ${drag?.isDragging ? t.accent : (isSelected ? t.accent : hexA(color, .30))}`,
       borderRadius: 12,
-      padding: "16px 14px 12px", display: "flex", flexDirection: "column",
+      padding: Z.pad, display: "flex", flexDirection: "column",
       cursor: (onSelect ?? onOpen) ? "pointer" : "default", userSelect: "none",
       zIndex: drag?.isDragging ? 5 : undefined,
       boxShadow: drag?.isDragging ? "0 8px 24px rgba(0,0,0,.45)" : undefined,
@@ -206,7 +214,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
           </span>
         </Ring>
 
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             {editing !== null ? (
               // ★ `onKeyDown` 必须 `stopPropagation`：全局 ⌘1~⌘9 是切号快捷键，
@@ -234,6 +242,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                     style={{ fontSize: Z.name, fontWeight: 700, color, minWidth: 0,
                              overflow: "hidden", textOverflow: "ellipsis" }}>{label ?? "agy"}</span>
             )}
+            <PlanBadge plan={agyBadgePlan(plan)} t={t} size={Z.planBadge} />
             {/* ★★ 徽章三态，**别合并**：
                 · 在池里且当值  → 「当前」（青底，与账号卡同一套语义）
                 · 在池里不当值  → 「切换」（可点）
@@ -255,7 +264,8 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                              color, border: `1px solid ${hexA(color, .45)}` }}>只读</span>
             )}
             {/* ★ 降级说明**只在这里**,一个字符 + 悬浮。理由见 StaleMark 的文件头。 */}
-            {degraded && snap && <StaleMark t={t} note={agyReasonNote(snap)} tone={tone} size={11} />}
+            {degraded && snap && <StaleMark t={t} note={action ? action.note : agyReasonNote(snap)}
+                                            tone={tone} size={11} />}
             {/* 读**本机 sidecar** 失败(IO 层),与"额度读不到"是两回事,所以文案不同。 */}
             {!!err && <StaleMark t={t} note={`读不到本机的额度快照：${err}`} tone="red" size={11} />}
             {/* ★ 与账号卡同一套语义：`最优` = 全池余量最多；`USE` = 最优**且不是当前号**
@@ -293,8 +303,10 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               ★ 「哪一组最紧」**没有被删掉，移进了 `title`**（§6：不要顺手简化掉已有功能）。
                 环上那个数字来自 4 个桶里最紧的一个，不说来自哪组，用户无从知道是
                 Gemini 还是 Claude/GPT 见底。 */}
-          <div title={tight?.group
-                 ? `环上的 ${Math.round(tight.b.remaining_percent)}% 来自**${tight.group}** —— `
+          <div title={tight?.group && tight.b.remaining_percent == null
+                 ? `环上是「—」：**${tight.group}** 有一格上游没给剩余比例 —— 读不到，不是满也不是空。`
+                 : tight?.group
+                 ? `环上的 ${Math.round(tight.b.remaining_percent as number)}% 来自**${tight.group}** —— `
                    + `4 个桶（Gemini / Claude+GPT × 5h / 周）里最紧的那个。`
                    + `任何一个见底 agy 就用不了，所以取最小值不取平均。`
                  : undefined}
@@ -307,9 +319,15 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
           {/* 弹性留白：把条形区压到卡片底边，与账号卡同款。 */}
           <div aria-hidden style={{ flex: 1, minHeight: 0 }} />
 
-          {rem != null && slotRows.map(label => {
+          {/* ★ 被 Google 拒绝时，下一步动作放在**行上**（眼睛已经在的地方），不只放进 `!` 的悬浮。 */}
+          {tight == null && action && (
+            <AgyActionLink t={t} action={action} fontSize={Z.eta} />
+          )}
+
+          {tight != null && slotRows.map(label => {
             const row = rows.find(r => r.label === label);
-            return !row ? (
+            const rr = row?.remaining;
+            return row == null || rr == null ? (
               // ★★ 这一行以前是 `visibility: hidden` 的纯占位 —— 用户看到的是**一整行空白**，
               //   连 `—` 都没有，于是直接问「为什么这个号少了一个窗口」。
               //   本仓 §5d 的规矩是「**读不到显 `—`，不显 `0`**」，而"什么都不显"比显 0 还糟：
@@ -322,14 +340,15 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               //   在那之前这一行是 `—  ↻—`，而同一个 `—` 同时表示「非当值号」和「读失败」，
               //   两者的下一步动作完全相反。解释一直写着 —— 写在 `title` 里，
               //   **而本仓的规矩是「告警放在眼睛已经在的地方」，只写进悬浮的真话等于没写**。
-              <div key={label} title={missTitle(label, isCurrent)}
+              <div key={label} data-agy-unknown={row ? "" : undefined}
+                   title={row ? AGY_UNKNOWN_TITLE : missTitle(label, isCurrent)}
                    style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO }}>{label}</span>
                 {/* ★ 条槽保留：跨卡对齐靠这一行的高度撑着（见 test_missing_window_says_so）。 */}
                 <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack }} />
                 <span style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO,
                                whiteSpace: "nowrap" }}>
-                  "这次没读到"</span>
+                  {row ? "上游没给数" : "\"这次没读到\""}</span>
               </div>
             ) : (
               // ★★★ `seen_at` = 这一格是**上次当值时看到的**，不是现在读到的
@@ -339,21 +358,21 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               //   否则它会冒充现值，而那比画空更糟（§7.0b 的反面：不许把旧值伪装成新值）。
               <div key={label}
                    title={row.seen_at
-                     ? `${row.group ?? "?"} · 剩 ${row.remaining.toFixed(1)}% —— 这是这个号**上次当值时**读到的（${fmtAgo(row.seen_at)}）。周窗口只有当前登录的号读得到，云端按账号那条没有周。`
-                     : `${row.group ?? "?"} · 剩 ${row.remaining.toFixed(1)}%`}
+                     ? `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}% —— 这是这个号**上次当值时**读到的（${fmtAgo(row.seen_at)}）。周窗口只有当前登录的号读得到，云端按账号那条没有周。`
+                     : `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}%`}
                    style={{ display: "flex", alignItems: "center", gap: 6,
                             opacity: row.seen_at ? .62 : 1 }}>
                 <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO }}>{row.label}</span>
                 <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${row.remaining}%`,
+                  <div style={{ height: "100%", width: `${rr}%`,
                                 background: stateColor, borderRadius: 2,
                                 transition: "width .55s cubic-bezier(.4,0,.2,1)" }} />
                 </div>
                 {/* 数字仍按阈值变色 —— 环恒平台色,这是卡上唯一还能报警的地方(同 GrokCard)。 */}
                 <span style={{ fontSize: Z.pct, fontWeight: 600,
-                               color: alarmed ? "#E0901C" : winNumColor(row.remaining, t),
+                               color: alarmed ? "#E0901C" : winNumColor(rr, t),
                                fontFamily: MONO, fontVariantNumeric: "tabular-nums" }}>
-                  {Math.round(row.remaining)}%
+                  {Math.round(rr)}%
                 </span>
                 <span title={agyResetText(row).title || undefined}
                       style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO }}>
@@ -371,7 +390,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               （实测 179 vs 156），且那 23px 全是底部空白。 */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
                         gap: 8, flexWrap: "nowrap", minWidth: 0,
-                        marginTop: 5, paddingTop: 7, borderTop: `1px solid ${t.divider}`,
+                        marginTop: Z.footTop, paddingTop: Z.footPad, borderTop: `1px solid ${t.divider}`,
                         color: alarmed ? "#E0901C" : t.muted }}>
             {/* ★★ 这一格与账号卡的「到期」同位（用户 2026-09-16 点名的一致性）。
                 放的是**最紧那个窗口的重置时刻**，绝对写法 `09-19 16:34`。

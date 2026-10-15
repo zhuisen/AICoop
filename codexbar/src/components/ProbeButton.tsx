@@ -19,7 +19,7 @@ const IconBolt = ({ size = 12 }: { size?: number }) => (
  *
  * 5 秒没有第二次点击就自动退回，避免一个亮着的「确认?」被下一次无意点击引爆。
  */
-export default function ProbeButton({ t, label, hint, onConfirm, loading, loadingText, variant = "toolbar" }: {
+export default function ProbeButton({ t, label, hint, onConfirm, loading, loadingText, variant = "toolbar", dense, headAction }: {
   t: Theme;
   label: string;
   hint: string;
@@ -27,6 +27,9 @@ export default function ProbeButton({ t, label, hint, onConfirm, loading, loadin
   loading?: boolean;
   loadingText?: string;
   variant?: "toolbar" | "menubar" | "inline";
+  /** 总览顶栏紧凑态：收窄内边距。⚡ 与「计费」角标**照留** —— 它是唯一花钱的控件。 */
+  dense?: boolean;
+  headAction?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,8 +83,8 @@ export default function ProbeButton({ t, label, hint, onConfirm, loading, loadin
 
   const small = variant === "inline";
   return (
-    <span title={hint} onClick={click}
-      style={{ ...common, padding: small ? "5px 10px" : "7px 11px", borderRadius: small ? 6 : 8,
+    <span title={hint} onClick={click} data-head-action={headAction ? "" : undefined}
+      style={{ ...common, padding: small ? "5px 10px" : dense ? "7px 8px" : "7px 11px", gap: dense ? 5 : 6, borderRadius: small ? 6 : 8,
         fontSize: small ? 11 : 11, fontWeight: armed ? 700 : 400,
         border: `1px solid ${armed ? AMBER : "rgba(224,144,28,.45)"}`,
         color: armed ? "#1c1104" : softText,

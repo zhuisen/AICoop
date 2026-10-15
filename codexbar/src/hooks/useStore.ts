@@ -17,10 +17,11 @@ export function useStore() {
   const [toast, setToast] = useState<string | null>(null);
   const toastRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((msg: string) => {
+  /** `ms`：结果类 toast（探针的 5h 前后对比）要读得完，2.1s 不够。 */
+  const showToast = useCallback((msg: string, ms = 2100) => {
     if (toastRef.current) clearTimeout(toastRef.current);
     setToast(msg);
-    toastRef.current = setTimeout(() => setToast(null), 2100);
+    toastRef.current = setTimeout(() => setToast(null), ms);
   }, []);
 
   const refresh = useCallback(async () => {

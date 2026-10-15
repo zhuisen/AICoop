@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { Burst, Eta5h } from "../eta5h";
 
 /**
  * 总览顶部「续航条」的数据（用户 2026-09-21 从六个方向里选的 D + 左侧账号环）。
@@ -18,12 +19,13 @@ import { listen } from "@tauri-apps/api/event";
  * · `cur`  —— `last_aid`，代理**最近一次真的用了谁**。这是「正在使用」唯一诚实的定义；
  *              旧 Hero 用的 `active` 是**上次 CLI 切换**留下的，实测过两者不一致。
  * · `next` —— 下一个请求会用谁。逐请求轮换下它与 `cur` 本来就可能不同。
- * · `runway_active_hours` —— **活跃小时**，见下。
+ * · `runway_hours` —— **钟点小时**，按最近 `rate_span_h` 小时的平均速度（含空闲）算，见 `codex-rotate::_runway`。
  *
  * ★★ 取不到就是 `null`，**绝不给 0**：「算不出来」与「撑不了多久」在这块版面上是
  *   相反的两件事，而 0 会被读成后者（本仓头号铁律在续航上的形态）。
  */
-export interface BoardWin { label: string; rem: number; reset: string }
+/** `rem: null` = agy 桶在但上游没给数（读不到，不是 0 也不是 100）。codex 侧恒为数字。 */
+export interface BoardWin { label: string; rem: number | null; reset: string }
 export interface BoardAcct {
   aid: string; label: string | null; email?: string | null; plan?: string | null;
   /** 置顶队列位次（1 起）；`null` = 没置顶 —— **不是 0**。 */
@@ -34,6 +36,8 @@ export interface BoardAcct {
   tightest: number | null;
   /** 周窗口剩余 —— 续航只算它：5h 每 5 小时自己回满，真正卡住你的是周。 */
   weekly: number | null;
+  /** codex 5h 连续用还能撑多久（codex-rotate 的 `_eta5h`）；历史不足 3 次 / 没有 5h 窗口 / agy ⇒ 缺省或 `null`。 */
+  eta5h?: Eta5h | null;
 }
 export interface Board {
   cur: BoardAcct | null;
@@ -42,8 +46,16 @@ export interface Board {
   queue: BoardAcct[];
   rest: BoardAcct[];
   weekly_left_pp: number;
-  burn_pp_per_active_hour: number | null;
-  runway_active_hours: number | null;
+  burn_pp_per_hour: number | null;
+  /** codex 按连续使用时间的续航（见 codex-rotate 的 `_burst`）；agy / 没有 5h 用完历史 ⇒ `null`。 */
+  burst?: Burst | null;
+  runway_hours: number | null;
+  /** 速度取自最近多少钟点小时（≤24）；算不出速度时 `null`。 */
+  rate_span_h: number | null;
+  /** 可用号里最早一个周重置还有多少小时；没有可读的周窗口时 `null`。 */
+  first_reset_h: number | null;
+  /** 续航长过最早那次周重置 ⇒ 那之前池子见不了底，「还能撑 N 小时」不是该报的数。 */
+  outlasts_reset: boolean;
   samples: number;
   last_sample_min: number | null;
 }

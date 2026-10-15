@@ -255,7 +255,10 @@ class FailureNeverRendersAsZero(unittest.TestCase):
         （`CLAUDE.md` §7.-1 第 3 条：定长切片会滑出被测范围）。改成切到下一个 `def`。"""
         i = self.SRC.index("def fetch_quota(")
         seg = self.SRC[i:self.SRC.index("\ndef ", i + 10)]
-        self.assertIn('return None, "额度 HTTP', seg, "★★ 非 200 没有返回 None")
+        # 2026-10-15：非 200 的说明改成带 reason/链接的 `QuotaErr`（仍是 str），
+        #   行为闸在 `tests/test_agy_quota_403_reason.py::FetchQuotaCarriesTheStructure`。
+        self.assertIn('if r.status != 200:', seg)
+        self.assertIn('return None, e\n', seg[seg.index('if r.status != 200:'):], "★★ 非 200 没有返回 None")
         self.assertIn('return None, "取额度失败', seg, "★★ 网络异常没有返回 None")
 
     def test_an_unknown_account_sorts_last_not_first(self):
@@ -355,6 +358,64 @@ class LoginSavesTheCurrentAccountBeforeLoggingOut(unittest.TestCase):
         seg = self.CLI[i:self.CLI.index("\ndef ", i + 10)]
         self.assertIn("池里那份没丢", seg,
                       "★ 登录没完成时没告诉用户旧号还在 —— 他会以为两个都没了")
+
+    def _login(self, fake_body):
+        """跑一遍 `login`，假 agy 的脚本体由调用方给。→ (临时目录, 登录态文件)"""
+        import subprocess
+        import sys as _s
+        d = Path(tempfile.mkdtemp(prefix="agy-login-"))
+        live = d / "tok.json"
+        live.write_text(json.dumps(_cred("keepme", "keep@x.y")), encoding="utf-8")
+        fake = d / "fake-agy"
+        fake.write_text("#!/bin/sh\n" + fake_body.replace("$D", str(d)) + "\nexit 0\n",
+                        encoding="utf-8")
+        fake.chmod(0o755)
+        r = subprocess.run([_s.executable, str(ROOT / "agy-rotate"), "login"],
+                           input="\n", capture_output=True, text=True, timeout=120,
+                           env={**os.environ, "AGY_POOL_STORE": str(d),
+                                "AGY_TOKEN_FILE": str(live), "AGY_REAL": str(fake)})
+        self.assertEqual(r.returncode, 0, r.stderr[-600:])
+        return d, live
+
+    def test_agy_starts_logged_out(self):
+        """★★ 2026-10-14：新号要在一个**没登过别的号**的进程里首次登录 ——
+        进程内 `/logout` 换号的那两次都被 Google 拒了。假 agy 启动时记下登录态在不在。"""
+        d, _ = self._login('if [ -e "$D/tok.json" ]; then echo present; else echo absent; fi > "$D/seen"')
+        self.assertEqual((d / "seen").read_text().strip(), "absent",
+                         "★★ agy 启动时旧号还登录着 —— 用户又得在进程内 `/logout` 换号")
+
+    def test_an_abandoned_login_puts_the_old_account_back(self):
+        """★★ 登录态是我们清的：用户没登新号就退出，必须把原来那个号装回去，
+        否则他退出来发现 agy 谁都没登。"""
+        _, live = self._login(":")
+        self.assertTrue(live.exists(), "★★ 没登新号就退出，原来的号没装回去 —— agy 现在谁都没登")
+        self.assertEqual(_sub_of(live), "keepme")
+
+    def test_clear_refuses_an_unsaved_login(self):
+        """★★★ `clear_live` 删的是用户唯一的登录态：池里没有同一份 refresh_token 就拒删。"""
+        from agy import pool as P
+        d = Path(tempfile.mkdtemp(prefix="agy-clear-"))
+        live = d / "tok.json"
+        c = _cred("s1")
+        live.write_text(json.dumps(c), encoding="utf-8")
+        old = (P.LIVE, P.CRED_DIR)
+        P.LIVE, P.CRED_DIR = live, d / "auth" / "agy"
+        try:
+            self.assertFalse(P.clear_live())
+            self.assertTrue(live.exists(), "★★★ 没备份就把登录态删了")
+            P.write_cred("s1", c)
+            self.assertTrue(P.clear_live())
+            self.assertFalse(live.exists())
+        finally:
+            P.LIVE, P.CRED_DIR = old
+
+    def test_a_new_login_is_adopted(self):
+        new = json.dumps(_cred("fresh", "fresh@x.y")).replace("'", "'\\''")
+        d, live = self._login("printf '%s' '" + new + "' > \"$D/tok.json\"")
+        self.assertEqual(_sub_of(live), "fresh")
+        pool = json.loads((d / ".agy-pool.json").read_text(encoding="utf-8"))
+        self.assertIn("fresh", pool["accounts"], "★ 新登的号没进池")
+        self.assertIn("keepme", pool["accounts"])
 
 
 class AutoSwitchIsFailOpenAndSticky(unittest.TestCase):
@@ -519,8 +580,10 @@ class TheQuotaComesFromTheSummaryEndpoint(unittest.TestCase):
         两处各算一次迟早分叉成"摘要说 97%、选号按 100% 排"。"""
         self.assertIn("def quota_by_group(groups):", self.SRC)
         i = self.SRC.index("def quota_by_group(")
-        seg = self.SRC[i:i + 900]
-        self.assertIn("min(buckets", seg,
+        seg = self.SRC[i:i + 1600]
+        # 2026-10-15：最紧取自 `known`（有数字的桶）；缺数字的桶让整组变「读不到」，
+        #   见 `tests/test_agy_unknown_fraction.py`。
+        self.assertIn("min(known", seg,
                       "★ 投影没取最紧的那个桶 —— 会把真正的约束藏起来")
 
 
@@ -645,7 +708,10 @@ class TheGoogleTabShowsThePoolNotAReadOnlyCard(unittest.TestCase):
         self.assertEqual(allowed & {"login", "pick", "auto"}, set(),
                          "★★★ 白名单放进了会挂死 GUI 的子命令")
         self.assertTrue(allowed <= {"quota", "switch", "live", "rename", "remove", "pin", "borrow",  # pin/borrow 2026-09-24 审过：只写池、不联网、不起 agy
-                                    "health", "probe", "rotate", "auto-switch", "list"},
+                                    "health", "probe", "rotate", "auto-switch", "list",
+                                    # dawn-probe 2026-10-15 审过：--status/--enable/--disable/--time 只写池；
+                                    # --no-wait 起的是与 `probe` 同一条 `agy -p`（非交互、不睡），默认关
+                                    "dawn-probe"},
                         f"★★ 白名单里有没审过的子命令: {sorted(allowed)}")
 
     def test_the_scripts_are_bundled(self):

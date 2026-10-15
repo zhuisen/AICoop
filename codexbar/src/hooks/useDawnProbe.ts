@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { dawnCatchUpDue, type DawnKind, type DawnStatus } from "../dawn";
 
 /**
  * 每日清晨探针的**补跑**路径（用户 2026-09-06 要的「早上 6 点给 Plus 号探针，
@@ -29,22 +30,31 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  * 但那是靠护栏兜底，不是设计）。菜单栏 webview 在 app 启动时创建且**从不卸载**，
  * 是更稳的那个宿主。
  *
- * ★ 判据是「今天过了 6 点、而 state 里记的日期不是今天」，**不是**「现在正好 6 点」——
+ * ★ 判据是「今天的到点时刻（`due_at`）已过、而记录的日期不是今天」，**不是**「现在正好到点」——
  *   Mac 凌晨多半在睡觉，卡点判定等于永远不触发。睡醒后补跑才是真实场景。
+ * ★★ 2026-10-15：时间可选 + 3 分钟内随机（`dawn_sched.py`），而且 **Gemini（agy）也有了同一套**。
+ *   `due_at` 由 CLI 的 `--status` 给出（按天固定的随机偏移，launchd 与这里算出的是同一秒），
+ *   这里不再写死 06:00。调 CLI 时带 `--no-wait`：没到点就退出，不在 IPC 里睡。
  */
 
-/** 到点后多久检查一次。只是读一次 state，不起 python。 */
+/** 多久检查一次。只是读一次状态（一个 ~60ms 的 python），不联网。 */
 const TICK_MS = 10 * 60 * 1000;
-/** 当天几点之后才允许补跑。与 launchd 的 `Hour=6` 同源，改一处要改两处。 */
-const DAWN_HOUR = 6;
-
-interface DawnRec { enabled?: boolean; date?: string; state?: string }
 
 function todayLocal(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+
+/** 两家各一条：读状态走只读通道，真跑走各自的命令通道。 */
+const KINDS: { kind: DawnKind; read: () => Promise<string>; run: () => Promise<unknown> }[] = [
+  { kind: "codex",
+    read: () => invoke<string>("read_dawn_status"),
+    run: () => invoke("run_rotate", { args: ["dawn-probe", "--no-wait"] }) },
+  { kind: "agy",
+    read: () => invoke<string>("run_agy_rotate", { args: ["dawn-probe", "--status"] }),
+    run: () => invoke("run_agy_rotate", { args: ["dawn-probe", "--no-wait"] }) },
+];
 
 export function useDawnProbe(): void {
   const running = useRef(false);
@@ -56,21 +66,19 @@ export function useDawnProbe(): void {
 
     const check = async () => {
       if (running.current) return;
-      if (new Date().getHours() < DAWN_HOUR) return;
+      running.current = true;
       try {
-        // ★ 只读查询走只读 IPC：`run_rotate` 会 emit + refresh_tray，而这里每 10 分钟调一次
-        //   ⇒ 每 10 分钟平白让两个 webview 和托盘整体重拉（2026-09-21 agy 评审）。
-        const raw = await invoke<string>("read_dawn_status");
-        const rec = JSON.parse(raw.trim().split("\n").pop() || "{}") as DawnRec;
-        // ★ 关掉了就什么都不做 —— 这是用户对一个**会花钱**的功能的显式选择，
-        //   补跑路径没有资格绕过它。
-        if (!rec.enabled) return;
-        if (rec.date === todayLocal()) return;      // launchd 已经跑过了，正常路径
-        running.current = true;
-        await invoke("run_rotate", { args: ["dawn-probe"] });
-      } catch {
-        // 读不到就下个 tick 再说。★ 不弹 toast：这是后台补救，
-        //   失败本身不是用户此刻需要处理的事；真正该看的是设置页里那条「上次运行」。
+        for (const k of KINDS) {
+          try {
+            const rec = JSON.parse((await k.read()).trim().split("\n").pop() || "{}") as DawnStatus;
+            // ★ 关掉了就什么都不做 —— 用户对一个**会花钱**的功能的显式选择，补跑没有资格绕过它。
+            if (!dawnCatchUpDue(rec, todayLocal(), Date.now() / 1000)) continue;
+            await k.run();
+          } catch {
+            // 读不到 / 跑失败：下个 tick 再说。★ 不弹 toast —— 后台补救失败不是用户此刻要处理的事；
+            //   该看的是工具栏「定时」浮层里那条「上次运行」。
+          }
+        }
       } finally {
         running.current = false;
       }

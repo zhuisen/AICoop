@@ -213,6 +213,51 @@ class TheSamplerHonoursTheStore(unittest.TestCase):
         self.assertGreaterEqual(int(m.group(1)), 10)
 
 
+class TheSidecarHasAHeartbeat(unittest.TestCase):
+    """★★ 2026-10-14：整数不变时 sidecar 原来永远不写，`fetched_at` 冻在上一次跳变 ——
+    采样器每 15s 都在取，前端却判它过期、自己再打一次外网。"""
+
+    def _sampler(self, tmp):
+        old = os.environ.get("CODEX_ROTATE_STORE")
+        os.environ["CODEX_ROTATE_STORE"] = tmp
+        try:
+            return load_sampler()
+        finally:
+            if old is None:
+                os.environ.pop("CODEX_ROTATE_STORE", None)
+            else:
+                os.environ["CODEX_ROTATE_STORE"] = old
+
+    def test_unchanged_content_is_rewritten_once_the_heartbeat_is_due(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            m = self._sampler(tmp)
+            snap = lambda t: {"schema": 1, "fetched_at": t, "accounts": [{"available": True}]}
+            m._write_sidecar(snap(100))
+            m._write_sidecar(snap(115))
+            self.assertEqual(json.loads(m.SIDECAR.read_text())["fetched_at"], 100,
+                             "★ 心跳没到就重写 —— 去重没了，15s 一轮会让两个 webview 空转")
+            m._last_sidecar_at -= m.SIDECAR_HEARTBEAT_SECS
+            m._write_sidecar(snap(130))
+            self.assertEqual(json.loads(m.SIDECAR.read_text())["fetched_at"], 130,
+                             "★★ 心跳到了内容不变也没写 —— `fetched_at` 又冻住了")
+
+    def test_a_real_change_is_written_immediately(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            m = self._sampler(tmp)
+            m._write_sidecar({"fetched_at": 100, "accounts": [{"used": 1}]})
+            m._write_sidecar({"fetched_at": 115, "accounts": [{"used": 2}]})
+            self.assertEqual(json.loads(m.SIDECAR.read_text())["fetched_at"], 115)
+
+    def test_the_heartbeat_beats_the_frontend_freshness(self):
+        """★★ 心跳 ≥ 前端 `FRESH_MS` 的话，采样器活着时前端照样判过期去重取。两边从源码现读。"""
+        hb = int(re.search(r'GROK_SAMPLER_SIDECAR_HEARTBEAT",\s*"(\d+)"', SAMPLER).group(1))
+        fm = re.search(r"const FRESH_MS = (\d+) \* (\d+) \* (\d+);", GROK_HOOK)
+        fresh_s = int(fm.group(1)) * int(fm.group(2)) * int(fm.group(3)) // 1000
+        self.assertLess(hb, fresh_s)
+
+
 class FlattenDirectionIsUsedNotRemaining(unittest.TestCase):
     """grok 接口给已用。flatten 若悄悄换成剩余，锚点账本和 UI 换向会各错一次。"""
 

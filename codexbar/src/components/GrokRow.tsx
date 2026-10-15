@@ -2,7 +2,8 @@ import Ring from "./Ring";
 import GrokStaleMark from "./GrokStaleMark";
 import type { Theme } from "../theme";
 import type { GrokSnapshot, GrokAccount } from "../grok";
-import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible } from "../grok";
+import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible, grokBadgePlan } from "../grok";
+import PlanBadge from "./PlanBadge";
 import { fmtEta, maskId } from "../helpers";
 
 const MONO = "'JetBrains Mono'";
@@ -82,7 +83,7 @@ export default function GrokRow({ t, color, snap, privacy, busy, disabled, onOpe
           </span>
         </Ring>
         <div className="mb-row-info">
-          <NameLine t={t} color={color} email={a.email} privacy={privacy} mark={<GrokStaleMark t={t} a={a} size={10} />} />
+          <NameLine t={t} color={color} email={a.email} privacy={privacy} plan={grokBadgePlan(a)} mark={<GrokStaleMark t={t} a={a} size={10} />} />
           <div className="mb-row-meta">
             <span style={{ fontSize: 9, color: "#E0901C", fontFamily: MONO }}>
               {stale ? "上次读数" : "额度暂时读不到"}
@@ -106,7 +107,7 @@ export default function GrokRow({ t, color, snap, privacy, busy, disabled, onOpe
                        fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{Math.round(remPct)}</span>
       </Ring>
       <div className="mb-row-info">
-        <NameLine t={t} color={color} email={a.email} privacy={privacy} />
+        <NameLine t={t} color={color} email={a.email} privacy={privacy} plan={grokBadgePlan(a)} />
         {/* ★★ **grok 不画 5h 那一格**（用户 2026-09-15：「grok 修改，取消 5h 窗口」）。
             xAI 只回 WEEKLY（实测 `window_minutes = 10080`，27 个模型 2 个桶，没有 5h）——
             那一格**永远不会有数**。此前补过三版（隐藏行 → `—` → 「无此窗口」），
@@ -144,11 +145,12 @@ function Shell({ t, color, onOpen, children }: { t: Theme; color: string; onOpen
   );
 }
 
-function NameLine({ t, color, email, privacy, mark }: { t: Theme; color: string; email?: string | null; privacy?: boolean; mark?: React.ReactNode }) {
+function NameLine({ t, color, email, privacy, mark, plan }: { t: Theme; color: string; email?: string | null; privacy?: boolean; mark?: React.ReactNode; plan?: string }) {
   return (
     <>
       <div className="mb-row-name-line">
         <span className="mb-row-name" style={{ color }}>grok</span>
+        <PlanBadge plan={plan ?? ""} t={t} />
         {/* 「只读」是这张卡与旁边三张唯一需要的区别 —— 那三张 hover 出「切换」,这张永远不会。 */}
         <span className="mb-row-badge-cur"
               title="grok 不在轮换池,只显示额度,不参与切号"

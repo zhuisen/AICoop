@@ -15,11 +15,17 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "traffic"))
 import scan  # noqa: E402
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
 # (官方 id, 显示名) —— omc 传的是右边那个，agy 日志里打的也是右边那个
 AGY_MODELS = [
     ("gemini-3.8-flash-high",    "Gemini 3.8 Flash (High)"),
     ("gemini-3.8-flash-medium",  "Gemini 3.8 Flash (Medium)"),
     ("gemini-3.8-flash-low",     "Gemini 3.8 Flash (Low)"),
+    # agy 1.3.5（2026-10-14 `agy models`）
+    ("gemini-4-argon-medium",    "Gemini 4 Argon (Medium)"),
+    ("claude-opus-5-5-high",     "Claude Opus 5.5 (High)"),
+    ("claude-sonnet-5-5-low",    "Claude Sonnet 5.5 (Low)"),
     ("gemini-3.7-flash-high",    "Gemini 3.7 Flash (High)"),
     ("gemini-3.7-flash-medium",  "Gemini 3.7 Flash (Medium)"),
     ("gemini-3.7-flash-low",     "Gemini 3.7 Flash (Low)"),
@@ -54,6 +60,44 @@ class TestAgyModelNames(unittest.TestCase):
         for bad in (None, "", "   ", 123, [], {}):
             with self.subTest(value=bad):
                 self.assertEqual(scan._agy_model(bad), "unknown")
+
+
+class OneModelIsOneBand(unittest.TestCase):
+    """★★ 用户 2026-10-14：「为什么有 3 个 gemini-3.8？」—— 同一个 Flash 被账本 / 会话库 / 新后端 id 记成三个名字。"""
+
+    def test_the_three_spellings_collapse(self):
+        for raw in ("gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-3.8-flash-n",
+                    scan._agy_model("Gemini 3.8 Flash (Medium)")):
+            self.assertEqual(scan._agy_canon(raw), "gemini-3.8-flash", raw)
+
+    def test_only_gemini_loses_its_tier(self):
+        """`gpt-oss-120b-medium` 的 `-medium` 是型号名的一部分，去掉就掉到兜底价。"""
+        self.assertEqual(scan._agy_canon("gpt-oss-120b-medium"), "gpt-oss-120b-medium")
+        self.assertEqual(scan._agy_canon("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking")
+
+    def test_every_canonical_gemini_name_is_priced(self):
+        """归一后的名字必须在 `rates.ts` 里有价 —— 否则合并成一条带却按兜底价算钱。"""
+        import re
+        rates = (ROOT / "codexbar" / "src" / "rates.ts").read_text(encoding="utf-8")
+        keys = set(re.findall(r'^\s*"([^"]+)":\s*\{', rates, re.M))
+        gem = [k for k in keys if k.startswith("gemini-")]
+        self.assertGreater(len(gem), 10, "解析不出 rates.ts 的 gemini 键 —— 探针坏了")
+        missing = sorted({scan._agy_canon(k) for k in gem} - keys)
+        self.assertEqual(missing, [], "★★ 归一后的名字没价，合并成一条带却按兜底价算钱")
+
+    def test_the_real_rows_have_no_two_spellings_of_one_model(self):
+        """真数据：`_agy_rows` 出来的模型名里，不许有两个归一后相同的。"""
+        if not scan.AGY_DB_ROOT.is_dir():
+            self.skipTest("本机没有 agy 会话库")
+        rows = []
+        for p in sorted(scan.AGY_DB_ROOT.glob("*.db"), key=lambda q: q.stat().st_mtime, reverse=True)[:80]:
+            try:
+                rows.extend(scan._scan_agy_db(str(p)))
+            except Exception:
+                continue
+        names = {r[1] for r in scan._agy_rows(rows)}
+        self.assertEqual(len(names), len({scan._agy_canon(n) for n in names}), names)
+        self.assertNotIn("gemini-3.8-flash-n", names)
 
 
 if __name__ == "__main__":

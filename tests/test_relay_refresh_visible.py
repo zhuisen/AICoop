@@ -96,8 +96,8 @@ class ThereIsARefreshWhereTheEyeLooksFirst(unittest.TestCase):
         self.assertIn("export const IcRefresh", _code(ICONS),
                       "★★ 刷新图标没搬进共享模块")
         app = _code(APP)
-        self.assertIn('import { IcRefresh } from "./components/CardIcons"', app,
-                      "★★ App.tsx 还在用自己那份 —— 两份 SVG 会漂")
+        self.assertRegex(app, r'import \{[^}]*\bIcRefresh\b[^}]*\} from "\./components/CardIcons"',
+                         "★★ App.tsx 还在用自己那份 —— 两份 SVG 会漂")
         self.assertNotIn('const IconRefresh = ({ spin }', app,
                          "★★ App.tsx 里的那份副本又回来了")
 

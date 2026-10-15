@@ -46,7 +46,24 @@ export const CARD_TYPE = {
   //   ⚠️ 只缩尺寸**不够**：最长形态是 `重置卡 ×3 · 2张剩1天`，窄卡下仍放不下，
   //   所以 AccountCard 那边同时上了 nowrap + 截断（见那里的说明）。两条缺一不可。
   badgeFont: 10.5, badgeIcon: 10, badgePad: "2px 7px",
+  pad: "16px 14px 12px", footTop: 5, footPad: 7, colGap: 4,
 } as const;
+
+export type CardType = { [K in keyof typeof CARD_TYPE]: (typeof CARD_TYPE)[K] extends number ? number : string };
+
+/**
+ * 小窗口下的卡片标尺（用户 2026-10-14：「最小尺寸下，总览页面里面的账号卡片要缩小」）。
+ * 由 `useCardType()` 按窗口尺寸切换，大窗口仍是上面那档（D 档「整体 +3」不动）。
+ * 正文字号最低 11 —— 再小就回到「字太小」那次投诉之前了；省下的高度主要来自环与留白。
+ * 徽章三项与上面一致（它已为「与到期同行」缩过一档）。
+ */
+export const CARD_TYPE_COMPACT: CardType = {
+  name: 14, status: 11, planBadge: 9, useBadge: 9, curBadge: 9.5, delta: 10,
+  email: 11.5, winLabel: 11, pct: 12, eta: 11, note: 11, exp: 11.5,
+  ring: 44, ringR: 18, ringSw: 4, ringNum: 12.5, bar: 4, shortcut: 10,
+  badgeFont: CARD_TYPE.badgeFont, badgeIcon: CARD_TYPE.badgeIcon, badgePad: CARD_TYPE.badgePad,
+  pad: "10px 12px 8px", footTop: 2, footPad: 4, colGap: 2,
+};
 
 /**
  * 平台详情页「模型消耗」宽表的**字号与列宽标尺**（用户 2026-08-26：「模型数字放大，现在太小了」）。
@@ -171,7 +188,11 @@ export const MODEL_COLORS: Record<string, string> = {
   //    一多就必然撞 —— 生日悖论,7 个进 10 色盘撞车概率已接近 9 成。
   //    agy 的模型集合是可枚举的,所以这里直接登记。
   "gemini-3.8-flash":        "#4d9fff",
+  // 10-06 起与 3.8-flash 同时在场（各占大头），所以必须分得开：同色系里最浅的一档。
+  "gemini-3.8-flash-n":      "#a9cdff",
   "gemini-3.7-flash":        "#7cb8ff",
+  // Gemini 4 Argon：新一代、价是 Flash 的 2.7 倍，另起色相（橙）让它在 Flash 的蓝里一眼可见。
+  "gemini-4-argon":          "#fb923c",
   "gemini-3.7-flash-tiered": "#2f7fd6",
   "gemini-3.6-flash-tiered": "#1f5c9e",
   // ★ pro 系另起一个色相（青绿），别用紫 —— 紫是 grok 家族的。

@@ -81,7 +81,8 @@ CACHE = _STORE / ".traffic-cache.json"
 CACHE_V = 1
 # ★ 改任何 _scan_* 的解析逻辑(改变 rows 里存什么/怎么算)必须 +1,否则那些此生不再变 mtime 的文件
 #   会永远沿用旧结果,产出一份新旧混血、无法察觉的数据集。
-PARSER_V = 11         # +1 于 2026-09-10:agy 时间戳改用 last_step_index 精确 join(4.4% 的记录换了日子)
+PARSER_V = 12         # +1 于 2026-10-15:Claude row 多第 9 位 = 缓存写里的 1h 档份额(按 2× 输入价计)
+# PARSER_V = 11       # 2026-09-10:agy 时间戳改用 last_step_index 精确 join(4.4% 的记录换了日子)
 # PARSER_V = 10       # 2026-09-09:agy 主源换成原生 SQLite(覆盖率 15.9% -> ~100%)
 # PARSER_V = 9        # 2026-09-09:codex row 多第 8 位 = model_provider(账号池/中转站分账)
 #                       ★ 必须 +1:旧缓存里的 codex 行没有这一位,只有版本号能逼它重解析。
@@ -95,6 +96,8 @@ PARSER_V = 11         # +1 于 2026-09-10:agy 时间戳改用 last_step_index �
 _DATED = re.compile(r"-\d{8}$")          # claude-haiku-4-5-20251001 -> claude-haiku-4-5
 
 # rows 元素: [epoch, model, uncached_in, cache_read, cache_write, output]
+#   可选尾部: [6] 平台键(宿主源) · [7] model_provider(codex) · [8] cache_write 里 1h 档的份额(Claude)
+#   ★ [8] 是 cache_write 的**子集**不是第五类 —— 只决定价格(1h 档 2× 输入、5m 档 1.25×),不进 total。
 IDX_EPOCH, IDX_MODEL, IDX_IN, IDX_CR, IDX_CW, IDX_OUT = range(6)
 
 
@@ -283,8 +286,15 @@ def _scan_claude_lines(lines):
         if ep is None:
             continue
         model = m.get("model")
-        rows[mid] = [ep, _DATED.sub("", model if isinstance(model, str) else "unknown"),
-                     i, cr, cw, out]
+        row = [ep, _DATED.sub("", model if isinstance(model, str) else "unknown"), i, cr, cw, out]
+        # ★ 缓存写分 5m / 1h 两档，价格不同（1.25× / 2× 输入）。2026-10-15 实测本机近 60 个
+        #   transcript：1h 档 625.9M、5m 档 0 —— 全按 5m 计就少算 1.6 倍。
+        #   以 `cache_creation_input_tokens` 为准、1h 份额钳到不超过它：实测有 18 条总数 0 而明细有数。
+        cc = u.get("cache_creation")
+        h1 = min(cw, _num(cc, "ephemeral_1h_input_tokens")) if isinstance(cc, dict) else 0
+        if h1:
+            row += [None, None, h1]
+        rows[mid] = row
     return rows
 
 
@@ -783,6 +793,25 @@ def _agy_deltas(rows):
     return out
 
 
+#: ★★ 同一个模型在两个来源 / 两个时期的不同写法 → 统一成一条带（用户 2026-10-14：「为什么有 3 个 gemini-3.8？」）。
+#:   实测 30 天里「Gemini 3.8 Flash」被画成三条：
+#:     · `gemini-3.8-flash-high`  —— 账本（wrapper 从日志 label 归一，带推理档位），09-16~09-24；
+#:     · `gemini-3.8-flash`       —— 会话库 f19（后端 id，不带档位），09-23~10-06 为主；
+#:     · `gemini-3.8-flash-n`     —— 会话库 f19，10-06 起。日志里同期选的是 `Gemini 3.8 Flash (High)`，
+#:       会话 id 对上日志的 67/67 都是它 ⇒ 是同一个用户可见模型换了后端 id，不是新模型。
+#:   档位（high/medium/low）是推理强度不是模型、同价，而会话库**根本不记档位** —— 两个来源只能在去掉档位后对齐。
+#:   ⚠️ 只对 `gemini-*` 去档位：`gpt-oss-120b-medium` 的 `-medium` 是型号名的一部分（`rates.ts` 按它定价）。
+_AGY_CANON = {"gemini-3.8-flash-n": "gemini-3.8-flash"}
+_AGY_TIER = re.compile(r"-(?:high|medium|low)$")
+
+
+def _agy_canon(model):
+    """显示 / 聚合用的模型名：gemini 去档位 + 后端 id 别名。只在 `_agy_rows` 里用（缓存之后），不进缓存。"""
+    if isinstance(model, str) and model.startswith("gemini-"):
+        model = _AGY_TIER.sub("", model)
+    return _AGY_CANON.get(model, model)
+
+
 def _agy_rows(db_rows):
     """SQLite（主）∪ wrapper 账本（只补 db 已消失的会话）-> 标准 row。
 
@@ -794,7 +823,7 @@ def _agy_rows(db_rows):
     out, seen = [], set()
     for ts, conv, model, i_tok, cr_tok, o_tok in db_rows:
         seen.add(conv)
-        out.append([int(ts), model, i_tok, cr_tok, 0, o_tok])
+        out.append([int(ts), _agy_canon(model), i_tok, cr_tok, 0, o_tok])
     # 账本是**会话内累计值**，要按会话差分（见 `_agy_deltas`）。只取 db 没有的那些会话。
     led = []
     try:
@@ -802,7 +831,9 @@ def _agy_rows(db_rows):
             led.extend(r for r in _scan_agy_file(f) if r[1] not in seen)
     except Exception:
         led = []
-    out.extend(_agy_deltas(led))
+    for r in _agy_deltas(led):
+        r[1] = _agy_canon(r[1])
+        out.append(r)
     return out
 
 
@@ -1330,7 +1361,7 @@ def _blank():
             "total": 0, "rounds": 0, "models": {}}
 
 
-def _add(b, model, i, cr, cw, out):
+def _add(b, model, i, cr, cw, out, cw1h=0):
     t = i + cr + cw + out
     b["uncached_in"] += i; b["cache_read"] += cr; b["cache_write"] += cw
     b["output"] += out; b["total"] += t; b["rounds"] += 1
@@ -1340,6 +1371,10 @@ def _add(b, model, i, cr, cw, out):
                                   "output": 0, "total": 0, "rounds": 0}
     m["uncached_in"] += i; m["cache_read"] += cr; m["cache_write"] += cw
     m["output"] += out; m["total"] += t; m["rounds"] += 1
+    # ★ 1h 档份额只在有时才写键：别家的桶形状不变（它是 cache_write 的子集，不进 total）。
+    if cw1h:
+        b["cache_write_1h"] = b.get("cache_write_1h", 0) + cw1h
+        m["cache_write_1h"] = m.get("cache_write_1h", 0) + cw1h
 
 
 #: 往回**几天**保留逐小时桶。
@@ -1477,7 +1512,8 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
             ep, model, i, cr, cw, o = row[:6]
             # ★ row 可带第 7 位 = **平台键**。宿主型源(OpenClaw)靠它把每条记录路由到真正的
             #   AI 平台 —— 宿主自己不作为平台出现。普通源没这一位,就归自己。
-            pk = row[6] if len(row) > 6 else key
+            pk = (row[6] if len(row) > 6 else None) or key   # Claude 带第 9 位时这一位是 None
+            cw1h = row[8] if len(row) > 8 else 0
             # ★ `setdefault` **必须在窗口判断之前**。我一度把 `continue` 提前,以为"窗口外的行
             #   反正出表时会被丢弃、跳过等价" —— 错了:只有窗口外数据的平台会因此**整家从输出里
             #   消失**(旧行为是输出一列全零桶)。实测 `platform_keys` 由 `['agy']` 变成 `[]`。
@@ -1490,7 +1526,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
             b = days_b.get(d)
             if b is None:
                 b = days_b[d] = _blank()
-            _add(b, model, i, cr, cw, o)
+            _add(b, model, i, cr, cw, o, cw1h)
             # ★★ **分账不动总量,而且必须与 `days` 同窗口。**
             #    `by_provider` 是旁挂的:30+ 处读 `b.total` 的地方一个都不用迁,
             #    而"这些 token 走的是哪条路由"有了地方放。
@@ -1506,7 +1542,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 pv = by_provider.setdefault(pk, {}).setdefault(prov, {}).get(d)
                 if pv is None:
                     pv = by_provider[pk][prov][d] = _blank()
-                _add(pv, model, i, cr, cw, o)
+                _add(pv, model, i, cr, cw, o, cw1h)
             # ★ 逐小时桶：最近 `HOURLY_DAYS` 天都留，外加调用方点名的那一天（`hours_day`）。
             #   以前只算今天（`di == last_di`），于是选中昨天只能画出一根日柱。
             #   ⚠️ 判据用**日期标签**而不是 `di` 的算术：`day_labels` 是用真日历逐日
@@ -1517,7 +1553,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 hb = hours_b.get(h)
                 if hb is None:
                     hb = hours_b[h] = _blank()
-                _add(hb, model, i, cr, cw, o)
+                _add(hb, model, i, cr, cw, o, cw1h)
 
         # ★ 按**自然日窗口**切,不是「最后 N 个有数据的日期」。后者是新旧扫描器共有的缺陷:
         # 实测 mtime 窗口内 codex 有 113(UTC)/116(本地) 个不同日期、最早回到 2026-04-07,

@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { type Theme, modelColor, TABLE_TYPE as TZ } from "../theme";
 import { costOf, fmtUSD, priceOf, isPriced } from "../rates";
-import StackedArea, { type Layer } from "../components/StackedArea";
+import StackedArea, { type Layer, CHART_CHROME_H } from "../components/StackedArea";
+import { useFillHeight } from "../hooks/useFillHeight";
 import type { TrafficData, RangeState, CacheMode, Bucket, Platform } from "../traffic";
 import Seg from "../components/Seg";
 import RangeBar from "../components/RangeBar";
@@ -74,6 +75,10 @@ function money(x: number): string {
  * 中间那 26px 是分区竖线所在的空列。
  */
 const GAP = TZ.gap;
+/** 图区高度下限 = 改成撑满之前的固定值。 */
+const CHART_MIN = 190;
+/** 模型表的框至少露出表头 + 两行，再矮整页滚。 */
+const TABLE_BOX_MIN = 100;
 /** ★ 表格内容的最小宽。**光给容器加 `overflowX:auto` 不够** —— `ROW` 模板里有一列 `1fr`,
  *  它会把行撑到"可用宽"而不是"自然宽",于是行仍被约束成 684、内部继续溢出,滚动条永远不出现。
  *  钉一个 minWidth,滚动才真的发生。
@@ -285,6 +290,7 @@ export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, o
   const c = colorOf(data, pk);
 
   const [toast, setToast] = useState<string | null>(null);
+  const [chartHost, chartH] = useFillHeight<HTMLDivElement>();
   const today = useMemo(() => todayOf(data), [data]);
   const range = useMemo(() => resolveRange(st, today), [st, today]);
   const rangeDays = diffDays(range.s, range.e);
@@ -474,6 +480,10 @@ export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, o
 
       {busy && !data && <div style={{ fontSize: 12, color: t.muted }}>扫描中…</div>}
 
+      {/* ★★ 一屏仪表盘（同 TrafficPage，用户 2026-10-14）：图表吃剩余高度、下限仍是原来的 190px，
+          模型表在自己的框里滚。 */}
+      <div ref={chartHost} style={{ flex: "1 1 0", minHeight: CHART_MIN + CHART_CHROME_H,
+                                    display: "flex", flexDirection: "column" }}>
       {!!v?.labels.length && (
         // ★ key 同时带 `mode`:切「分模型 ↔ 总量」也是换了一整个数据集。不带 `iso` —— 隔离模型只改
         //    图层不改日期,hover 索引仍然指同一天,重建反而会把用户停着的浮层弄没。
@@ -481,7 +491,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, o
         <div className={introEnabled() ? "cb-wipe" : undefined} key={`w:${st.preset}:${range.s}:${range.e}:${st.gran}:${mode}`}>
         <StackedArea caption={capt}
                      key={`${st.preset}:${range.s}:${range.e}:${st.gran}:${mode}:${v.labels[0]}`}
-                     labels={v.labels} layers={layers} height={190} fmt={fmtTok} t={t}
+                     labels={v.labels} layers={layers}
+                     height={Math.max(CHART_MIN, chartH - CHART_CHROME_H)} fmt={fmtTok} t={t}
                      /* ★ 同 TrafficPage：判据看标签形状（带 `T` 就是小时桶），
                         不看是不是今天 —— 否则选中昨天会印出原始的 `2026-09-14T09`。 */
                      tipTitle={(i) => {
@@ -492,6 +503,7 @@ export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, o
         </div>
         </>
       )}
+      </div>
 
       {/* ★ 总量档的图例 —— **必须带占比数字**。这个档位的已知代价就是「缓存读占 ~95%，
           另两类各自只有 ~10px 和 ~1px，构成看不出来」(用户 2026-08-15 知情选择)。
@@ -546,7 +558,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, o
           所以给它自己的横向滚动:装不下就能滚,一列都不少。
           (扫描探针会跳过 overflow:auto 的容器 —— 可滚动是取舍,不是缺陷。) */}
       {!!v?.models.length && (
-        <div style={{ marginTop: 14, overflowX: "auto" }}>
+        <div data-platform-table style={{ marginTop: 14, overflowX: "auto", overflowY: "auto",
+                      flex: "0 1 auto", minHeight: TABLE_BOX_MIN }}>
           <div style={{ display: "grid", gridTemplateColumns: `1fr ${GAP}px ${RATE_W}px`,
                         fontFamily: "'JetBrains Mono'", fontSize: TZ.groupHead, color: t.muted,
                         letterSpacing: ".06em", marginBottom: 4, minWidth: TABLE_MIN }}>

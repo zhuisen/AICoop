@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { STATUS_COLORS, STATUS_TEXT, CARD_TYPE as Z, type Theme } from "../theme";
+import { STATUS_COLORS, STATUS_TEXT, type Theme } from "../theme";
+import { useCardType } from "../hooks/useCardType";
 import StaleMark from "./StaleMark";
 import DragHandle, { type DragWiring } from "./DragHandle";
 import { type Account, fmtCd, fmtAgeSec, maskId, winBarColor, winNumColor,
@@ -13,6 +14,7 @@ import { IconBtn, IcRotate, IcPin, IcPen, IcInfo, IcTrash } from "./CardIcons";
 
 /** Delta vs the best account in the pool — "最优" / "-19%". ≤-50 is amber (handoff §5.0). */
 function DeltaChip({ delta, t }: { delta: number; t: Theme }) {
+  const Z = useCardType();
   const best = delta === 0;
   const far = delta <= -50;
   return (
@@ -73,6 +75,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
    *  查找的 switch/probe 静默操作到错的号上。这里只挡「没改」。 */
   onRename: (next: string) => void;
 }) {
+  const Z = useCardType();
   const cardRef = useRef<HTMLDivElement | null>(null);   // 拖拽影像要用整张卡
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);   // null = 不在改名
@@ -115,7 +118,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
       style={{
         position: "relative", background: isCurrent ? t.curCardBg : t.cardBg,
         border: `1px solid ${drag?.isDragging ? t.accent : border}`, borderRadius: 12,
-        padding: "16px 14px 12px", display: "flex", flexDirection: "column",
+        padding: Z.pad, display: "flex", flexDirection: "column",
         cursor: "pointer", userSelect: "none",
         // ★ 被拖的那张**浮起来**(不是变淡):其余卡片实时让位,让位本身就是落点反馈,
         //   所以这里要的是"它被拿在手上"的观感 —— 与手机拖图标一致。
@@ -180,7 +183,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
           <span style={{ fontSize: Z.ringNum, fontWeight: 700, color: t.text, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{known ? pct : "—"}</span>
         </Ring>
 
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
           {/* ★ 三列九宫格下这一行**零余量**:`plus4 活 USE 最优` 实测自然宽 126、可用 117。
               零余量意味着任何扰动都会破 —— 分数缩放下的字形量化就够了(每个内联元素舍入
               半像素,十几个累积出 9px)。所以指定**唯一让位者**:名字截省略号,徽章一个不压。
@@ -193,7 +196,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
           <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0,
                         flexWrap: "wrap", rowGap: 4 }}>
             {editing === null ? (
-              <span style={{ fontSize: Z.name, fontWeight: 700, color: t.text, minWidth: 40,
+              <span data-card-name style={{ fontSize: Z.name, fontWeight: 700, color: t.text, minWidth: 40,
                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.node}</span>
             ) : (
               <input
@@ -323,7 +326,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
               ★ 别改回 `flexWrap: wrap` 去省几像素 —— 那才是原来的 bug。 */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
                         gap: 8, flexWrap: "nowrap", minWidth: 0,
-                        marginTop: 5, paddingTop: 7, borderTop: `1px solid ${t.divider}` }}>
+                        marginTop: Z.footTop, paddingTop: Z.footPad, borderTop: `1px solid ${t.divider}` }}>
             <span title={a.expStale ? "OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。刷新 token 也拉不到新状态,要等 OpenAI 自己复核。" : undefined}
                   style={{ fontSize: Z.exp, color: t.muted, fontFamily: "'JetBrains Mono'",
                            whiteSpace: "nowrap", flexShrink: 0 }}>到期 {a.exp}{a.expStale && <span style={{ color: "#E0901C" }}>*</span>}</span>

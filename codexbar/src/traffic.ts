@@ -5,6 +5,8 @@ import { platformColor } from "./theme";
 export interface ModelBucket {
   uncached_in: number; cache_read: number; cache_write: number;
   output: number; total: number; rounds: number;
+  /** `cache_write` 里 1h 档的份额（子集，只决定价格）。只有 Claude 有，缺省 0。见 `rates.ts::costOf`。 */
+  cache_write_1h?: number;
 }
 export interface Bucket extends ModelBucket {
   models: Record<string, ModelBucket>;
@@ -667,12 +669,26 @@ export function prevNote(st: RangeState, today: string): string {
 }
 
 
+/**
+ * 用量页底部平台卡的顺序：按卡上那个「今日」数降序（用户 2026-10-15：「按今日的 token 消耗进行排序」）。
+ * 「今日」与卡片大字同一个取值：今日档 = 整档合计，其余档 = 最后一个桶。相同时保持传入顺序（稳定排序）。
+ * ★ 只排卡片；列表与图例仍按用户自己排的顺序（2026-08-12 定稿），图层仍按占比。
+ */
+export function cardTodayOf(p: { total: number; buckets: Bucket[] }, isToday: boolean): number {
+  return isToday ? p.total : (p.buckets.length ? p.buckets[p.buckets.length - 1].total : 0);
+}
+
+export function sortCardsByToday<T extends { total: number; buckets: Bucket[] }>(list: T[], isToday: boolean): T[] {
+  return [...list].sort((a, b) => cardTodayOf(b, isToday) - cardTodayOf(a, isToday));
+}
+
 export function sumBuckets(bs: Bucket[]): Bucket {
   const out: Bucket = { ...EMPTY, models: {} };
   for (const b of bs) {
     out.uncached_in += b.uncached_in; out.cache_read += b.cache_read;
     out.cache_write += b.cache_write; out.output += b.output;
     out.total += b.total; out.rounds += b.rounds;
+    if (b.cache_write_1h) out.cache_write_1h = (out.cache_write_1h ?? 0) + b.cache_write_1h;
     for (const [m, mv] of Object.entries(b.models ?? {})) {
       const t = out.models[m] ?? (out.models[m] = {
         uncached_in: 0, cache_read: 0, cache_write: 0, output: 0, total: 0, rounds: 0,
@@ -680,6 +696,7 @@ export function sumBuckets(bs: Bucket[]): Bucket {
       t.uncached_in += mv.uncached_in; t.cache_read += mv.cache_read;
       t.cache_write += mv.cache_write; t.output += mv.output;
       t.total += mv.total; t.rounds += mv.rounds;
+      if (mv.cache_write_1h) t.cache_write_1h = (t.cache_write_1h ?? 0) + mv.cache_write_1h;
     }
   }
   return out;
