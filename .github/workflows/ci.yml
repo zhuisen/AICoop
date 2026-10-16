@@ -21,6 +21,21 @@ jobs:
       # ★ pyflakes 是 `test_no_undefined_names.py` 的探针。没装它那条闸会 **skip**，
       #   而 skip 在汇总行里和绿色一样不刺眼 —— 本仓的规矩是 skip 不算绿。
       - run: python3 -m pip install --quiet pytest pyflakes
+      # ★ zstd 测试缺解压器时会 skip，而 skip 不是绿（B84/B85）。ubuntu 镜像通常自带，这里确保一定有。
+      - run: command -v zstd || sudo apt-get install -y zstd
+      - run: python3 -m pytest tests/ -q
+
+  # ★★ 同一套守卫在 **macOS** 上再跑一遍（B85 · 四方评审 P2）。产品只在 macOS 上用，而上面那条在 ubuntu ——
+  #   `/bin/bash` 3.2、BSD 工具、`/opt/homebrew` 布局这些差异只有这里碰得到（B74 的 bash 3.2 就是这一类）。
+  #   ⚠️ 2026-10-16 加入时**未在 CI 上跑过**（本机 = macOS，全套绿）；第一次推送后看它的结果再下结论。
+  invariants-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python3 -m pip install --quiet pytest pyflakes
+      - run: command -v zstd || brew install zstd
       - run: python3 -m pytest tests/ -q
 
   build:

@@ -59,3 +59,19 @@ jobs:
           releaseDraft: true          # 先出草稿,人工核过产物再公开
           prerelease: false
           args: ${{ matrix.args }}
+
+      # ★★ 对**刚构建出来的 `.app`** 跑一次脚本级冒烟（B85，四方评审 P2），不起 GUI。
+      #   作者机是 clone 装机，`.dmg` 那条路（脚本被复制进 `<store>/runtime/`）在他机器上一次都不会走到；
+      #   这里把包里的脚本摆成 `.dmg` 接入后的布局、不设任何 store 变量，断言所有入口求出同一个数据目录，
+      #   并核对包里 `RUNTIME_FILES` 一个不缺（B77 的 `dawn_sched.py` 就是这么漏的）。
+      #   ⚠️ release 是草稿（releaseDraft），这一步红 ⇒ 别点发布。
+      - uses: actions/setup-python@v5
+        if: runner.os == 'macOS'
+        with: { python-version: '3.12' }
+      - name: 安装包脚本冒烟（.dmg 布局）
+        if: runner.os == 'macOS'
+        run: |
+          APP="$(find codexbar/src-tauri/target -type d -path '*/bundle/macos/CodexBar.app' | head -1)"
+          test -n "$APP" || { echo "找不到构建出的 CodexBar.app"; exit 1; }
+          python3 -m pip install --quiet pytest
+          CODEXBAR_BUNDLE_SCRIPTS="$APP/Contents/Resources/scripts" python3 -m pytest tests/test_store_root_dmg_layout.py -q -rs
