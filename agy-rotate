@@ -156,6 +156,13 @@ def cmd_login(args):
 
     `--current` 只收编当前登录的号，不起 agy —— 第一次建池用它。
     """
+    # ★ 认不出的选项一律先停下：2026-10-17 `login --help` 被当成「加号」直接跑起来（收编当前号 + 等回车）。
+    if any(a in ("-h", "--help") for a in args):
+        print(cmd_login.__doc__)
+        return
+    bad = [a for a in args if a.startswith("-") and a != "--current"]
+    if bad:
+        sys.exit("login 不认识 %s —— 用法：agy-rotate login [label] | login --current" % " ".join(bad))
     only = "--current" in args
     label = next((a for a in args if not a.startswith("-")), None)
     before, _ = _adopt(label if only else None)
@@ -358,7 +365,7 @@ def cmd_quota(args):
         cred, err = _refresh_one(sub, a, pool)
         if err:
             return sub, a, None, err, True
-        groups, err = P.fetch_quota(cred["token"]["access_token"])
+        groups, err = P.fetch_quota(cred["token"]["access_token"], a.get("quota_anchor"))
         _maybe_tier(a, cred)
         return sub, a, groups, err, False
 
@@ -712,7 +719,7 @@ def cmd_health(args):
             rows.append((sub, a, kind, err))
             continue
         P.write_cred(sub, cred)
-        q, qerr = P.fetch_quota(cred["token"]["access_token"])
+        q, qerr = P.fetch_quota(cred["token"]["access_token"], a.get("quota_anchor"))
         rows.append((sub, a, "ok" if not qerr else "api_error", qerr or ""))
         if not qerr:
             q = P.carry_missing_groups(a.get("quota_summary"), a.get("quota_at"), q, now=time.time())

@@ -192,7 +192,7 @@ export function agyProbeToast(rs: AgyProbeResult[]): string {
  *  ★ 不把它当 100%（用户 2026-10-16 提议过，讨论后不做）：周读不到时冒充满格，会把一个周只剩 40% 的号当满的挑走。 */
 export const AGY_EXPIRED_TITLE =
   "旧读数已过期 —— 云端最近没再返回这一格，上次的数已过重置时间（或超过一天），现在读不到，不是满也不是空。"
-  + "2026-10-16 起 Google 的额度摘要不再返回 Gemini 组：5h 改从模型列表现读，周没有来源。";
+  + "2026-10-16 起 Google 的额度摘要不再返回 Gemini 组：5h 改从模型列表现读，周改从另一台额度服务器读；两边都没给时才会出现这一格。";
 
 export const AGY_UNKNOWN_TITLE =
   "上游这一格没给剩余比例 —— 读不到，不是满也不是空（proto3 会省略 0，所以可能正是见底）。"

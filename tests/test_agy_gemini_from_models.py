@@ -108,9 +108,10 @@ class TheFallbackIsWiredIntoFetchQuota(unittest.TestCase):
             P.HTTPSConnection = old
 
     def test_summary_without_gemini_is_completed_from_models(self):
-        (groups, err), calls = self.run_with([_Resp(200, {"groups": [THIRD]}), _Resp(200, models_json(0.5))])
+        (groups, err), calls = self.run_with([_Resp(200, {"groups": [THIRD]}), _Resp(200, models_json(0.5)),
+                                              _Resp(500, b"no prod")])
         self.assertFalse(err)
-        self.assertEqual(calls, [P.QUOTA_SUMMARY_PATH, P.MODELS_PATH])
+        self.assertEqual(calls, [P.QUOTA_SUMMARY_PATH, P.MODELS_PATH, P.QUOTA_SUMMARY_PATH])
         gem = [g for g in groups if g["displayName"].startswith("Gemini")]
         self.assertEqual(len(gem), 1, "★★★ 摘要缺 Gemini 时没去模型端点补")
         self.assertAlmostEqual(gem[0]["buckets"][0]["remainingFraction"], 0.5)
@@ -120,7 +121,8 @@ class TheFallbackIsWiredIntoFetchQuota(unittest.TestCase):
         self.assertEqual(calls, [P.QUOTA_SUMMARY_PATH], "★ 摘要里有 Gemini 还多发一次请求")
 
     def test_a_failed_fallback_leaves_the_summary_alone(self):
-        (groups, err), calls = self.run_with([_Resp(200, {"groups": [THIRD]}), _Resp(500, b"boom")])
+        (groups, err), calls = self.run_with([_Resp(200, {"groups": [THIRD]}), _Resp(500, b"boom"),
+                                              _Resp(500, b"boom")])
         self.assertFalse(err, "★ 补的那次失败不该让整次读数失败")
         self.assertEqual([g["displayName"] for g in groups], ["Claude and GPT models"])
 

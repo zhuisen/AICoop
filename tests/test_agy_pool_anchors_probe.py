@@ -109,7 +109,7 @@ class TheCloudReadFeedsTheLedger(_Base):
     def run_reads(self, n=3):
         pool = {"accounts": {"idle": {"label": "I"}, "used": {"label": "U"}}}
         fixed = T0 + 4 * 3600
-        self.fake_p(pool, lambda tok: (summary(self.clock.t) if tok == "idle"
+        self.fake_p(pool, lambda tok, anchor=None: (summary(self.clock.t) if tok == "idle"
                                        else summary(self.clock.t, 0.97, fixed), ""))
         for _ in range(n):
             with redirect_stdout(io.StringIO()):
@@ -158,7 +158,7 @@ class TheProbeSaysWhetherThe5hWindowStarted(_Base):
         calls = []
         fixed = T0 + 5 * 3600 - 30
 
-        def fetch(tok):
+        def fetch(tok, anchor=None):
             calls.append(self.clock.t)
             if len(calls) == 1:
                 return summary(self.clock.t), ""

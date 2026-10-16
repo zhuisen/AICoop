@@ -93,7 +93,7 @@ class TheAccountsAreFetchedInParallel(unittest.TestCase):
         saved = []
         delay = self.DELAY
 
-        def fetch_quota(token):
+        def fetch_quota(token, anchor=None):
             time.sleep(delay)                       # 模拟网络等待
             return [{"who": token}], ""             # 带上 token ⇒ 能验「没串号」
 
