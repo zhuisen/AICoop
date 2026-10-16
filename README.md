@@ -68,8 +68,8 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 覆盖的 CLI:**Claude Code · Codex · Grok · Kimi · Antigravity(agy) · OpenClaw · Reasonix · DeepSeek Harness**。加一家 = 在 `traffic/scan.py` 写个解析器 + 注册表加一行,前端自动跟上。
 
 除了 token 用量,总览页还显示**订阅额度**(与账号池的 Codex 余量并列,同款圆环+细条,标「只读」不参与切号):
-**Grok** 周额度(xAI 账单接口)· **Antigravity** 4 个桶(Gemini / Claude+GPT × 5h / 周,读本机 agy 进程的
-loopback RPC,**不联网、不消耗配额**)。没装那家 CLI 的机器上**零像素**,不会留一张写着"你没装"的空卡。
+**Grok** 周额度(xAI 账单接口)· **Antigravity** 4 个桶(Gemini / Claude+GPT × 5h / 周,按账号读云端额度摘要,**零消耗**;
+摘要缺 Gemini 组时 5h 改读模型列表,周沿用最后一次读数并标龄,超过一天显示「旧读数已过期」)。没装那家 CLI 的机器上**零像素**,不会留一张写着"你没装"的空卡。
 
 ⚠️ **agy 的 token 用量只覆盖 print 模式**(`agy -p`,即 `omc ask` / `omc team` 走的那条)。它自己**不落用量**,数据是 `bin/agy` wrapper 从 `--output-format json` 抄下来的;**交互式会话的 token 拿不到**,页面上有覆盖率徽章标注。装这一家需要一步额外配置，见 [docs/INSTALL.md §5](docs/INSTALL.md#5-构建桌面应用)。
 
@@ -231,7 +231,7 @@ loopback RPC,**不联网、不消耗配额**)。没装那家 CLI 的机器上**�
 | `.github/workflows/` | `ci.yml`(测试 + 双平台构建)· `release.yml`(推 `v*` tag 触发,产出 macOS `.dmg` 与 Windows `.exe/.msi` 挂到 Release) |
 | `app/CodexBar/` | ⚠️ 早期 Swift 原型,已被 `codexbar/` 取代,别在这里改 |
 | `agy-rotate` | ★ **agy(Antigravity) 账号池 CLI** —— `login` / `list` / `quota` / `switch` / `pick` / `auto` / `live` / `health` / `probe` / `rotate` / `auto-switch` / `rename` / `remove`。与 codex 池**机制完全不同**：agy 只在**进程启动时**读凭证，所以换号只对**下一次启动的 agy** 生效。★★★ 登录态在 **macOS 钥匙串**（`svce=gemini`/`acct=antigravity`），那个 `antigravity-oauth-token` 文件只是钥匙串写失败时的兜底 |
-| `agy/pool.py` | agy 池的凭证与额度层（钥匙串读写、OAuth 刷新、`retrieveUserQuotaSummary` 按账号取**完整**额度含周窗口）。OAuth client 从**本机 agy 二进制**现取，**绝不入库**（本仓公开） |
+| `agy/pool.py` | agy 池的凭证与额度层（钥匙串读写、OAuth 刷新、`retrieveUserQuotaSummary` 按账号取**完整**额度含周窗口；摘要缺 Gemini 组时 5h 由 `fetchAvailableModels` 补）。OAuth client 从**本机 agy 二进制**现取，**绝不入库**（本仓公开） |
 | `auth/agy/`(gitignored) | agy 每号凭证 `<sub>.json`(0600) |
 | `.agy-pool.json`(gitignored) | agy 池（账号、额度、`live_seen`/`live_wanted`、`auto_off`/`rotate_off`、缓存的 OAuth client） |
 | `agy.log`(gitignored) | agy 侧**运行日志**：`switch`/`auto`/`quota`/`health`/`probe` 逐号留痕，**成败与用量都写**。CodexBar 日志页读它，`✗` 行染红 |
