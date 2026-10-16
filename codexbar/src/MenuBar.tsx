@@ -264,8 +264,8 @@ export default function MenuBar() {
     return () => window.removeEventListener("keydown", handler);
   }, [refresh]);
 
-  // ★ grok **不进** `accounts`/`alive`:那两个数组同时驱动 ⌘1~⌘9 切号、计数徽章、
-  //   探针全池的号数、自动切号。混进去 ⌘3 会"切"到一个切不了的东西上,且不报错。
+  // ★ grok **不进** `accounts`/`alive`:那两个数组同时驱动计数徽章、探针全池的号数、
+  //   自动切号。混进去会去"切"/"探"一个切不了的东西,且不报错。
   //   视觉复用账号卡,数据走独立通路 —— 闸在 tests/test_grok_not_in_pool_ui.py。
   const { snap: grokSnap, busy: grokBusy, refresh: refreshGrok } = useGrokQuota();
   // ★ agy 同样不进 `accounts`/`alive`,理由与 grok 完全一致。

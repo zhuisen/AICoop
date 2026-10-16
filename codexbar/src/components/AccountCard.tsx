@@ -29,9 +29,9 @@ function DeltaChip({ delta, t }: { delta: number; t: Theme }) {
 }
 
 
-export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut,
+export default function AccountCard({ a, isCurrent, isBest, isSelected,
   bestLabel = "USE", bestTitle, curLabel = "当前", curTitle, bestPct, probing, privacy, t, onSelect, onSwitch, onShowDetail, onRemove, onProbe, onUseCredit, usingCredit, onRename, onToggleRotate, onTogglePin, winSlots, drag }: {
-  a: Account; isCurrent: boolean; isBest: boolean; isSelected: boolean; shortcut?: number;
+  a: Account; isCurrent: boolean; isBest: boolean; isSelected: boolean;
   /** 高亮角标的文案。★ codex 档传「下一个」（真挑号器的结果），agy 档保留 `USE`
    *  —— agy **没有逐请求挑号器**，手动切号就是它的机制，「推荐切到谁」在那边仍成立。 */
   bestLabel?: string; bestTitle?: string;
@@ -143,11 +143,10 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
           （5530 / mou / qq55）三个全是 `rotate_off`，界面上却看着是最优先的 ——
           「排第一但根本不参与」在旧界面上完全看不出来。
           ★ 琥珀而不是红：这是**主动停用**，不是坏了。红留给凭证失效。
-          ★ 没有快捷键时也要画（⌘N 只给前 9 张，停用状态与它无关）。 */}
+          ★ 左上角原来还有 `⌘N` 切号角标，2026-10-16 起 ⌘N 改切档位、角标随之撤掉。 */}
       <span style={{ position: "absolute", top: 6, left: 10, fontSize: Z.shortcut,
                      color: t.muted, fontFamily: "'JetBrains Mono'",
                      display: "flex", alignItems: "center", gap: 4 }}>
-        {shortcut ? `⌘${shortcut}` : ""}
         {/* ★★ 置顶角标**必须在收起态就看得见** —— 它决定钱花在哪个号上。
             「排第一但根本不参与」那次教训说的就是：判断优先用哪个号是在**总览一眼扫**
             的时候，而不是展开某一张卡的时候。
@@ -204,7 +203,7 @@ export default function AccountCard({ a, isCurrent, isBest, isSelected, shortcut
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => setEditing(e.target.value)}
                 onKeyDown={(e) => {
-                  // ★ 必须拦:全局 ⌘1~⌘9 是切号快捷键,不拦的话在输入框里打数字会切号
+                  // ★ 必须拦:全局 ⌘1~⌘3 是切档快捷键,不拦的话在输入框里打 ⌘+数字会切走这一档
                   e.stopPropagation();
                   if (e.key === "Enter") {
                     const v = editing.trim();

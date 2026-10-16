@@ -83,7 +83,9 @@ def _measure():
                 pg.evaluate("""() => { const c=[...document.querySelectorAll('svg circle[r="4.2"]')]
                     .map(e=>e.closest('span')).find(Boolean); if (c) c.click(); }""")
                 pg.wait_for_timeout(500)
-            card_bg = pg.evaluate("getComputedStyle(document.querySelector('[data-aid]')).backgroundColor")
+            # ★ 取**全部**卡片：第一张常是「当前 / 下一个」，带青色底（两档都是），只看它会随数据假红（2026-10-16）。
+            card_bg = " | ".join(pg.evaluate(
+                "[...document.querySelectorAll('[data-aid]')].map(e => getComputedStyle(e).backgroundColor)"))
             out.setdefault("_card_bg", {})[theme] = card_bg
             n = pg.evaluate("document.querySelectorAll('[data-aid]').length")
             worst = {"muted": 99.0, "text2": 99.0}

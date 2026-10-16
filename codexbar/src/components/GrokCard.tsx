@@ -77,8 +77,8 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
       cursor: onOpen ? "pointer" : "default", userSelect: "none",
       transition: "background .2s ease, border-color .2s ease",
     }}>
-      {/* 账号卡左上角是 ⌘N 快捷键提示。grok **没有**快捷键(它不在 aliveByLabel 里,
-          见 tests/test_grok_not_in_pool_ui.py),所以这里放的是"它是什么"而不是"怎么切它"。 */}
+      {/* grok 是单号只读、不在账号池里(见 tests/test_grok_not_in_pool_ui.py),
+          左上角放的是"它是什么"。 */}
       <span style={{ position: "absolute", top: 6, left: 10, color,
                      fontFamily: MONO, letterSpacing: ".04em", fontSize: Z.shortcut }}>CLI</span>
       {/* ★ 右上角**不放任何控件**（用户 2026-09-20：「卡片统一一下」）。

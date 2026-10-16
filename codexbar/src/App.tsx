@@ -39,7 +39,7 @@ import { useRotationBoard } from "./hooks/useRotationBoard";
 import { IcRefresh, IcKey, IcRotate } from "./components/CardIcons";
 import { useOneRowHeader } from "./hooks/useOneRowHeader";
 import ProviderTabs from "./components/ProviderTabs";
-import { POOL_PLATFORMS, loadPoolKey, savePoolKey, type PoolKey } from "./platforms";
+import { POOL_PLATFORMS, loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
 import { useAgyPool } from "./hooks/useAgyPool";
 import ProbeButton from "./components/ProbeButton";
 import { CardTypeContext, useCompactCards } from "./hooks/useCardType";
@@ -242,14 +242,9 @@ export default function App() {
 
   const aliveByLabel = accounts.filter(a => a.status !== "dead").sort((a, b) => a.node.localeCompare(b.node, undefined, { numeric: true }));
   /**
-   * ★★ **显示顺序与 ⌘N 用的是同一个数组**（用户 2026-09-19 从三个方案里选的这一档）。
-   *
-   * 左上角那个 `⌘N` 角标本来就是「按 ⌘N 能切到它」的承诺。拖拽之后若 ⌘N 仍按 label 序，
-   * 第一张卡上会写着 `⌘3` —— 角标与行为分叉，而**角标是唯一可见的那一半**，
-   * 用户会照着它按，然后切到别的号上。切号是有副作用的（换的是正在计费的账号）。
-   * 所以这里让两者共用 `orderedAlive`，角标退化成「第几张」，永远自洽。
-   *
-   * ⚠️ 已知代价（用户知情）：重排之后旧的肌肉记忆会切到别的号。
+   * 卡片的显示顺序（拖拽排序，用户 2026-09-19 要的）。
+   * ⚠️ 2026-10-16 起 ⌘N **不再切号**（改为切 Codex/Gemini/Grok 档，见下面 `useKeyboard`），
+   *   所以卡上的 `⌘N` 角标一并撤掉 —— 角标是「按它能切到这张」的承诺，行为没了承诺就得跟着走。
    * ★ 没被排过的号**追加在末尾**，绝不丢（见 `applyOrder`）。
    */
   const savedAlive = applyOrder(aliveByLabel, state.pick_order, (a) => a.aid);
@@ -260,25 +255,14 @@ export default function App() {
   // running the watcher in both would double-notify.
   useDeadWatch(accounts, currentNode);
   useAutoSwitch(accounts, currentNode, run);
-  // ★★ ⌘1~⌘9 **跟着当前这一档走**（用户 2026-09-14：「gemini 的账号左上角还是 CLI？」）。
-  //   那个角标本来就是「按 ⌘N 能切到它」的承诺；只给 codex 接线、却在别的档也画角标，
-  //   就是画一个点了没反应的东西 —— 本仓判过死刑的形态。所以两件事一起做：
-  //   接线按档分流，角标也只在真的接了线的那一档出现。
-  //   ⚠️ agy **仍然不进 `alive`/`accounts`** —— 那两个数组还驱动着计数徽章、探针全池的号数、
-  //     自动切号；这里只是把**键盘事件**按档分流，不是把 agy 塞进那条数组。
-
+  // ★★ 总览上 ⌘1/⌘2/⌘3 = 切到 Codex / Gemini / Grok 档（用户 2026-10-16：「command+数字是切换
+  //   codex、gemini、grok，而不是切换对应的账号」）。序号与 Tab 显示顺序同源（`POOL_PLATFORMS`）。
+  //   ⚠️ 这条**取代**了 2026-09-14 / 09-19 的「⌘N 切第 N 张卡」—— 切号仍走卡片上的「切换」。
+  //   别的页面没有档位 Tab，⌘N 什么也不做（原来在任何页都会切 codex 号，看不见、却在换计费账号）。
   useKeyboard(win, refresh, setPage as (p: string) => void, (idx) => {
-    if (page === "overview" && provider === "gemini") {
-      const a = orderedAgy[idx];            // ★ 与卡片显示顺序同源（同 codex 档）
-      if (a && a.sub !== agyPool.liveSub) {
-        agyPool.switchTo(a.label);
-        showToast(`⌘${idx + 1} → ${a.label} · 下次启动 agy 生效`);
-      }
-      return;
-    }
-    if (page === "overview" && provider === "grok") return;   // 单号只读，没有可切的
-    const target = orderedAlive[idx];          // ★ 与卡片显示顺序同源，见 orderedAlive
-    if (target && target.aid !== currentNode) run(`switch-${target.aid}`, ["switch", target.node], `⌘${idx + 1} → ${target.node}`);
+    if (page !== "overview") return;
+    const k = poolKeyAt(idx);
+    if (k) setProvider(k);
   });
 
   // ★ 一次取满最大窗口(90d),换档位纯前端切片。scan.py 内部恒扫 max(days,90),所以五个档位的
@@ -301,7 +285,7 @@ export default function App() {
     .map((e) => [e.aid, e.pin == null ? null : e.pin - 1] as const));
 
   /**
-   * Gemini 档的排序列表。★ 与 codex 档**同一条规则**：显示顺序与 ⌘N 共用一个数组。
+   * Gemini 档的排序列表。★ 与 codex 档**同一条规则**（拖拽排序，只管摆放）。
    * ⚠️ grok 档**刻意不接**：它是单号只读、永远只有一张卡，给它画一个拖不出效果的手柄
    *   就是「画一个点了没反应的东西」—— 本仓判过死刑的形态。
    */
@@ -670,10 +654,9 @@ export default function App() {
               )}
 
               {(() => {
-                // Grid order is by LABEL, not by quota. The store sorts quota-desc, which made the
-                // ⌘N hints (derived from label order) read 1,3,4,2 across the grid — the shortcut
-                // numbers have to match reading order to be usable, and the handoff grid is label-
-                // ordered too. The "which should I use" answer is the Hero + USE badge, not position.
+                // Grid order is by LABEL (then the user's drag order), not by quota: position must
+                // not shuffle on every refresh, and the handoff grid is label-ordered too. The
+                // "which should I use" answer is the Hero + USE badge, not position.
                 const alive = orderedAlive;
                 const dead = accounts.filter(a => a.status === "dead");
                 // Delta baseline = best remaining quota among usable accounts.
@@ -712,19 +695,18 @@ export default function App() {
                     {provider === "codex" && (<>
                     <div data-cards-grid style={{ display: "grid", gridTemplateColumns: CARD_GRID_COLS, gap: 12, alignContent: "start" }}>
                       {alive.map((a) => {
-                        const shortcutIdx = alive.findIndex(x => x.aid === a.aid);   // ★ 就是「第几张」
                         // 改名按 aid 不按 label:cmd_rename 两者都认,而 aid 唯一 —— 重名时不会改到别的号上
                         return (
                         <AccountCard key={a.aid} a={a} isCurrent={a.aid === currentNode} isBest={board?.next?.aid === a.aid}
                           bestLabel="下一个"
                           bestTitle="代理下一个请求会挑这个号（与顶部续航条同一个真源：codex-rotate next）"
                           curLabel="直连"
-                          curTitle="不走代理直接跑 codex 时用的就是这个号（auth.json 里是它）。走代理时每个请求都可能换号，以顶部「正在使用」为准。" isSelected={selectedCard === a.aid} shortcut={shortcutIdx >= 0 && shortcutIdx < 9 ? shortcutIdx + 1 : undefined} bestPct={bestPct} winSlots={winSlots} probing={loadingAction === `probe-${a.aid}`} privacy={privacy} t={t}
+                          curTitle="不走代理直接跑 codex 时用的就是这个号（auth.json 里是它）。走代理时每个请求都可能换号，以顶部「正在使用」为准。" isSelected={selectedCard === a.aid} bestPct={bestPct} winSlots={winSlots} probing={loadingAction === `probe-${a.aid}`} privacy={privacy} t={t}
                           drag={makeDrag(a.aid, savedAlive.map((x) => x.aid),
                             // ★★ 2026-09-21：这句话原来写「这个顺序就是轮换优先级」——
                             //   用户当天把轮换改回「默认容量最高优先 + 点亮才插队」之后，
                             //   它就成了**一句假陈述**，而且正好会让人以为自己在调轮换。
-                            "按住拖动排序 —— **只影响卡片摆放与 ⌘N**，不影响轮换。"
+                            "按住拖动排序 —— **只影响卡片摆放**，不影响轮换。"
                             + "要优先用某个号，展开卡片点「置顶」图标。",
                             (next) => {
                               // ★★ codex 档写进 state.json（它就是计费顺序），CLI 是唯一写入口
@@ -790,7 +772,7 @@ export default function App() {
                           ★ 当值号的卡用**本机 RPC** 那份快照 —— 只有它带周窗口；
                             其余号只有云端的 5h。少一行是真话，补一行假的「周 100%」不是。 */}
                       {orderedAgy.length > 0
-                        ? orderedAgy.map((a, i) => (
+                        ? orderedAgy.map((a) => (
                             <AgyCard key={a.sub} t={t} color={colorOf(traffic, "agy")}
                                      aid={a.sub}
                                      snap={agyPool.snapshotOf(a, agySnap)}
@@ -804,15 +786,12 @@ export default function App() {
                                      disabled={!!platPrefs.by?.agy?.off} winSlots={winSlots}
                                      busy={agyPool.busy} err={agyPool.err}
                                      drag={makeDrag(a.sub, savedAgy.map((x) => x.sub),
-                                       "按住拖动调整摆放顺序（⌘N 跟随）。只影响显示，不影响切号策略。",
+                                       "按住拖动调整摆放顺序。只影响显示，不影响切号策略。",
                                        (next) => setOrderFor("gemini", next))}
                                      /* ★ 只喂给动作条里的 ↻（与 codex 卡的动作条同排）；
                                         右上角那个已删 —— 它和拖拽手柄是同一个坐标。 */
                                      onRefresh={agyPool.refresh}
                                      /* ── 与 codex 账号卡对齐（用户 2026-09-13）── */
-                                     // ★ 角标只在**真的接了线**的那一档画：⌘1~⌘9 在 Gemini 档
-                                     //   切的就是这一列（见上面 useKeyboard 的分流）。超过 9 个不画。
-                                     shortcut={i < 9 ? i + 1 : undefined}
                                      isSelected={selectedCard === a.sub}
                                      isBest={agyBoard?.next?.aid === a.sub}
                                      bestTitle="下次启动 agy 会装进这个号（与顶部续航条同一个真源：agy-rotate next）"
@@ -859,8 +838,8 @@ export default function App() {
                     {provider === "grok" && (<>
                     <div data-cards-grid style={{ display: "grid", gridTemplateColumns: CARD_GRID_COLS, gap: 12, alignContent: "start" }}>
                       {/* ★ grok 卡。**渲染在格子里,但绝不进 `alive` 数组** —— 那个数组同时驱动
-                          ⌘1~⌘9 切号(`aliveByLabel[idx]` 直接 switch)、计数徽章、探针全池的号数、
-                          自动切号。混进去 ⌘4 会"切"到一个切不了的东西上,而且不报错。
+                          计数徽章、探针全池的号数、自动切号。混进去探针全池会去探一个探不了的东西,
+                          而且不报错。
                           闸在 tests/test_grok_not_in_pool_ui.py。 */}
                       <GrokCard t={t} color={colorOf(traffic, "grok")} snap={grokSnap}
                                 disabled={!!platPrefs.by?.grok?.off}

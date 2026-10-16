@@ -39,8 +39,12 @@ const MONO = "'JetBrains Mono'";
  *
  * ★ 颜色由调用方传入（`colorOf(traffic, "agy")`），不写死：用户在设置页能改平台色。
  */
+/** 窗口标签的最小宽度：「5h」是两个等宽字（1.2em），「周」是一个汉字（~1em）。
+ *  不给下限的话两条细条起点差 ~2.4px（2026-10-16 用户截图里看得出来）。 */
+const WIN_LABEL_W = "1.25em";
+
 export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots, onOpen, onRefresh,
-                                 isSelected, shortcut, isBest, bestPct,
+                                 isSelected, isBest, bestPct,
                                  onSelect, onRename, onRemove, onProbe, probing,
                                  rotates, onToggleRotate, pinRank = null, onTogglePin, bestTitle,
                                   label, email, isCurrent, onSwitch, switching, drag, aid, action, plan }: {
@@ -91,8 +95,6 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
   // ── 与 codex 账号卡对齐（用户 2026-09-13：「gemini 的功能也没有 1:1 同步上 codex」）──
   /** 卡被选中 ⇒ 展开动作条。 */
   isSelected?: boolean;
-  /** ⌘N 角标。没有就不画 —— agy 不进 `alive`，快捷键另走一条路。 */
-  shortcut?: number;
   /** 全池里余量最多的那个号 ⇒ 画 `最优` / `USE`。 */
   isBest?: boolean;
   /** 最优号的余量，用来算本卡的差值角标 `-N%`。 */
@@ -180,11 +182,11 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
     }}>
       {drag && <DragHandle t={t} dragging={drag.isDragging} hint={drag.hint}
                            onStart={drag.onStart} onMove={drag.onMove} onEnd={drag.onEnd} />}
-      {/* ★ 有快捷键就画 `⌘N`（与账号卡同位同字号），没有就退回 `CLI` ——
-          那个角标本来就是"这张卡怎么来的"，两种写法都在回答同一个问题。 */}
+      {/* ★ 池里的号左上角不写字（同 codex 账号卡；原来的 `⌘N` 切号角标 2026-10-16 随快捷键改切档撤掉）；
+          没建池时的只读卡写 `CLI` —— 回答"这张卡怎么来的"。 */}
       <span style={{ position: "absolute", top: 6, left: 10, color,
                      fontFamily: MONO, letterSpacing: ".04em", fontSize: Z.shortcut }}>
-        {shortcut ? `⌘${shortcut}` : "CLI"}
+        {label === undefined ? "CLI" : ""}
         {/* ★ 置顶角标收起态就看得见，带队列位次 —— 与 codex 账号卡同位同义。 */}
         {pinRank !== null && (
           <span data-pin-badge style={{ display: "inline-flex", alignItems: "center", gap: 1,
@@ -217,8 +219,8 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
         <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             {editing !== null ? (
-              // ★ `onKeyDown` 必须 `stopPropagation`：全局 ⌘1~⌘9 是切号快捷键，
-              //   不拦的话在框里打数字会切号（与账号卡同一条教训）。
+              // ★ `onKeyDown` 必须 `stopPropagation`：全局 ⌘1~⌘3 是切档快捷键，
+              //   不拦的话在框里按 ⌘+数字会切走这一档、编辑态随卡片一起消失（与账号卡同一条教训）。
               <input autoFocus value={editing}
                      onClick={(e) => e.stopPropagation()}
                      onChange={(e) => setEditing(e.target.value)}
@@ -238,9 +240,12 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               /* ★ `data-hero-acct` 只挂在**当值号**这张卡的名字上：uishot 的 `trails` 探针按时间采
                  「界面说当前是谁」。2026-09-24 Hero 换成 `RunwayHero`（数据来自后端现读，不经种子）之后，
                  仍然会闪回种子的只剩卡片「当前」徽章这一路（`liveSub`），所以标记跟着搬到这里。 */
+              /* ★ 名字是这一行**唯一让位者**（同账号卡）：徽章一个不压，名字截省略号、留 40px 下限。
+                 2026-10-16 用户截图：`tomyhuo… ULTRA 当前 下一个` 里「当前」被挤成两行 ——
+                 它和「切换 / 只读」没有 `flexShrink: 0`，「下一个」有，所以只有它们会被压。 */
               <span data-hero-acct={isCurrent ? "" : undefined}
-                    style={{ fontSize: Z.name, fontWeight: 700, color, minWidth: 0,
-                             overflow: "hidden", textOverflow: "ellipsis" }}>{label ?? "agy"}</span>
+                    style={{ fontSize: Z.name, fontWeight: 700, color, minWidth: 40,
+                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label ?? "agy"}</span>
             )}
             <PlanBadge plan={agyBadgePlan(plan)} t={t} size={Z.planBadge} />
             {/* ★★ 徽章三态，**别合并**：
@@ -249,18 +254,18 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                 · 不在池里      → 「只读」——这是 2026-09-13 之前的形态，没建池时仍然成立。
                 把后两者合并成一个灰标签，就等于回到用户问的那个问题：「不是解决了吗」。 */}
             {isCurrent ? (
-              <span style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px",
+              <span style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", flexShrink: 0, whiteSpace: "nowrap",
                              borderRadius: 5, color: t.accentText, background: t.accent }}>当前</span>
             ) : onSwitch ? (
               <span onClick={(e) => { e.stopPropagation(); if (!switching) onSwitch(); }}
                     title="切到这个号 —— ★ 只对下一次启动的 agy 生效，已经开着的会话不受影响"
-                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px",
+                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", flexShrink: 0, whiteSpace: "nowrap",
                              borderRadius: 5, cursor: switching ? "default" : "pointer",
                              color, border: `1px solid ${hexA(color, .45)}`,
                              opacity: switching ? .5 : 1 }}>{switching ? "切换中…" : "切换"}</span>
             ) : (
               <span title="Antigravity 还没建账号池 —— `agy-rotate login --current` 收编当前号"
-                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", borderRadius: 5,
+                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", borderRadius: 5, flexShrink: 0, whiteSpace: "nowrap",
                              color, border: `1px solid ${hexA(color, .45)}` }}>只读</span>
             )}
             {/* ★ 降级说明**只在这里**,一个字符 + 悬浮。理由见 StaleMark 的文件头。 */}
@@ -343,7 +348,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               <div key={label} data-agy-unknown={row ? "" : undefined}
                    title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE) : missTitle(label, isCurrent)}
                    style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO }}>{label}</span>
+                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO, minWidth: WIN_LABEL_W, whiteSpace: "nowrap" }}>{label}</span>
                 {/* ★ 条槽保留：跨卡对齐靠这一行的高度撑着（见 test_missing_window_says_so）。 */}
                 <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack }} />
                 <span style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO,
@@ -362,7 +367,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
                      : `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}%`}
                    style={{ display: "flex", alignItems: "center", gap: 6,
                             opacity: row.seen_at ? .62 : 1 }}>
-                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO }}>{row.label}</span>
+                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO, minWidth: WIN_LABEL_W, whiteSpace: "nowrap" }}>{row.label}</span>
                 <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack, overflow: "hidden" }}>
                   <div style={{ height: "100%", width: `${rr}%`,
                                 background: stateColor, borderRadius: 2,

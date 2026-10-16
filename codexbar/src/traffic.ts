@@ -1,5 +1,6 @@
 import { costOf, cacheSavingOf } from "./rates";
 import { platformColor } from "./theme";
+import type { SourceStatus } from "./scanHealth";
 
 /** traffic/scan.py 的输出契约。四个 token 类**互不相交**,相加才是 total(见 scan.py 头部)。 */
 export interface ModelBucket {
@@ -127,7 +128,16 @@ export interface AgyQuotaSeries {
 
 export interface TrafficData {
   platforms: Record<string, Platform>;
-  scan: { scanned: number; reused: number; files: number; elapsed_ms?: number };
+  scan: {
+    scanned: number; reused: number; files: number; elapsed_ms?: number;
+    // ★ 下面几个一直在 `scan.py` 的输出里，类型上原来丢掉了（B85）。旧快照没有 ⇒ 全是可选。
+    read_failed?: number;
+    read_failed_sample?: string[];
+    enabled?: string[];
+    registered?: string[];
+    /** 每个已注册源一条状态。消费一律走 `scanHealth.ts::sourceNotes`。 */
+    sources?: Record<string, SourceStatus>;
+  };
   /** ★ 只有 agy 有；`null` = 样本还不足两个，推不出任何消耗。
    *  **`null` 必须显示成「观测还不够」，不能画成 0** —— 0 会被读成"没用过"。 */
   agy_quota?: AgyQuotaSeries | null;

@@ -16,8 +16,8 @@ const MONO = "'JetBrains Mono'";
  * - 视觉复用（`mb-row` 那套 class + `Ring`）：环形和细条是这个 app 表达额度的固有语言，
  *   grok 的额度就是额度，没理由换一种画法。
  * - 数据**绝不**混进 `accounts` / `alive` / `aliveByLabel`：那几个数组同时驱动
- *   **⌘1~⌘9 切号**（`aliveByLabel[idx]` 直接 `run("switch", …)`）、计数徽章、探针全池的号数、
- *   自动切号。grok 混进去，⌘3 就可能"切"到一个根本切不了的东西上，**而且不报错**。
+ *   计数徽章、探针全池的号数、自动切号。grok 混进去，自动切号就可能"切"到一个根本切不了的
+ *   东西上，**而且不报错**。
  *   闸在 `tests/test_grok_not_in_pool_ui.py`。
  *
  * ★★ **环、条、左轨、名字全部走 grok 识别色**（用户 2026-08-24 定稿：「grok 的所有颜色

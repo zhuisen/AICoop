@@ -38,10 +38,11 @@ export default function ProviderTabs({ items, cur, on, onAdd, t }: {
     <div style={{ display: "flex", alignItems: "center", gap: 2, padding: 3,
                   border: `1px solid ${t.ghostBorder}`, borderRadius: 11,
                   flexShrink: 0 }}>
-      {items.map((p) => {
+      {items.map((p, i) => {
         const on_ = p.key === cur;
         return (
-          <span key={p.key} onClick={() => on(p.key)} title={p.note}
+          // ★ 悬浮提示带 `⌘N`：总览上 ⌘1/⌘2/⌘3 切的就是这一排（`poolKeyAt`，同一份 POOL_PLATFORMS）。
+          <span key={p.key} onClick={() => on(p.key)} title={`${p.note} · ⌘${i + 1}`}
                 // ★ 身份标记，供 uishot 的 `trails` 探针**按时间**采这一枚 pill 的文字。
                 //   它守的是「进过这一档之前，计数是不是已经是真数」—— 那种缺陷是**瞬态**的，
                 //   终态快照对它完全沉默（见 `make_harness.py` 的 `trails`）。

@@ -7,10 +7,8 @@
 1. **没排过的号被丢掉。** 按「只渲染 order 里有的」写，新加的号、刚复活的号就会
    **静默消失**，而用户看到的是「我加了个号，总览里没有」—— 完全指不到排序功能。
    这是本仓「读不到 ≠ 没有」在排序上的形态。
-2. **`⌘N` 与角标分叉。** 左上角那个 `⌘N` 角标就是「按 ⌘N 能切到它」的承诺，而
-   **角标是唯一可见的那一半**。若显示顺序被拖乱、`⌘N` 仍按 label 序，用户会照着角标按，
-   然后切到**别的号**上 —— 切号是有副作用的（换的是正在计费的账号）。
-   用户 2026-09-19 选的就是「⌘N 跟视觉顺序」，所以两者必须**共用同一个数组**。
+2. ~~`⌘N` 与角标分叉~~ —— 2026-10-16 起 ⌘N 改切档位、角标撤掉，这一条随之作废
+   （新契约见 `tests/test_overview_shortcut_switches_tab.py`）。
 
 ## 行为闸怎么跑
 
@@ -101,8 +99,12 @@ class MoveItemIsSane(unittest.TestCase):
         self.assertEqual(got, ["a", "b", "c"], "★ 原地改了入参 —— React 会看不到变化")
 
 
-class TheShortcutAgreesWithWhatYouSee(unittest.TestCase):
-    """★★ `⌘N` 与角标必须来自**同一个数组**（用户 2026-09-19 选的那一档）。"""
+class TheCardsRenderFromTheOrderedList(unittest.TestCase):
+    """★ 卡片按拖拽后的顺序画。
+
+    ⚠️ 2026-10-16 起 ⌘N 不再切号（改切 Codex/Gemini/Grok 档，用户当天定），卡上的 `⌘N` 角标随之撤掉，
+    所以原来「⌘N 与角标共用一个数组」那三条闸作废 —— 新契约在 `tests/test_overview_shortcut_switches_tab.py`。
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -113,18 +115,9 @@ class TheShortcutAgreesWithWhatYouSee(unittest.TestCase):
             if not l.strip().startswith("//") and not l.strip().startswith("*")
             and not l.strip().startswith("/*"))
 
-    def test_the_keyboard_target_comes_from_the_ordered_list(self):
-        self.assertIn("const target = orderedAlive[idx]", self.code,
-                      "★★ ⌘N 还在用 label 序 —— 角标会指向别的号")
-        self.assertNotIn("const target = aliveByLabel[idx]", self.code)
-
     def test_the_cards_render_from_the_same_list(self):
         self.assertIn("const alive = orderedAlive", self.code,
-                      "★★ 卡片与 ⌘N 用了两个不同的数组")
-
-    def test_the_badge_index_is_the_position_in_that_list(self):
-        self.assertIn("const shortcutIdx = alive.findIndex", self.code,
-                      "★ 角标序号不是「第几张」—— 与 ⌘N 会分叉")
+                      "★★ 卡片没走排序后的列表 —— 拖完不生效")
 
 
 class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
@@ -143,10 +136,6 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
     def test_gemini_cards_render_from_the_ordered_list(self):
         self.assertIn("orderedAgy.map(", self.code,
                       "★ Gemini 卡片没走排序后的列表")
-
-    def test_the_gemini_shortcut_uses_the_same_list(self):
-        self.assertIn("const a = orderedAgy[idx]", self.code,
-                      "★★ Gemini 的 ⌘N 与卡片顺序分叉了 —— 角标会指向别的号")
 
     def test_grok_gets_no_handle(self):
         """单卡档不给手柄。判据：GrokCard 的调用点不传 `drag`。"""

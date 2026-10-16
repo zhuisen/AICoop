@@ -53,6 +53,14 @@ export const POOL_PLATFORMS: readonly PoolPlatform[] = [
 export const platformOf = (k: PoolKey): PoolPlatform =>
   POOL_PLATFORMS.find(p => p.key === k) ?? POOL_PLATFORMS[0];
 
+/**
+ * 总览上 `⌘1~⌘N` 切到第几档（用户 2026-10-16：「command+数字是切换 codex、gemini、grok，
+ * 而不是切换对应的账号」）。★ 序号就是 Tab 的显示顺序 —— 两者都读 `POOL_PLATFORMS`。
+ * 超出档数返回 `undefined`（⌘4~⌘9 什么也不做，绝不落到别的动作上）。
+ */
+export const poolKeyAt = (idx: number): PoolKey | undefined =>
+  Number.isInteger(idx) && idx >= 0 ? POOL_PLATFORMS[idx]?.key : undefined;
+
 const STORE_KEY = "codexbar_provider";
 
 /**

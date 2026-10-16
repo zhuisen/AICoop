@@ -705,7 +705,8 @@ function relayEntry() {
           var sub = 'sub' + i;
           subs.push(sub);
           accs[sub] = {
-            label: ['qq55', 'Asen', 'Huo', 'wing'][i] || ('acc' + i),
+            // ★ `?agyname0=<名字>` 换第一个号的名字（2026-10-16：长名字 + ULTRA + 当前 + 下一个 把「当前」挤成两行）。
+            label: (i === 0 && p.get('agyname0')) || ['qq55', 'Asen', 'Huo', 'wing'][i] || ('acc' + i),
             email: 'demo' + i + '@example.com',
             // ★ 档位（2026-10-15）：第一个号 Ultra（当值 ⇒ Hero / 卡 / 菜单栏都看得到徽章），其余 Pro（不画）。
             plan: i === 0 ? 'ultra' : 'pro',

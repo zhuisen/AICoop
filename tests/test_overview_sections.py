@@ -69,7 +69,7 @@ class TheOverviewIsTabbedByProvider(unittest.TestCase):
     def test_the_identity_dot_survives_selection(self):
         """★ 选中态是青底，识别色圆点是「这一档是谁」—— 两件事。
         选中时去掉圆点，就只能靠文字猜它是哪一家。"""
-        i = TABS.index("items.map((p)")
+        i = TABS.index("items.map((p")
         seg = TABS[i:i + 1400]
         self.assertIn("background: p.color", seg, "★ 选中态丢了识别色圆点")
 

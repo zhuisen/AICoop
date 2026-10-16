@@ -18,6 +18,7 @@ import { useCacheMode } from "../hooks/useCacheMode";
 import { usePlatformPrefs } from "../hooks/usePlatformPrefs";
 import type { TrafficData, PlatformPrefs } from "../traffic";
 import { CACHE_MODES, cacheModeLabel, cacheModeDesc, orderedKeys, fmtTok } from "../traffic";
+import { sourceNotes } from "../scanHealth";
 
 /** 菜单栏标题样式(用户 2026-08-12 从 demo 里三选一)。索引与 Rust 的 TRAY_STYLE 一一对应。 */
 export const TRAY_STYLES = ["full", "mid", "min", "today"] as const;
@@ -97,8 +98,8 @@ export function patchSettings(patch: Partial<Settings>): Settings {
  *   被钳到 min=5 变成 "5"，第二个字符就再也接不上了。所以打字期间不校验，
  *   **失焦或回车才提交并 clamp**；非法输入直接丢弃、回落到当前值。
  *
- * ★★ `onKeyDown` 必须 `stopPropagation`：全局 ⌘1~⌘9 是切号快捷键，不拦的话
- *   在框里打数字会**真的切号**（改名输入框上踩过同一个坑）。
+ * ★★ `onKeyDown` 必须 `stopPropagation`：全局键盘处理里有 ⌘+数字快捷键（2026-10-16 起是总览切档，
+ *   此前是切号 —— 改名输入框上踩过）。设置页本身不响应它，拦住是为了别让下一个快捷键漏进输入框。
  */
 function NumInput({ value, onChange, min, max, suffix, t }: {
   value: number; onChange: (v: number) => void; min: number; max: number; suffix: string; t: Theme;
@@ -123,7 +124,7 @@ function NumInput({ value, onChange, min, max, suffix, t }: {
         onFocus={e => e.currentTarget.select()}
         onBlur={e => commit(e.target.value)}
         onKeyDown={e => {
-          e.stopPropagation();                                // ★ 别让 ⌘1~⌘9 切号
+          e.stopPropagation();                                // ★ 别让 ⌘+数字快捷键漏进来
           if (e.key === "Enter") e.currentTarget.blur();
           if (e.key === "Escape") { setDraft(null); e.currentTarget.blur(); }
         }}
@@ -509,7 +510,7 @@ function PlatformSection({ t }: { t: Theme }) {
         })}
       </div>
 
-      <DiscoverPanel t={t} />
+      <DiscoverPanel t={t} snap={snap} />
 
       <div style={{ fontSize: 10, color: t.muted, marginTop: 9, lineHeight: 1.6 }}>
         ⚠️ <b>新增一家平台不在这里</b>。能扫出哪几家由 <code>traffic/scan.py</code> 的注册表决定——
@@ -531,7 +532,43 @@ function PlatformSection({ t }: { t: Theme }) {
  * 判定状态四档,颜色对应:ok 青 / ambiguous 琥珀 / reject 红 / unknown 灰。
  * **判不了是常态**(四家里三家判不了),这不是失败,是它唯一的安全性来源。
  */
-function DiscoverPanel({ t }: { t: Theme }) {
+/**
+ * 「数据源状态」（B85 · 用户 2026-10-16 从两版 demo 里选的 A：设置页常驻，不放用量卡）。
+ *
+ * ★ 数据来自**最近一次常规扫描**的快照（`scan.sources`），不用点「扫描新数据源」——
+ *   那个按钮找的是**没注册**的产品，这里说的是**已注册**的源这一轮读成了什么样。
+ * ★ 两级：少算了（没解压器 / 读失败 / 有压缩文件没解析）琥珀；没找到 / 空是灰 —— 没装那个 CLI 是常态。
+ *   文案只走 `scanHealth.ts::sourceNotes`，别在这里另写一份。
+ * ★ 旧快照没有 `sources` ⇒ 整块不画（下一次扫描后才有），**不说「全部正常」** —— 读不到 ≠ 没问题。
+ */
+function SourceStatusBlock({ t, snap }: { t: Theme; snap: TrafficData | null }) {
+  const sources = snap?.scan?.sources;
+  if (!sources) return null;
+  const notes = sourceNotes(sources);
+  const n = Object.values(sources).filter((s) => s.state !== "disabled").length;
+  const at = new Date(snap.generated_at * 1000);
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return (
+    <div data-source-status style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 4,
+                                     fontSize: 11, fontFamily: "'JetBrains Mono'" }}>
+      <div style={{ fontSize: 10, color: t.muted, marginBottom: 2 }}>
+        数据源状态 · 来自 {hhmm} 那次扫描（每次刷新自动更新，不用点按钮）
+        {notes.length === 0 && ` · ${n} 个源全部正常`}
+      </div>
+      {notes.map((x) => (
+        <div key={`${x.key}:${x.text}`} data-source-note={x.level}
+             style={{ padding: "5px 9px", borderRadius: 7, lineHeight: 1.45,
+                      ...(x.level === "warn"
+                        ? { color: "#E0901C", background: "rgba(224,144,28,.08)", border: "1px solid rgba(224,144,28,.35)" }
+                        : { color: t.muted, border: `1px solid ${t.cardBorder}` }) }}>
+          {x.level === "warn" ? "! " : "· "}{x.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DiscoverPanel({ t, snap }: { t: Theme; snap: TrafficData | null }) {
   type Cand = {
     root: string; known: boolean; files: number; records: number;
     /** 对应的已注册源 key;新发现的为 null。 */
@@ -590,6 +627,8 @@ function DiscoverPanel({ t }: { t: Theme }) {
           而四类 token 单价不同，归错类会静默算出错的费用。把下面的结果发给我，我来写解析器。
         </span>
       </div>
+
+      <SourceStatusBlock t={t} snap={snap} />
 
       {err && <div style={{ fontSize: 10.5, color: "#E0524D", marginTop: 8,
                             fontFamily: "'JetBrains Mono'" }}>✗ {err}</div>}

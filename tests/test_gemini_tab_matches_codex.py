@@ -220,39 +220,8 @@ class ClickingARowGoesToTheOverviewNotTheUsagePage(unittest.TestCase):
                       "★★ 点行又变回切号了")
 
 
-class TheShortcutBadgeOnlyAppearsWhereItWorks(unittest.TestCase):
-    """★★ 用户 2026-09-14：「为什么 gemini 的账号排序左上角还是 CLI？」
+# ⚠️ `TheShortcutBadgeOnlyAppearsWhereItWorks`（2026-09-14：⌘N 按档切号 + 角标只在接了线的档画）
+#   2026-10-16 被用户的新要求取代：⌘N 在总览上切 Codex/Gemini/Grok 档，不再切号，卡上角标撤掉。
+#   新契约与闸在 `tests/test_overview_shortcut_switches_tab.py`。
 
-    那个角标是「按 ⌘N 能切到它」的**承诺**。只给 codex 接线、却在别的档也画角标，
-    就是画一个点了没反应的东西 —— 本仓判过死刑的形态。所以两件事必须一起做：
-    **接线按档分流，角标也只在真的接了线的那一档出现。**
-    """
 
-    def test_the_keyboard_is_routed_per_tab(self):
-        c = code(APP)
-        i = c.index("useKeyboard(win, refresh")
-        seg = c[i:c.index("\n  });", i)]
-        self.assertIn('provider === "gemini"', seg, "★★ ⌘N 没有为 Gemini 档接线")
-        self.assertIn("agyPool.switchTo(a.label)", seg, "★★ 接了线却没真的切号")
-        self.assertIn('provider === "grok"', seg, "★ Grok 档（单号只读）没有短路")
-
-    def test_the_badge_is_passed_only_when_wired(self):
-        self.assertIn("shortcut={i < 9 ? i + 1 : undefined}", code(APP),
-                      "★★ 角标没传 ⇒ 卡上还是 `CLI`")
-
-    def test_agy_still_stays_out_of_the_pool_arrays(self):
-        """★★★ 按档分流**不等于**把 agy 塞进 `alive`/`accounts` ——
-        那两个数组还驱动着计数徽章、探针全池的号数、自动切号。"""
-        c = code(APP)
-        i = c.index("useKeyboard(win, refresh")
-        seg = c[i:c.index("\n  });", i)]
-        self.assertNotIn("aliveByLabel[idx].sub", seg)
-        # ⚠️ 2026-09-19 起 Gemini 档的 ⌘N 取 `orderedAgy[idx]`（拖拽排序后的同一批号）。
-        #   **意图没变**：它仍然取「自己那一列」，只是那一列多了一层排序。
-        #   下面第二条确认 `orderedAgy` 确实源自 `agyPool.accounts` —— 否则这条就成了
-        #   「换了个名字就放行」的空守卫。
-        self.assertIn("orderedAgy[idx]", seg, "★ Gemini 档取的不是它自己那列")
-        self.assertIn("applyOrder(agyPool.accounts", c,
-                      "★★ orderedAgy 必须源自 agyPool.accounts —— 否则 agy 可能被塞进了池数组")
-        self.assertNotIn("orderedAlive", seg.split("provider === \"grok\"")[0],
-                         "★★★ Gemini 那一支取到了 codex 的池数组")
