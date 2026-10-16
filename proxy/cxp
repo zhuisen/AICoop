@@ -84,7 +84,14 @@ while [ -L "$cxp_source" ]; do
   cxp_source="$(readlink "$cxp_source")"
   case "$cxp_source" in /*) ;; *) cxp_source="$cxp_dir/$cxp_source" ;; esac
 done
-export CODEX_ROTATE_STORE="${CODEX_ROTATE_STORE:-$(cd -P "$(dirname "$cxp_source")/.." && pwd)}"
+# ★ 代码根 ≠ 数据目录：`.dmg` 接入后脚本住在 `<store>/runtime/`，数据在上一级（B85，2026-10-16 实测
+#   原来导出的是 `runtime/`，codex 起的 hook / 子进程据此读到另一份 state.json）。
+cxp_root="$(cd -P "$(dirname "$cxp_source")/.." && pwd)"
+if [ -z "${CODEX_ROTATE_STORE:-}" ]; then
+  if [ "$(basename "$cxp_root")" = "runtime" ]; then CODEX_ROTATE_STORE="$(dirname "$cxp_root")"
+  else CODEX_ROTATE_STORE="$cxp_root"; fi
+fi
+export CODEX_ROTATE_STORE
 
 # ★★ 该不该注入 profile 的判据**与 PATH wrapper 共用同一份**
 #    (`proxy/codex-profile-scope.sh`)。这里原来有一份独立实现 —— 同一条规则的两份实现

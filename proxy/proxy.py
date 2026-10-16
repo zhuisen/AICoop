@@ -55,8 +55,10 @@ UPSTREAM_BASE = "/backend-api/codex"
 #    `auth/` / `state.json` / `relays.local.json` / 两把跨进程锁同理:锁在不同路径上
 #    等于没有锁,`codex-rotate` 与代理会同时刷同一个号的 token。
 #    不设该变量时行为**逐字不变**(默认值就是原来的表达式)。
+_CODE_ROOT = Path(__file__).resolve().parent.parent      # codex-account-rotator/ 或 <store>/runtime/
+# ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
 STORE = Path(os.environ.get("CODEX_ROTATE_STORE")
-             or Path(__file__).resolve().parent.parent)   # codex-account-rotator/
+             or (_CODE_ROOT.parent if _CODE_ROOT.name == "runtime" else _CODE_ROOT))
 # ★★ 中转站上游(2026-09-09 定稿:**一个 provider，两种上游**)。
 #    以前的做法是给每个中转站单独生成一份 `~/.codex/<id>.config.toml`，靠 cxp 换 profile 切换。
 #    那样做 codex 会看到两个不同的 `model_provider` id，而 `codex resume` 的 picker

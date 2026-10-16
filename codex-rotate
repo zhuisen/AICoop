@@ -46,7 +46,13 @@ SESSIONS = CODEX_HOME / "sessions"
 # 脚本被打进桌面应用的安装包之后,`__file__` 指向 app 内部 —— macOS 上那里只读,
 # Windows 上每次更新被整个替换。CodexBar 通过 `CODEX_ROTATE_STORE` 把真正的数据目录传进来。
 # 不设时行为与从前完全一致(= 脚本所在目录),所以从仓库直接跑 CLI 不受影响。
-STORE = Path(os.environ.get("CODEX_ROTATE_STORE") or Path(__file__).resolve().parent)
+# ★★ 不设变量时：脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
+#    2026-10-16 沙箱实测：原来的 `__file__.parent` 让终端 `codex-rotate` 读写 `runtime/state.json`，
+#    而后台服务读 `<store>/state.json` —— 两份状态、两把锁。同一条规则在每个入口各写一份，
+#    闸 `tests/test_store_root_dmg_layout.py` 在不设任何变量的 `.dmg` 布局里逐个真跑核对。
+_CODE_ROOT = Path(__file__).resolve().parent
+STORE = Path(os.environ.get("CODEX_ROTATE_STORE")
+             or (_CODE_ROOT.parent if _CODE_ROOT.name == "runtime" else _CODE_ROOT))
 AUTH_DIR = STORE / "auth"
 STATE = STORE / "state.json"
 OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -2918,6 +2924,28 @@ def cmd_use_credit(args):
 TOKENS_CACHE = STORE / ".tokens-cache.json"
 
 
+#: zstd 命令行候选 —— 与 `traffic/scan.py::ZSTD_CANDIDATES` 同一张表（闸核对两边相同）。
+ZSTD_CANDIDATES = ("/opt/homebrew/bin/zstd", "/usr/local/bin/zstd", "/opt/local/bin/zstd")
+
+
+def _zstd_text(path):
+    """`.zst` -> 文本；读不成抛 `RuntimeError`。先 Python 3.14 的 `compression.zstd`，再命令行。"""
+    try:
+        from compression import zstd as _z
+        return _z.decompress(Path(path).read_bytes()).decode("utf-8", "replace")
+    except ImportError:
+        pass                                                   # 3.14 以前没有这个模块，走命令行
+    except Exception as e:                                     # noqa: BLE001
+        raise RuntimeError("解压失败: %s" % e) from e
+    exe = shutil.which("zstd") or next((c for c in ZSTD_CANDIDATES if os.path.isfile(c)), None)
+    if not exe:
+        raise RuntimeError("没有 zstd（也没有 Python 3.14 的 compression.zstd）")
+    r = subprocess.run([exe, "-dc", str(path)], capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("zstd 退出码 %s" % r.returncode)
+    return r.stdout.decode("utf-8", "replace")
+
+
 def _scan_tokens(days=90):
     """按天汇总 token 消耗。-> {"YYYY-MM-DD": {in,out,reason,cached,total,turns}}
 
@@ -2938,8 +2966,12 @@ def _scan_tokens(days=90):
     cut = time.time() - days * 86400
     out, fresh = {}, {}
     scanned = reused = 0
+    read_failed = []
 
-    for f in SESSIONS.rglob("rollout-*.jsonl"):
+    for f in SESSIONS.rglob("rollout-*.jsonl*"):
+        # ★ 同 `traffic/scan.py::_codex_keep`：只收 `.jsonl` 与 `.jsonl.zst`，同名并存只收 `.jsonl`（B84/B85）。
+        if not (f.name.endswith(".jsonl") or (f.name.endswith(".jsonl.zst") and not f.with_name(f.name[:-4]).exists())):
+            continue
         try:
             st = f.stat()
         except OSError:
@@ -2954,8 +2986,10 @@ def _scan_tokens(days=90):
         else:
             per_day = {}
             try:
-                txt = f.read_text(errors="replace")
-            except OSError:
+                txt = _zstd_text(f) if f.name.endswith(".zst") else f.read_text(errors="replace")
+            except (OSError, RuntimeError) as e:
+                # ★ 读不成要说出来，不当成「这个会话没用 token」（§7.0b），也不写进缓存。
+                read_failed.append("%s: %s" % (f.name, e))
                 continue
             if '"token_count"' in txt:
                 # ★ 模型按 **ordinal 顺序** 归属:每个 token_count 记到它之前最近一次 turn_context 的
@@ -3016,7 +3050,8 @@ def _scan_tokens(days=90):
     return ({d: {**dict(zip(keys, b[:6])),
                  "models": {k: {"total": v[0], "turns": v[1]} for k, v in (b[6] or {}).items()}}
              for d, b in out.items()},
-            {"scanned": scanned, "reused": reused})
+            {"scanned": scanned, "reused": reused,
+             "read_failed": len(read_failed), "read_failed_sample": read_failed[:3]})
 
 
 def cmd_tokens(args):
@@ -3035,6 +3070,8 @@ def cmd_tokens(args):
     if "--json" in args:
         print(json.dumps({"days": picked, "scan": stat}, ensure_ascii=False))
         return
+    if stat.get("read_failed"):
+        print("⚠️ %d 个会话文件读不了（没算进下面的数），例如：%s" % (stat["read_failed"], stat["read_failed_sample"][0]))
     if not picked:
         print("没有 token 记录(检查 ~/.codex/sessions)")
         return
@@ -3100,7 +3137,7 @@ def _agy_wrap_gate_inner():
                       f"    而不是 {want}",
                       "    ⇒ 从现在起 agy 的用量不再被记录（页面上会表现为「最近没用 agy」）。",
                       "    修：确认 ~/.zshrc 里这行仍在最后、未被别的安装脚本挤到后面：",
-                      '      export PATH="$HOME/Projects/tools/codex-account-rotator/bin:$PATH"']}
+                      f'      export PATH="{want.parent}:$PATH"']}   # ★ 现算，不写作者的 clone 路径（B85）
 
 
 def _proc_start_epoch(pid):

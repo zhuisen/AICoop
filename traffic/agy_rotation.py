@@ -52,7 +52,9 @@ _EV_KIND = (("auto 自动切到", "auto"), ("auto 恢复成你选的", "wanted")
 
 
 def _store():
-    return Path(os.environ.get("AGY_POOL_STORE") or os.environ.get("CODEX_ROTATE_STORE") or ROOT)
+    # ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
+    return Path(os.environ.get("AGY_POOL_STORE") or os.environ.get("CODEX_ROTATE_STORE")
+                or (ROOT.parent if ROOT.name == "runtime" else ROOT))
 
 
 def _pool():

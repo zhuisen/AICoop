@@ -100,7 +100,9 @@ def default_path():
         return override
     root = os.environ.get("CODEX_ROTATE_STORE")
     if not root:
-        root = str(Path(__file__).resolve().parent.parent)
+        code = Path(__file__).resolve().parent.parent
+        # ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
+        root = str(code.parent if code.name == "runtime" else code)
     return str(Path(root) / FILENAME)
 
 

@@ -33,6 +33,7 @@
 """
 
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -58,8 +59,10 @@ KIMI_ROOT = Path(os.environ.get("KIMI_HOME") or (HOME / ".kimi-code")) / "sessio
 #   **不是 agy 的原生产物** —— 所以只覆盖 print 模式,交互式会话永远不在里面。
 # ★ 同 codex-rotate:脚本可能被打进桌面应用的安装包,而数据必须落到真正的数据目录
 # (app 内部在 macOS 只读、在 Windows 每次更新被替换)。不设时行为与从前完全一致。
+_CODE_ROOT = Path(__file__).resolve().parent.parent
+# ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
 _STORE = Path(os.environ.get("CODEX_ROTATE_STORE")
-              or Path(__file__).resolve().parent.parent)
+              or (_CODE_ROOT.parent if _CODE_ROOT.name == "runtime" else _CODE_ROOT))
 
 AGY_ROOT = Path(os.environ.get("AGY_LEDGER_DIR")
                 or (_STORE / "traffic" / "agy-ledger"))
@@ -74,6 +77,10 @@ class ScanReadError(Exception):
        **永久固化成 0 token**,而且零报错。
        抛出来,让缓存那一层决定「保留旧值还是这轮跳过」,而不是把假数据落盘。
     """
+
+
+class NoDecoderError(ScanReadError):
+    """读失败的一种：这台机器上**没有解压器**（不是文件坏了）。UI 据此说「装一个」而不是「文件读失败」。"""
 
 
 CACHE = _STORE / ".traffic-cache.json"
@@ -313,7 +320,12 @@ def _scan_codex_file(path):
 
     ★ **同一个 `token_count` 事件会被写两遍**(2026-08-12 实测):形态是 `(last, total)` 成对重复,
     而累计值单调不降 —— 所以是重复写入,不是会话续接。旧注释"codex 无重复"据此作废,
-    `SOURCES` 的 `dedup: False` 也仅指**跨文件**(3618 个文件 ↔ 3618 个会话 uuid,一文件一会话)。
+    `SOURCES` 的 `dedup: False` 也仅指**跨文件**(一文件一会话 uuid;`X.jsonl` 与 `X.jsonl.zst`
+    并存时只收前者,见 `_codex_keep`)。
+
+    ★ **Codex 会把旧会话压成 `rollout-*.jsonl.zst`**(2026-10-16 外部用户实报:1,675 个 `.zst` 对 37 个
+    `.jsonl`,90 天窗口漏算 96%)。两种文件喂**同一个**逐行循环 —— 跨行状态(`cur`/`cur_provider`/
+    `seen_cum`)一个字不改;解压失败抛 `ScanReadError`,绝不返回空(见那个类的 docstring)。
 
     ⚠️ **别引用单一的"虚高 N 倍" —— 重复是重尾的,倍数完全取决于窗口**。测法必须是拿 git 里的
     旧解析器与新解析器**各跑一遍真代码**(自己另写一个"朴素求和"来对比会得到 2.73x,是错的):
@@ -336,10 +348,13 @@ def _scan_codex_file(path):
     #    ⚠️ `turn_context` 里**没有** provider,只有 `session_meta` 有。
     cur_provider = None
     seen_cum = set()          # 本文件内已记过的累计值 —— 见 docstring
-    try:
-        fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    if str(path).endswith(".zst"):
+        fh = io.StringIO(_zstd_text(path))
+    else:
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError as e:
+            raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         for line in fh:
             if '"session_meta"' in line:
@@ -638,7 +653,95 @@ def _scan_reasonix_file(path):
     return rows
 
 
-_ZSTD = shutil.which("zstd") or "/opt/homebrew/bin/zstd"
+#: zstd 命令行的候选位置。★ GUI 起的进程 PATH 里没有 Homebrew，所以 `which` 常常落空 ——
+#:   Apple Silicon Homebrew / Intel Homebrew / MacPorts 各列一个（B85，四方评审方案 A：不把 zstd 打进 app）。
+#:   ⚠️ `codex-rotate` 里有同一张表，闸 `tests/test_store_root_dmg_layout.py` 核对两边相同。
+ZSTD_CANDIDATES = ("/opt/homebrew/bin/zstd", "/usr/local/bin/zstd", "/opt/local/bin/zstd")
+_ZSTD = shutil.which("zstd") or next((c for c in ZSTD_CANDIDATES if os.path.isfile(c)), ZSTD_CANDIDATES[0])
+
+
+def _zstd_text(path):
+    """zstd 文件 -> 解压后的文本。读不成**抛 `ScanReadError`**,不返回空串。
+
+    ★ 先试 Python 3.14+ 的 `compression.zstd`(Windows 上通常没有 zstd 命令行),不行再走命令行。
+      app 调脚本的 python 不一定是 3.14(本机 GUI 环境可能落到 `/usr/bin/python3` 3.9),所以命令行那条不能省。
+    """
+    first = None
+    try:
+        from compression import zstd as _z               # Python 3.14+
+        with open(path, "rb") as fh:
+            return _z.decompress(fh.read()).decode("utf-8", "replace")
+    except ImportError:
+        pass                                               # 没有这个模块是常态,直接走命令行
+    except Exception as e:                                 # noqa: BLE001 — 记下来,命令行也失败时一并报出
+        first = "%s: %s" % (type(e).__name__, e)
+    try:
+        out = subprocess.run([_ZSTD, "-dc", str(path)], capture_output=True, timeout=60)
+    except FileNotFoundError as e:
+        if first is None:      # 没有 3.14 内置、也没有 zstd 命令 —— 这台机器上**根本没有解压器**
+            raise NoDecoderError("没有 zstd 解压器（%s）: %s" % (_ZSTD, path)) from e
+        raise ScanReadError("解压不了 %s: %s: %s (compression.zstd: %s)" % (path, type(e).__name__, e, first)) from e
+    except (OSError, subprocess.SubprocessError) as e:
+        raise ScanReadError("解压不了 %s: %s: %s%s" % (path, type(e).__name__, e,
+                                                    " (compression.zstd: %s)" % first if first else "")) from e
+    if out.returncode != 0:
+        raise ScanReadError("解压不了 %s: zstd 退出码 %s: %s" % (
+            path, out.returncode, out.stderr[:200].decode("utf-8", "replace").strip()))
+    return out.stdout.decode("utf-8", "replace")
+
+
+#: 「看见了但没解析」普查只认这几种后缀 —— 厂商把旧会话压缩掉（B84）就是这个形状。
+#: ★ 不收任意后缀：grok 根下有 127 个 `updates.jsonl.lock`，那会让一盏灯永远亮着。
+COMPRESSED_SUFFIXES = (".zst", ".zstd", ".gz", ".xz", ".bz2", ".lz4", ".br")
+
+
+def _unparsed(root, pattern, kept, rejected):
+    """根下**压缩过、却没被解析**的文件数，按后缀计（B85 · 四方评审 P1）。
+
+    候选 = 被 `keep` 筛掉的 + （glob 不以 `*` 结尾时）`<glob>.*`。解压后的同名文件已被收下的不算
+    （codex 同名 `.jsonl` 与 `.jsonl.zst` 并存时只收 `.jsonl`，那是去重不是漏算）。
+    """
+    cands = list(rejected)
+    if not pattern.endswith("*"):
+        w = pattern + ".*"
+        cands.extend(root.rglob(w) if "**" in pattern else root.glob(w))
+    out = {}
+    for f in cands:
+        suf = f.suffix
+        if suf in COMPRESSED_SUFFIXES and f not in kept and f.with_suffix("") not in kept:
+            out[suf] = out.get(suf, 0) + 1
+    return out
+
+
+def _source_state(root_ok, files, read_failed, unparsed):
+    """单个源的状态。★ 顺序就是优先级：根都没有 > 读失败 > 漏了一类文件 > 一个文件都没有 > 正常。"""
+    if not root_ok:
+        return "not_found"
+    if read_failed:
+        return "read_failed"
+    if unparsed:
+        return "partial"
+    return "empty" if files == 0 else "ok"
+
+
+def _tilde(p):
+    h = str(Path.home())
+    s = str(p)
+    return "~" + s[len(h):] if s == h or s.startswith(h + os.sep) else s
+
+
+def _codex_keep(f):
+    """codex 源只收 `rollout-*.jsonl` 与 `rollout-*.jsonl.zst`。
+
+    ★ 不收 `.jsonl.bak-namespace*` 这类旁支文件:外部用户机器上有 20 个,SQLite 里查不到对应会话,
+      收进来凭空多 841M。
+    ★ `X.jsonl` 与 `X.jsonl.zst` 并存时只收 `.jsonl`:Codex 压缩到一半时 `.zst` 可能还没写完,
+      而 codex 源 `dedup: False`,两份都收就是重复计数。
+    """
+    n = f.name
+    if n.endswith(".jsonl"):
+        return True
+    return n.endswith(".jsonl.zst") and not f.with_name(n[:-4]).exists()
 
 
 def _scan_dsh_file(path):
@@ -657,11 +760,8 @@ def _scan_dsh_file(path):
     ★ `session/title-llm-request` 的标题生成调用不落 usage,本来就漏,量极小(64 maxTokens)。
     """
     rows = []
-    try:
-        out = subprocess.run([_ZSTD, "-dc", str(path)],
-                             capture_output=True, text=True, timeout=60).stdout
-    except (OSError, subprocess.SubprocessError):
-        return rows
+    # ★ 解压失败抛 `ScanReadError`(2026-10-16 起)。原来静默返回 0 行 —— 缓存会把它连同签名钉死成 0 token。
+    out = _zstd_text(path)
     for line in out.splitlines():
         if '"usage"' not in line or '"assistant/message"' not in line:
             continue
@@ -1304,7 +1404,7 @@ SOURCES = (
      "glob": "**/*.jsonl",         "parse": _scan_claude_file, "dedup": True,
      "lines": _scan_claude_lines},
     {"key": "codex",  "name": "Codex",  "root": CODEX_ROOT,  "color": "#2dd4bf",
-     "glob": "**/rollout-*.jsonl", "parse": _scan_codex_file,  "dedup": False},
+     "glob": "**/rollout-*.jsonl*", "parse": _scan_codex_file,  "dedup": False, "keep": _codex_keep},
     {"key": "grok",   "name": "Grok",   "root": GROK_ROOT,   "color": "#8b7cf6",
      "glob": "*/*/updates.jsonl",  "parse": _scan_grok_file,   "dedup": False},
     {"key": "kimi",   "name": "Kimi",   "root": KIMI_ROOT,   "color": "#f472b6",
@@ -1405,6 +1505,9 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
     by_provider = {}
     coverage = {}       # 源键 -> {covered,total,unit,since};只有采集不完整的源才有
     seen_roots = {}
+    # ★ 每个**已注册**源一条状态（B85）。少了一家时，平台键从 `platforms` 里消失，
+    #   「根目录不存在 / 有文件但没解析 / 读失败 / 被停用」在页面上原来一模一样。
+    sources = {s["key"]: {"state": "disabled", "root": _tilde(s["root"]), "name": s["name"]} for s in SOURCES}
     now_ts = time.time()
     localtime, strftime = time.localtime, time.strftime
     # 用 date 做日期回退,不是 now-off*86400 —— 跨 DST 的地区一天不等于 86400 秒,
@@ -1432,8 +1535,14 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
         pattern, parse, dedup = src["glob"], src["parse"], src["dedup"]
         lines_fn = src.get("lines")      # 非 None = 该源可增量解析(见 SOURCES 注释)
         merged, seq = {}, []
+        kept, rejected, rf0, nd = set(), [], len(read_failed), 0
         if root.is_dir():
+            keep = src.get("keep")       # 非 None = glob 之外再按文件名筛一道(见 `_codex_keep`)
             for f in sorted(root.rglob(pattern) if "**" in pattern else root.glob(pattern)):
+                if keep is not None and not keep(f):
+                    rejected.append(f)
+                    continue
+                kept.add(f)
                 try:
                     st = f.stat()
                 except OSError:
@@ -1473,6 +1582,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                             #    被永久固化。有旧值就原样留着（**连旧签名一起**,好让下一轮
                             #    再试一次);没有就这轮跳过这个文件。
                             read_failed.append("%s: %s" % (ck, e))
+                            nd += isinstance(e, NoDecoderError)
                             if hit is None:
                                 continue
                             fresh[ck] = dict(hit)
@@ -1494,6 +1604,11 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 elif isinstance(data, list):
                     seq.extend(data)
 
+        unp = _unparsed(root, pattern, kept, rejected) if root.is_dir() else {}
+        sources[key] = {"state": _source_state(root.is_dir(), len(kept), len(read_failed) - rf0, unp),
+                        "root": _tilde(root), "files": len(kept),
+                        "read_failed": len(read_failed) - rf0, "no_decoder": nd, "unparsed": unp,
+                        "name": name}
         # ★ `post` 钩子:给「一条记录单看算不出结果、必须汇总完所有文件才能定」的源用。
         #   目前只有 agy —— 它的 usage 是会话内累计值,差分要按会话跨文件做(见 _agy_deltas)。
         #   放在这里而不是 parse 里,是因为 parse 的粒度是**单文件**,而缓存也按单文件存:
@@ -1691,6 +1806,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                  #   路径可能含会话 id,只给条数和前几条样本,别把整份清单塞进快照。
                  "read_failed": len(read_failed),
                  "read_failed_sample": read_failed[:3],
+                 "sources": sources,
                  "enabled": [s["key"] for s in _enabled_sources(only, exclude)],
                  "registered": [s["key"] for s in SOURCES]}
 

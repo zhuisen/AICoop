@@ -342,6 +342,14 @@ const ALLOWED_CMDS: &[&str] = &["switch", "cool", "uncool", "refresh-all", "heal
 //    等于给那条自激回环留一条**复活路径** —— 下一个人照样能 `run_rotate(["next"])`
 //    把它原样造回来。闸挡得住新写法，但把旧入口一起拆掉才是根治。
 
+/// macOS 上按序探测的解释器（Apple Silicon Homebrew / Intel Homebrew / python.org 安装包）。
+#[cfg(not(target_os = "windows"))]
+const MAC_PYTHON_CANDIDATES: [&str; 3] = [
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3",
+    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+];
+
 /// Interpreter for codex-rotate. NOT a bare `python3`: Cloudflare fingerprints the TLS ClientHello,
 /// and macOS's `/usr/bin/python3` (LibreSSL 2.8.3) gets a hard 403 from /backend-api/codex/usage while
 /// an OpenSSL 3.x build gets 200 with the identical token, headers and IP (measured 2026-08-01, 3
@@ -354,14 +362,35 @@ fn python_bin() -> String {
             return p;
         }
     }
+    // ★★ 2026-10-16（B85，四方评审）：不再只看文件在不在 —— 真跑一次，确认链的是 OpenSSL
+    //    （同 `install-launchd.sh` 那句检查）。原来 `/usr/local/bin/python3` 只要存在就选中，
+    //    哪怕它是个坏掉的 symlink 或 LibreSSL 构建。加上 python.org 安装包的固定位置。
+    //    ⚠️ 一个都不合格时**仍退回裸 `python3`**：用量看板不需要新 TLS，拿它照样能扫；
+    //    额度那一路会在 403 时如实说「解释器 TLS 过旧」（`codex-rotate::_tls_is_stale`）。
+    //    结果缓存：每条命令都探测等于多起一个进程。
     #[cfg(not(target_os = "windows"))]
     {
-        for cand in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"] {
-            if std::path::Path::new(cand).exists() {
-                return cand.into();
-            }
-        }
-        "python3".into()
+        use std::sync::OnceLock;
+        static RESOLVED: OnceLock<String> = OnceLock::new();
+        RESOLVED
+            .get_or_init(|| {
+                for cand in MAC_PYTHON_CANDIDATES {
+                    if !std::path::Path::new(cand).exists() {
+                        continue;
+                    }
+                    let ok = std::process::Command::new(cand)
+                        .args(["-c", "import ssl,sys; sys.exit(0 if ssl.OPENSSL_VERSION.startswith('OpenSSL') else 1)"])
+                        .stdin(std::process::Stdio::null())
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if ok {
+                        return cand.to_string();
+                    }
+                }
+                "python3".into()
+            })
+            .clone()
     }
     // ★★ Windows 上不能靠"文件存在"判断。`python.exe` 在没装 Python 时是**应用商店的占位存根**:
     //    它存在、能启动、退出码为 0,却什么都不执行 —— 用 `Path::exists()` 判会选中它,

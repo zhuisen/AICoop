@@ -82,7 +82,10 @@ _ROLLOUT_RE = re.compile(r"rollout-\d{4}-\d\d-\d\dT[\d-]+-([0-9a-f-]{36})\.jsonl
 
 
 def store_dir():
-    return os.environ.get("CODEX_ROTATE_STORE") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
+    return os.environ.get("CODEX_ROTATE_STORE") or (
+        os.path.dirname(root) if os.path.basename(root) == "runtime" else root)
 
 
 def codex_home():

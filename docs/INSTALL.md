@@ -246,7 +246,7 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 | 平台 | 位置 |
 |---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl`（含 Codex 压缩过的 `.jsonl.zst`，需本机 `zstd` 或 Python 3.14+；都没有时这些会话计入「读失败」） |
 | Grok | `~/.grok/sessions/*/*/updates.jsonl` |
 | Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` |
 | OpenClaw | `~/.openclaw/agents/*/sessions/*.jsonl` · **宿主源** |

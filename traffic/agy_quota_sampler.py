@@ -76,7 +76,8 @@ FETCHER = ROOT / "agy-quota"
 #   —— 在仓库里两者恰好相等，所以一直看不出来；**脚本被打进 app 之后 `ROOT` 变成
 #   `Contents/Resources/scripts/`**，采样器往 app 内部写、scan 去数据目录读，
 #   两边各自正常、数据永远对不上。本仓那条「一份事实一个家」的老形态。
-_STORE = Path(os.environ.get("CODEX_ROTATE_STORE") or str(ROOT))
+# ★ 脚本住在 `<store>/runtime/`（`.dmg` 经 Connector 接入）⇒ 数据在上一级（B85）。
+_STORE = Path(os.environ.get("CODEX_ROTATE_STORE") or str(ROOT.parent if ROOT.name == "runtime" else ROOT))
 LEDGER_DIR = Path(os.environ.get(
     "AGY_QUOTA_LEDGER_DIR", str(_STORE / "traffic" / "agy-quota-ledger")))
 LEDGER = "samples.jsonl"

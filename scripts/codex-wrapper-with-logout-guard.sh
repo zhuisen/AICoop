@@ -146,18 +146,29 @@ _cw_resolve() {
   printf '%s/%s\n' "$d" "$(basename "$p")"
 }
 
-if [ -z "${CODEX_ROTATE_STORE:-}" ]; then
-  _cw_self="$(_cw_resolve "${BASH_SOURCE[0]}" 2>/dev/null || true)"
-  # 仓库里它住在 `<root>/scripts/`，所以上跳两级就是仓库根。
-  _cw_guess="$(dirname "$(dirname "${_cw_self:-/nonexistent}")")"
-  if [ -f "${_cw_guess}/proxy/codex-profile-scope.sh" ]; then
-    CODEX_ROTATE_STORE="$_cw_guess"
-  else
-    CODEX_ROTATE_STORE="${HOME}/Projects/tools/codex-account-rotator"
-  fi
+# ★★ **代码根与数据目录分开求**（B85，2026-10-16）。原来一个 `CODEX_ROTATE_STORE` 身兼两职：
+#    判据文件按它找、子进程也按它找数据。`.dmg` 接入后两者不在同一处 —— 代码在 `<store>/runtime/`，
+#    数据在 `<store>/` —— 按代码根导出会让 codex 的子进程读到 `runtime/state.json`。
+#    兜底的作者 clone 路径（`~/Projects/tools/…`）一并删掉：猜不中时下面会 exit 78，不静默放行。
+_cw_self="$(_cw_resolve "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+# 仓库里它住在 `<root>/scripts/`，所以上跳两级就是代码根。
+_cw_code="$(dirname "$(dirname "${_cw_self:-/nonexistent}")")"
+# 被**复制**（不是链接）到 `~/.local/bin/codex` 时，上面推出来的是 `~`。再从 `codex-rotate` 那个入口
+# 链接反推一次 —— Connector 与 clone 装机都会建它，且它一定指向代码根。不写死任何人的路径。
+if [ ! -f "${_cw_code}/proxy/codex-profile-scope.sh" ] && [ -e "${HOME}/.local/bin/codex-rotate" ]; then
+  _cw_code="$(dirname "$(_cw_resolve "${HOME}/.local/bin/codex-rotate" 2>/dev/null || echo /nonexistent/x)")"
 fi
-export CODEX_ROTATE_STORE
-_scope="${CODEX_ROTATE_STORE}/proxy/codex-profile-scope.sh"
+if [ -z "${CODEX_ROTATE_STORE:-}" ] && [ -f "${_cw_code}/proxy/codex-profile-scope.sh" ]; then
+  if [ "$(basename "$_cw_code")" = "runtime" ]; then CODEX_ROTATE_STORE="$(dirname "$_cw_code")"
+  else CODEX_ROTATE_STORE="$_cw_code"; fi
+fi
+export CODEX_ROTATE_STORE="${CODEX_ROTATE_STORE:-}"
+# 判据文件：先找自己身边的，再找数据目录（clone）或其 runtime/（`.dmg`，wrapper 被复制到别处时）。
+_scope=""
+for _c in "${_cw_code}" "${CODEX_ROTATE_STORE}" "${CODEX_ROTATE_STORE}/runtime"; do
+  if [ -n "$_c" ] && [ -f "${_c}/proxy/codex-profile-scope.sh" ]; then _scope="${_c}/proxy/codex-profile-scope.sh"; break; fi
+done
+_scope="${_scope:-${CODEX_ROTATE_STORE:-<未知>}/proxy/codex-profile-scope.sh}"
 if [ -f "$_scope" ]; then
   # shellcheck source=/dev/null
   . "$_scope"

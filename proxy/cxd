@@ -18,8 +18,26 @@ set -euo pipefail
 #    （实测两次：2026-07-30 因此死了 plus3/plus4/plus7）。
 #    ⚠️ 这不是"重复实现" —— 判据函数与 wrapper 共用同一份 `codex-profile-scope.sh`，
 #    重复的只有调用点，而每个绕过 wrapper 的入口都必须有一个调用点。
-_cxd_store="${CODEX_ROTATE_STORE:-${HOME}/Projects/tools/codex-account-rotator}"
-_cxd_scope="${_cxd_store}/proxy/codex-profile-scope.sh"
+# ★★ 判据文件按**自己在哪**找，不按数据目录猜（B85，2026-10-16 四方评审）。
+#    原来默认 `~/Projects/tools/codex-account-rotator` —— 作者的 clone 路径。别人机器上它不存在
+#    ⇒ 走下面的 else，只认 `$1` 是 logout/login，`cxd --foo logout` 这类就漏过去了。
+_cxd_resolve() {
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || break
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="${d}/${p}" ;; esac
+  done
+  d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+  printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+_cxd_self="$(_cxd_resolve "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+_cxd_code="$(dirname "$(dirname "${_cxd_self:-/nonexistent/x/y}")")"     # <code>/proxy/cxd
+if [ -z "${CODEX_ROTATE_STORE:-}" ]; then
+  if [ "$(basename "$_cxd_code")" = "runtime" ]; then export CODEX_ROTATE_STORE="$(dirname "$_cxd_code")"
+  else export CODEX_ROTATE_STORE="$_cxd_code"; fi
+fi
+_cxd_scope="${_cxd_code}/proxy/codex-profile-scope.sh"
 if [ -f "$_cxd_scope" ]; then
   # shellcheck source=codex-profile-scope.sh
   . "$_cxd_scope"
@@ -50,4 +68,28 @@ else
   esac
 fi
 
-exec "${CODEX_NATIVE_BIN:-${HOME}/.local/npm-global/bin/codex}" "$@"
+# ★★ 真二进制：PATH 上找，**跳过我们自己的 wrapper**（B85）。原来写死 `~/.local/npm-global/bin/codex`
+#    （作者的 npm prefix）—— 别人机器上是 `No such file`。wrapper 可能是链接也可能是复制件，
+#    所以按内容认：它是个 shell 脚本且引用了判据文件；官方 codex 不会。
+_cxd_real_codex() {
+  local d c
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    c="${d}/codex"
+    [ -x "$c" ] && [ ! -d "$c" ] || continue
+    if [ "$(head -c 2 "$c" 2>/dev/null)" = "#!" ] && [ "$(wc -c < "$c")" -lt 1048576 ] \
+       && grep -q "codex-profile-scope.sh" "$c" 2>/dev/null; then
+      continue
+    fi
+    printf '%s\n' "$c"
+    return 0
+  done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
+  return 1
+}
+_cxd_bin="${CODEX_NATIVE_BIN:-$(_cxd_real_codex || true)}"
+if [ -z "$_cxd_bin" ] || [ ! -x "$_cxd_bin" ]; then
+  printf '%s\n' "⛔ cxd: 找不到官方 codex 二进制（PATH 上除了 CodexBar 的 wrapper 没有别的 \`codex\`）。" \
+    "   修：装官方 CLI（\`npm i -g @openai/codex\`），或用 CODEX_NATIVE_BIN 指到它。" >&2
+  exit 78
+fi
+exec "$_cxd_bin" "$@"

@@ -36,8 +36,13 @@ CONF = ROOT / "codexbar" / "src-tauri" / "tauri.conf.json"
 
 #: `os.environ.get("X", str(ROOT…))` / `os.environ.get("X") or Path(__file__)…`
 #: —— 两种写法都是「默认值跟着脚本自己的位置走」。
+#: 2026-10-16 起（B85）还有链式写法 `get("A") or get("B") or (ROOT.parent if … else ROOT)` ——
+#: 链上每个变量都算，所以先匹配整条链，再从链里取名字。
 _ROOT_DEFAULT = re.compile(
-    r'os\.environ\.get\(\s*"([A-Z][A-Z0-9_]+)"\s*(?:,\s*str\(\s*ROOT|\)\s*or\s*Path\(__file__\))')
+    r'(?:os\.environ\.get\(\s*"[A-Z][A-Z0-9_]+"\s*\)\s*or\s*)*'
+    r'os\.environ\.get\(\s*"[A-Z][A-Z0-9_]+"\s*'
+    r'(?:,\s*str\(\s*ROOT|\)\s*or\s*(?:Path\(__file__\)|str\(\s*\(?\s*(?:_CODE_)?ROOT|\(\s*(?:_CODE_)?ROOT))')
+_VAR = re.compile(r'os\.environ\.get\(\s*"([A-Z][A-Z0-9_]+)"')
 
 
 def bundled_py():
@@ -58,8 +63,9 @@ def bundled_py():
 def store_vars():
     found = {}
     for p in bundled_py():
-        for name in _ROOT_DEFAULT.findall(p.read_text(encoding="utf-8", errors="replace")):
-            found.setdefault(name, []).append(p.name)
+        for chain in _ROOT_DEFAULT.finditer(p.read_text(encoding="utf-8", errors="replace")):
+            for name in _VAR.findall(chain.group(0)):
+                found.setdefault(name, []).append(p.name)
     return found
 
 

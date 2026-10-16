@@ -602,7 +602,8 @@ def remove(store, drop_runtime=False):
     runtime = store / "runtime"
     removed, kept = [], []
 
-    for name in ["autosync", "quotad", "proxy", "dawnprobe"]:
+    # ★ 读 `SERVICES`，不另列一份 —— 原来手写 4 个，`agydawn` 加进来后撤销时漏卸（B85 评审抓到）。
+    for name in SERVICES:
         lbl = f"com.doushutangmu.codex-rotate.{name}"
         _launchctl(["bootout", f"gui/{os.getuid()}/{lbl}"])
         p = _launch_agents() / f"{lbl}.plist"
