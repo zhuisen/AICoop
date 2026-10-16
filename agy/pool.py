@@ -644,7 +644,53 @@ def fetch_quota(access_token):
         # ★ 200 但没有分组 = 上游形状变了。**当失败处理** —— 静默返回空会被画成
         #   "额度全是 0"，而那是一个看着很合理的谎。
         return None, "额度响应里没有 groups（上游形状可能变了）"
+    if not any(str(g.get("displayName", "")).lower().startswith("gemini") for g in groups):
+        # ★★ 2026-10-16 05:06 起摘要对每个号都不再回 Gemini 组（换 3 种客户端身份结果相同）。
+        #   5h 还能从模型端点读到；周没有任何来源 —— 交给 `carry_missing_groups` 沿用并标龄。
+        #   补的这次失败不影响摘要本身（Claude/GPT 组照常用）。
+        g5 = _gemini_5h_from_models(access_token)
+        if g5:
+            groups = list(groups) + [g5]
     return groups, ""
+
+
+def gemini_group_from_models(d):
+    """`fetchAvailableModels` 的响应 → 一个只有 5h 的 Gemini 组（与摘要同形）；没有可用的 gemini 模型返回 None。
+
+    ★ 只认**带 `resetTime`** 的 gemini 模型：`tab_*` / `chat_*` 那类没有 resetTime 的是不限量，不是这个池。
+      实测 12 个 gemini 模型同一个值、同一个 resetTime ⇒ 它们共用一个 5h 池，取最紧的那个以防哪天分开。
+    ★ 其中有一个没给 `remainingFraction` ⇒ 整格**读不到**（proto3 省略零值，缺的可能正是 0），不拿别的模型冒充。
+    """
+    rows = []
+    for k, m in ((d or {}).get("models") or {}).items():
+        qi = (m or {}).get("quotaInfo") or {}
+        if str(k).lower().startswith("gemini") and qi.get("resetTime"):
+            rows.append(qi)
+    if not rows:
+        return None
+    b = {"bucketId": "gemini-5h", "window": "5h", "source": "fetchAvailableModels"}
+    if all(isinstance(r.get("remainingFraction"), (int, float)) for r in rows):
+        tight = min(rows, key=lambda r: r["remainingFraction"])
+        b.update(remainingFraction=tight["remainingFraction"], resetTime=tight["resetTime"])
+    else:
+        b["resetTime"] = rows[0]["resetTime"]
+    return {"displayName": "Gemini Models", "buckets": [b]}
+
+
+def _gemini_5h_from_models(access_token):
+    try:
+        c = HTTPSConnection(QUOTA_API_HOST, timeout=TIMEOUT)
+        c.request("POST", MODELS_PATH, body="{}",
+                  headers={"Authorization": "Bearer " + access_token,
+                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        if r.status != 200:
+            return None
+        return gemini_group_from_models(json.loads(raw))
+    except Exception:                                  # noqa: BLE001 — 兜底那次失败 = 没补上，不是读失败
+        return None
 
 
 LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist"
@@ -708,24 +754,37 @@ def carry_missing_groups(old_groups, old_at, new_groups, now=None):
 
     ★ 每个沿用的桶带 `seenAt` = 那份读数的时刻；已经带着的保持不变（连续缺失不会被刷成「刚刚」）。
     ★ 桶的 `resetTime` 已过 ⇒ 删掉 `remainingFraction`（= 读不到，画「—」）：窗口重置过的旧数不是任何一个值。
-    ★ 只按组名补**整组**；同组里少了某个桶不在这里补 —— 那是 `quota_by_group` 的「桶在没数字」那条路。
+    ★ 同名组里少了某个桶也沿用（模型端点兜底只给 5h）；桶在、没数字是另一回事，见 `quota_by_group`。
+    ★ 沿用超过 `CARRY_MAX_SECS` ⇒ 读不到。
     """
     now = time.time() if now is None else now
-    have = {str(g.get("displayName")) for g in new_groups or []}
-    out = list(new_groups or [])
+
+    def carried(b):
+        nb = dict(b)
+        nb.setdefault("seenAt", int(old_at or 0))
+        rs = _iso_ts(nb.get("resetTime"))
+        if (rs is not None and rs <= now) or now - float(nb["seenAt"] or 0) > CARRY_MAX_SECS:
+            nb.pop("remainingFraction", None)
+        return nb
+
+    by_name = {str(g.get("displayName")): i for i, g in enumerate(new_groups or [])}
+    out = [dict(g) for g in new_groups or []]
     for g in old_groups or []:
-        if str(g.get("displayName")) in have:
+        i = by_name.get(str(g.get("displayName")))
+        if i is None:
+            out.append(dict(g, buckets=[carried(b) for b in g.get("buckets") or []]))
             continue
-        buckets = []
-        for b in g.get("buckets") or []:
-            nb = dict(b)
-            nb.setdefault("seenAt", int(old_at or 0))
-            rs = _iso_ts(nb.get("resetTime"))
-            if rs is not None and rs <= now:
-                nb.pop("remainingFraction", None)
-            buckets.append(nb)
-        out.append(dict(g, buckets=buckets))
+        # ★ 同名组在、但缺了某个桶（2026-10-16：模型端点兜底只给 5h）⇒ 那个桶照样沿用。
+        have = {b.get("bucketId") for b in out[i].get("buckets") or []}
+        extra = [carried(b) for b in g.get("buckets") or [] if b.get("bucketId") not in have]
+        if extra:
+            out[i] = dict(out[i], buckets=list(out[i].get("buckets") or []) + extra)
     return out
+
+
+#: 沿用的读数最多认这么久。周窗口靠沿用撑着时（摘要不再回 Gemini 组），一份越来越旧的数
+#: 会一直冒充「几小时前」—— 超过一天就改说读不到。
+CARRY_MAX_SECS = 24 * 3600
 
 
 def quota_by_group(groups):

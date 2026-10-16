@@ -131,7 +131,7 @@ class TheFrontendKeepsTheBucket(unittest.TestCase):
         for f in ("components/AgyCard.tsx", "components/AgyRow.tsx"):
             with self.subTest(f=f):
                 code = ts_code(f)
-                self.assertIn("title={row ? AGY_UNKNOWN_TITLE", code,
+                self.assertIn("title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE)", code,
                               "★ 读不到的那一行没说出原因（两个 surface 共用一句）")
 
 

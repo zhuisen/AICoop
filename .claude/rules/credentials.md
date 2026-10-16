@@ -445,3 +445,5 @@ paths:
   写入一律经 `agy/pool.py::carry_missing_groups` —— 缺的组沿用上次那组、每桶标 `seenAt`，重置过的桶改成读不到。
   **新增任何写 `quota_summary` 的路径都要过它**（闸 `tests/test_agy_missing_group_carried.py::EveryWritePathCarries` 按源码逐个核）。
   前端 `seen_at` 的画法 AgyCard / AgyRow 必须一致（降不透明度 + 标龄）。
+  ★ 2026-10-16 起摘要对所有号都不回 Gemini 组（B82）：5h 由 `fetch_quota` 从 `fetchAvailableModels` 补，**周没有来源**，只能沿用（桶级，最长 `CARRY_MAX_SECS`=24h，之后读不到）。
+  **不许把读不到的周默认成 100%**（用户提议过，已否：会把周只剩 40% 的号当满号挑走）。

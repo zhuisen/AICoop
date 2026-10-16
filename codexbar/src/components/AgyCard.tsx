@@ -6,7 +6,7 @@ import { type Theme } from "../theme";
 import { useCardType } from "../hooks/useCardType";
 import type { AgySnapshot } from "../agy";
 import {
-  AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyWinRows, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText,
+  AGY_EXPIRED_TITLE, AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyWinRows, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText,
 } from "../agy";
 import { fmtAgo, fmtResetDate, winNumColor } from "../helpers";
 import { IconBtn, IcPen, IcTrash, IcRotate, IcPin } from "./CardIcons";
@@ -341,14 +341,14 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
               //   两者的下一步动作完全相反。解释一直写着 —— 写在 `title` 里，
               //   **而本仓的规矩是「告警放在眼睛已经在的地方」，只写进悬浮的真话等于没写**。
               <div key={label} data-agy-unknown={row ? "" : undefined}
-                   title={row ? AGY_UNKNOWN_TITLE : missTitle(label, isCurrent)}
+                   title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE) : missTitle(label, isCurrent)}
                    style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO }}>{label}</span>
                 {/* ★ 条槽保留：跨卡对齐靠这一行的高度撑着（见 test_missing_window_says_so）。 */}
                 <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack }} />
                 <span style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO,
                                whiteSpace: "nowrap" }}>
-                  {row ? "上游没给数" : "\"这次没读到\""}</span>
+                  {row ? (row.seen_at ? "旧读数已过期" : "上游没给数") : "\"这次没读到\""}</span>
               </div>
             ) : (
               // ★★★ `seen_at` = 这一格是**上次读到的**，不是这次读到的。

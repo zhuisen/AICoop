@@ -768,6 +768,13 @@ function relayEntry() {
             if (qs && qs[0]) qs[0].buckets.forEach(function (b) { b.seenAt = __NOW__ - 1500; });
           });
         }
+        // ★ `?agyodd=expired`：周那格沿用超过一天（`CARRY_MAX_SECS`）⇒ 数被删、`seenAt` 留着 ⇒ 画「旧读数已过期」。
+        if (odd === 'expired') {
+          subs.forEach(function (sb) {
+            var qs = accs[sb].quota_summary, wk = qs && qs[0] && qs[0].buckets[1];
+            if (wk) { delete wk.remainingFraction; wk.seenAt = __NOW__ - 90000; }
+          });
+        }
         if (odd === 'unknown' && a0) {
           delete a0.quota_summary[0].buckets[1].remainingFraction;
           a0.quota.gemini = { remaining: null, reset: null };

@@ -250,8 +250,10 @@ class AgyDoesPersistTokensAndScanIsWiredToIt(unittest.TestCase):
             # ★ 跳过 agy 自己报了全 0 的行（`bin/agy` 现在标 `usage_missing`；旧行没标，按全 0 认）。
             #   2026-10-14：467/472 的那 5 个全是这种 —— db 有真数，是**账本**错了，不是字段号变了。
             #   拿它们比只会把「agy 没给」误报成「解码漂移」。
+            #   2026-10-16：453/454 的那 1 个是 `status: ERROR` 的运行 —— agy 自报 thinking=output=1183，
+            #   db 里是 35821。出错的那一轮 agy 的自报不可信，同理跳过。
             toks = ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens")
-            if d.get("usage_missing") or not any(d.get(k) for k in toks):
+            if d.get("usage_missing") or d.get("status") == "ERROR" or not any(d.get(k) for k in toks):
                 continue
             if d.get("conv"):
                 led[d["conv"]] = d

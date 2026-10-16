@@ -746,6 +746,37 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## 未发版（main）
+
+### 修复
+- **agy 卡片 Gemini 5h「上游没给数」**（用户 2026-10-16）：2026-10-16 起云端额度摘要对每个号都不再回 Gemini 组，5h 改从模型列表现读；
+  周没有别的来源，沿用最后一次读数并标龄，超过一天改说「旧读数已过期」（不再说「上游没给数」）。见 B82。
+
+---
+
+### B82 · 摘要不再回 Gemini 组，5h 显示「上游没给数」— 2026-10-16 ✅（未发版）
+
+用户：「现在 gemini 5h 显示上游没给数是什么意思？」
+**实测**（11:47 SGT）：`retrieveUserQuotaSummary` 对 3 个号**全部**不回「Gemini Models」组，从 ~05:06 起持续；
+换 3 种客户端身份（`antigravity/1.11.5 windows/amd64`、本机 `1.3.6 darwin/arm64`、不带 `Client-Metadata`）结果相同。
+同时 `fetchAvailableModels` 照常给 Gemini 5h：12 个 gemini 模型同一个 `remainingFraction`、同一个 `resetTime`（**只有 5h，没有周**）。
+本机 `agy-quota` 走本地 RPC 需要 CSRF token（B68），不可用。
+**为什么摘要不回了：未判别** —— ① Google 撤了 Gemini 周限额；② 服务端灰度/故障。组重新出现即为 ②。
+**根因（显示面）**：B81 的沿用只认**整组缺失**；5h 补上之后 Gemini 组在了、周桶不在，周就不再沿用。
+另一处：沿用桶过了重置时刻会删数，卡片落到「上游没给数」——话不对，那是「上游这一格缺数」的说法。
+**修**：
+- `agy/pool.py::fetch_quota` 摘要里没有 Gemini 组 ⇒ 调 `gemini_group_from_models` 从模型端点补一个只含 5h 的组（只认带 `resetTime` 的 gemini 模型；有一个缺数 ⇒ 整格读不到，不拿别的冒充）；补失败不影响摘要。
+- `carry_missing_groups` 改成**桶级**：同名组在、缺某个桶也沿用；沿用超过 `CARRY_MAX_SECS`（24h）⇒ 读不到。
+- 前端 `AGY_EXPIRED_TITLE`：带 `seen_at` 的读不到格说「旧读数已过期」，卡片与菜单栏同一句。
+**拒绝的方案**：「没给数 = 100% 未启动」。周没有来源，默认满会把最后一次周读数只剩 39.8% 的号当满号挑走；
+5h 是现读，闲置窗口已经按锚点账本显示「100% · ↻未启动」。
+**真数据核对**（12:03）：三个号 5h 来自模型端点（99.0% / 99.8% / 99.0%），周沿用 05:06–05:09 的读数（98.4% / 98.7% / 39.8%）并带 `seenAt`。
+**闸**：`tests/test_agy_gemini_from_models.py`（模型端点取组 / 兜底接进 `fetch_quota` / 桶级沿用 / 过一天读不到 / 前端文案），变异 13 个全红；
+顺带修了 `test_agy_realtime` 解码闸被一条 `status: ERROR` 账本行打红（agy 自报 thinking=output=1183，db 是 35821 —— 自报错，不是字段号变了）。
+harness `?agyodd=expired`。
+
+---------
+
 ## v1.10.2 — 2026-10-16
 
 **修：agy 号的 5h / 周额度偶尔显示成 Claude/GPT 组的 100%。**

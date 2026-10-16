@@ -5,7 +5,7 @@ import PlanBadge from "./PlanBadge";
 import type { Theme } from "../theme";
 import type { AgySnapshot } from "../agy";
 import {
-  AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText, agyWinRows,
+  AGY_EXPIRED_TITLE, AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText, agyWinRows,
 } from "../agy";
 import { winNumColor, fmtAgo } from "../helpers";
 
@@ -129,7 +129,7 @@ export default function AgyRow({ t, color, snap, busy, disabled, onOpen,
           if (row == null || rr == null) {
             return (
               <div key={label} className="mb-row-meta" data-agy-unknown={row ? "" : undefined}
-                   title={row ? AGY_UNKNOWN_TITLE
+                   title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE)
                      : `${label} 窗口这次没读到 —— 云端偶尔不返回这一格，下次刷新会补上`}>
                 <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>{label}</span>
                 <div className="mb-row-bar" style={{ background: t.barTrack }} />
