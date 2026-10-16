@@ -179,9 +179,16 @@ class CxpRouting(unittest.TestCase):
         stub = Path(cls.tmp, "codex")
         stub.write_text("#!/bin/bash\necho \"ROUTE: $*\"\n", encoding="utf-8")
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        # ★ 自带 profile 文件：cxp 在 exec 前硬检查 `$CODEX_HOME/rotateproxy.config.toml`。
+        #   原来继承真实 HOME —— 作者机上恰好有这份文件所以恒绿，干净的 macOS runner 上 8 条全红
+        #   （2026-10-17，`invariants-macos` 首跑）。
+        cls.home = Path(cls.tmp, "home")
+        (cls.home / ".codex").mkdir(parents=True)
+        (cls.home / ".codex" / "rotateproxy.config.toml").write_text("", encoding="utf-8")
 
     def route(self, *args):
         env = dict(os.environ, PATH=self.tmp + os.pathsep + os.environ["PATH"],
+                   HOME=str(self.home), CODEX_HOME=str(self.home / ".codex"),
                    # ★ 指向一个不存在的 store,`switch --best` 会安静失败 ——
                    #   正好验证「优化失败绝不能挡住 resume」。绝不碰真实 state.json。
                    CODEX_ROTATE_STORE=os.path.join(self.tmp, "nostore"))

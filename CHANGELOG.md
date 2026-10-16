@@ -761,7 +761,9 @@ v1.10.3 之后的一批（B83 / B84 / B85）。
 - `codex-rotate tokens` 同样漏 `.zst`；`connector.remove()` 漏卸 `agydawn`；GUI 选 python 时真跑一次 OpenSSL 检查。见 B85。
 - **设置页「数据源状态」**：每个已注册源这一轮读成了什么样（少算了琥珀、没找到 / 空灰色），来自常规扫描、不用点按钮。
   用户 2026-10-16 从两版 demo 里选的 A（设置页常驻；B = 用量卡角标，未采用）。见 B85。
-- CI：守卫在 macOS 上也跑一遍；release 对构建出的 `.app` 做 `.dmg` 布局冒烟（不起 GUI）。⚠️ 两者都还没在 CI 上跑过。
+- CI：守卫在 macOS 上也跑一遍；release 对构建出的 `.app` 做 `.dmg` 布局冒烟（不起 GUI）。
+  首跑即抓到一条：`test_resume_routing::CxpRouting` 继承真实 HOME，作者机上恰好有 `~/.codex/rotateproxy.config.toml` 所以恒绿，
+  干净的 macOS runner 上 8 条子用例全红（ubuntu 上该类按平台跳过，从没真跑过）—— 改成自带临时 HOME。包冒烟在真构建的 `.app` 上 7 条全过。
 
 - `agy-rotate login --help` / 未知选项会直接开始加号流程（先把当前号收编进池、再等回车）；现在打印用法或报错退出，池不动（2026-10-17 实际踩到）。
 
