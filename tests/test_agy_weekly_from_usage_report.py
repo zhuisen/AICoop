@@ -3,13 +3,16 @@
 ## 实测（2026-10-17 22:24–22:39 SGT，零计费）
 - 生产 host `cloudcode-pa` 的周（B83 的来源）自 07:12 起不动：剩 38.7%、reset 10-21 09:38Z。
   同一时刻 agy 自己的 `/usage`：剩 98.1%、reset 10-24 01:02Z —— 生产 host 报的是**上一个窗口**。
-- `agy -p /usage --output-format json`：约 12s、`usage` 全 0（3 次）；只报钥匙串里此刻那个号。
+- `agy -p /usage --output-format json`：约 12s、`usage` 全 0（3 次）。
+- `HOME` 指向临时目录 ⇒ 钥匙串查不到（不弹窗）⇒ agy 读临时目录里的 token 文件：2 个号日志身份都对，
+  真钥匙串前后逐字相同，当值号读数与直接跑一致。
 
 ## 守的
 1. 报告解析：snake_case → 摘要的 camelCase；桶在、数缺 ⇒ 读不到；一个数都没有 / 垃圾 ⇒ None。
 2. `fetch_quota` 不再碰生产 host。
 3. 旧的生产 host 桶不沿用数字（否则错数再撑 24h）。
-4. 接线：归属对得上才替换当值号；对不上 / 认不出 ⇒ 不用、`usage_report.ok=False`；没到期不跑。
+4. 接线：每个号用自己的凭证跑；归属对得上才替换；对不上 / 认不出 ⇒ 不用、`usage_report.ok=False`；没到期不跑。
+   隔离：假 agy 看到的 HOME 不是真 HOME、token 是这个号的、临时目录用完即删。
 5. 测试默认不起真 agy（三处 bootstrap 都设 `AGY_USAGE_REPORT=0`）。
 """
 try:
@@ -147,13 +150,13 @@ CLOUD = [{"displayName": "Claude and GPT models", "buckets": [
     {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1}]}]
 
 
-class TheReportIsWiredToTheLiveAccountOnly(unittest.TestCase):
+class EachAccountGetsItsOwnReport(unittest.TestCase):
     """行为闸：真调 `cmd_quota`，碰盘 / 碰网 / 碰钥匙串 / 起 agy 的地方全部打桩。"""
 
     def setUp(self):
         self.cli = cli = _load_cli()
         self.pool = {"accounts": {"A": {"label": "LA", "email": "a@x"}, "B": {"label": "LB", "email": "b@x"}}}
-        self.reports = []
+        self.ran = []
         cli.P = types.SimpleNamespace(
             load=lambda: self.pool,
             fetch_quota=lambda token: (json.loads(json.dumps(CLOUD)), ""),
@@ -164,16 +167,20 @@ class TheReportIsWiredToTheLiveAccountOnly(unittest.TestCase):
             _keyring_on=lambda: False,
             POOL=None,
         )
-        cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": "tok"}}, "")
+        cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": "tok-" + sub}, "sub": sub}, "")
         cli._mark_live = lambda pool: "A"
         cli._log = lambda msg: None
         cli._note_pool_anchors = lambda *a, **k: None
         cli._maybe_tier = lambda a, cred: None
         cli._usage_report_on = lambda: True
-        cli._usage_report_due = lambda pool, live: True
+        cli._agy_last_activity = lambda: None
+        self.reply = lambda cred: (P.groups_from_usage_report(REPORT), cred["sub"].lower() + "@X", "")
 
-    def run_with(self, report):
-        self.cli._usage_report = lambda: (self.reports.append(1), report)[1]
+    def run_quota(self):
+        def report(cred):
+            self.ran.append(cred["sub"])
+            return self.reply(cred)
+        self.cli._usage_report = report
         with redirect_stdout(io.StringIO()):
             self.cli.cmd_quota(["--json"])
         return self.pool["accounts"]
@@ -185,68 +192,117 @@ class TheReportIsWiredToTheLiveAccountOnly(unittest.TestCase):
                     return b.get("remainingFraction")
         return None
 
-    def test_a_matching_report_replaces_the_live_account(self):
-        accs = self.run_with((P.groups_from_usage_report(REPORT), "A@X", ""))
-        self.assertAlmostEqual(self.weekly(accs["A"]), 0.98144, places=4, msg="★★ 当值号的周要来自报告")
-        self.assertIsNone(self.weekly(accs["B"]), "★★★ 报告只属于当值号，不许写进别的号")
-        self.assertTrue(self.pool["usage_report"]["ok"])
-        self.assertEqual(self.pool["usage_report"]["sub"], "A")
+    def test_every_due_account_is_reported_with_its_own_credential(self):
+        accs = self.run_quota()
+        self.assertEqual(sorted(self.ran), ["A", "B"], "★★★ 非当值号也要有周 —— 每个号用自己的凭证跑")
+        for sub in ("A", "B"):
+            with self.subTest(sub=sub):
+                self.assertAlmostEqual(self.weekly(accs[sub]), 0.98144, places=4)
+                self.assertTrue(accs[sub]["usage_report"]["ok"])
 
-    def test_a_report_from_another_account_is_not_used(self):
-        accs = self.run_with((P.groups_from_usage_report(REPORT), "b@x", ""))
-        self.assertIsNone(self.weekly(accs["A"]), "★★★ 钥匙串被别的 agy 抢回去了 —— 那是 B 的数")
-        self.assertFalse(self.pool["usage_report"]["ok"])
-        self.assertIn("归属对不上", self.pool["usage_report"]["err"])
+    def test_a_report_that_ran_as_someone_else_is_not_used(self):
+        self.reply = lambda cred: (P.groups_from_usage_report(REPORT), "b@x", "")
+        accs = self.run_quota()
+        self.assertIsNone(self.weekly(accs["A"]), "★★★ 报告是 B 的，不许记在 A 头上")
+        self.assertFalse(accs["A"]["usage_report"]["ok"])
+        self.assertIn("归属对不上", accs["A"]["usage_report"]["err"])
+        self.assertAlmostEqual(self.weekly(accs["B"]), 0.98144, places=4)
 
     def test_an_unidentified_report_is_not_used(self):
-        accs = self.run_with((P.groups_from_usage_report(REPORT), None, ""))
+        self.reply = lambda cred: (P.groups_from_usage_report(REPORT), None, "")
+        accs = self.run_quota()
         self.assertIsNone(self.weekly(accs["A"]), "★★ 认不出是谁跑的 = 不挂到任何号上")
-        self.assertFalse(self.pool["usage_report"]["ok"])
+        self.assertFalse(accs["A"]["usage_report"]["ok"])
 
     def test_a_failed_report_keeps_the_cloud_reading(self):
-        accs = self.run_with((None, "a@x", "超时（45s）"))
+        self.reply = lambda cred: (None, None, "超时（45s）")
+        accs = self.run_quota()
         self.assertEqual(accs["A"]["quota_summary"], CLOUD, "★ 报告失败不影响云端那份")
-        self.assertEqual(self.pool["usage_report"]["err"], "超时（45s）")
+        self.assertEqual(accs["A"]["usage_report"]["err"], "超时（45s）")
 
-    def test_not_due_means_not_run(self):
-        self.cli._usage_report_due = lambda pool, live: False
-        self.run_with((P.groups_from_usage_report(REPORT), "a@x", ""))
-        self.assertEqual(self.reports, [], "★ 每 3 分钟都起一次 12s 的 agy 是纯浪费")
-        self.assertNotIn("usage_report", self.pool)
+    def test_a_fresh_report_is_not_rerun(self):
+        now = int(time.time())
+        for a in self.pool["accounts"].values():
+            a["usage_report"] = {"at": now - 60, "ok": True}
+        self.run_quota()
+        self.assertEqual(self.ran, [], "★ 每 3 分钟给每个号起一次 agy 是纯浪费")
 
 
 class WhenTheReportIsDue(unittest.TestCase):
+    NOW = 2_000_000_000
+
+    def setUp(self):
+        self.cli = _load_cli()
+
+    def due(self, at, is_live=False, activity=None):
+        a = {"usage_report": {"at": at}} if at is not None else {}
+        return self.cli._usage_report_due(a, is_live, activity, now=self.NOW)
+
+    def test_never_reported_is_due(self):
+        self.assertTrue(self.due(None))
+
+    def test_a_fresh_report_is_not_due(self):
+        self.assertFalse(self.due(self.NOW - 60))
+
+    def test_an_old_report_is_due(self):
+        self.assertTrue(self.due(self.NOW - self.cli.USAGE_MAX_AGE))
+
+    def test_local_activity_makes_only_the_live_account_due(self):
+        self.assertTrue(self.due(self.NOW - 60, is_live=True, activity=self.NOW - 30), "★★ agy 刚用过，当值号的额度动了")
+        self.assertFalse(self.due(self.NOW - 60, is_live=False, activity=self.NOW - 30),
+                         "★ 本机活动只花当值号的额度")
+        self.assertFalse(self.due(self.NOW - 10, is_live=True, activity=self.NOW - 30), "活动早于上一份报告")
+
+
+FAKE_AGY = r"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+home = pathlib.Path(os.environ["HOME"])
+d = home / ".gemini" / "antigravity-cli"
+tok = json.loads((d / "antigravity-oauth-token").read_text())
+pathlib.Path(sys.argv[0] + ".seen").write_text(json.dumps({"home": str(home), "argv": sys.argv[1:],
+    "cwd": os.getcwd(), "tok": tok, "mode": oct((d / "antigravity-oauth-token").stat().st_mode & 0o777)}))
+(d / "log").mkdir(exist_ok=True)
+(d / "log" / "cli-1.log").write_text("I1017 server_oauth.go:224] applyAuthResult: email=%s, authMethod=consumer\n" % tok["email"])
+print(json.dumps(__REPORT__))
+"""
+
+
+class TheReportRunsInAnIsolatedHome(unittest.TestCase):
+    """真起一个假 agy（脚本），验它看到的环境 —— 这是「不碰真钥匙串」的全部依据。"""
+
     def setUp(self):
         self.cli = _load_cli()
         self.dir = tempfile.TemporaryDirectory()
-        self.cli.AGY_CONV_DIR = Path(self.dir.name)
-        self.now = 2_000_000_000
+        self.agy = Path(self.dir.name) / "agy"
+        self.agy.write_text(FAKE_AGY.replace("__REPORT__", repr(REPORT)))
+        self.agy.chmod(0o755)
+        self.env = mock.patch.dict(os.environ, {"AGY_REAL": str(self.agy)})
+        self.env.start()
 
     def tearDown(self):
+        self.env.stop()
         self.dir.cleanup()
 
-    def due(self, last, live="A"):
-        return self.cli._usage_report_due({"usage_report": last} if last else {}, live, now=self.now)
+    def test_it_runs_as_the_given_account_without_the_real_home(self):
+        cred = {"email": "x@y", "token": {"access_token": "t"}}
+        groups, who, err = self.cli._usage_report(cred)
+        seen = json.loads(Path(str(self.agy) + ".seen").read_text())
+        self.assertEqual(err, "")
+        self.assertNotEqual(seen["home"], str(Path.home()), "★★★ 用真 HOME ⇒ agy 读写的是真钥匙串")
+        self.assertEqual(seen["tok"], cred, "★★ agy 读到的必须是这个号的凭证")
+        self.assertEqual(seen["mode"], "0o600", "★ 临时 token 文件只给自己读")
+        self.assertEqual(seen["argv"], ["-p", "/usage", "--output-format", "json"])
+        self.assertEqual(who, "x@y", "★ 身份从临时 HOME 的日志读")
+        self.assertAlmostEqual(_bucket(groups, "gemini-weekly")["remainingFraction"], 0.98144, places=4)
+        self.assertFalse(Path(seen["home"]).exists(), "★★ 临时目录里有 token，用完必须删")
 
-    def test_first_time_and_account_change_are_due(self):
-        self.assertTrue(self.due(None))
-        self.assertTrue(self.due({"sub": "B", "at": self.now - 10}), "★ 换了号，上一份是别人的")
-
-    def test_no_live_account_is_never_due(self):
-        self.assertFalse(self.due(None, live=None))
-
-    def test_a_fresh_report_without_activity_is_not_due(self):
-        self.assertFalse(self.due({"sub": "A", "at": self.now - 60}))
-
-    def test_an_old_report_is_due(self):
-        self.assertTrue(self.due({"sub": "A", "at": self.now - self.cli.USAGE_MAX_AGE}))
-
-    def test_activity_after_the_last_report_is_due(self):
-        f = Path(self.dir.name) / "c.db-wal"
-        f.write_text("x")
-        os.utime(f, (self.now - 30, self.now - 30))
-        self.assertTrue(self.due({"sub": "A", "at": self.now - 60}), "★★ agy 刚用过，额度动了")
-        self.assertFalse(self.due({"sub": "A", "at": self.now - 10}), "活动早于上一份报告")
+    def test_identity_must_be_unique(self):
+        d = Path(self.dir.name) / "log"
+        d.mkdir()
+        (d / "cli-1.log").write_text("applyAuthResult: email=a@x, m\n")
+        self.assertEqual(self.cli._identity_in(d), "a@x")
+        (d / "cli-2.log").write_text("applyAuthResult: email=b@x, m\n")
+        self.assertIsNone(self.cli._identity_in(d), "★★ 两个身份 = 认不出，不许挑一个")
 
 
 class TestsNeverStartARealAgy(unittest.TestCase):

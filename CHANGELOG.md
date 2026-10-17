@@ -770,7 +770,7 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
   全部加 `--use-mock-keychain`，并加闸。只动测试与 harness 工具，不影响 app。见 B86。
 - **agy Gemini 周额度不更新**（用户 2026-10-17）：生产 host 给的是上一个窗口的旧账（剩 38.7%，真值 98.1%）。
-  当值号的周改由 agy 自己的 `/usage` 报告给（零 token、约 12s，与云端取数并行）；其余号沿用它们当值时的读数并标龄。见 B88。
+  周改由 agy 自己的 `/usage` 报告给（零 token、约 12s）：每个号在自己的临时 HOME 里跑，不碰钥匙串，约半小时一次。见 B88。
 
 ---
 
@@ -798,8 +798,19 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 - `fetch_quota` 不再连生产 host；`carry_missing_groups` 沿用旧桶时，带生产 host 来源的去掉数字（= 读不到）。
 - 测试三处 bootstrap 设 `AGY_USAGE_REPORT=0`，不会起真 agy。
 
-**副作用（已知、未拍板）**：非当值号的 Gemini 周只能沿用它上次当值时的报告（`CARRY_MAX_SECS` 24h），本次修完那 3 个号显示「—」。
-**闸** `tests/test_agy_weekly_from_usage_report.py`（19 条，17 个变异全红）；`test_agy_gemini_weekly_from_prod.py` 随 B83 来源一起删除。
+**第一版的副作用**：只有当值号有报告，另外 3 个号的周显示「旧读数已过期」。用户：「既然显示过期了，为什么不重新抓取」「在探针基础上实现一个 /usage 不难吧」。
+
+**第二版：每个号在自己的临时 HOME 里跑 `/usage`**（不切钥匙串，探针那种「切号 → 跑 → 切回」也不需要）：
+- 判别实验（零计费）：`HOME=<临时目录> security find-generic-password -s gemini -a antigravity` 退出 44、**不弹窗**（真 HOME 对照 0）⇒
+  agy 的 `ChainedAuth` 回落到 `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`，即我们写进去的那份。
+- 实测 2 个号：日志 `applyAuthResult` 都是写进去的号；真钥匙串前后逐字相同；当值号读数 0.99477 与直接跑一致到每一位。
+  非当值号读到 1.0、reset = 现在+7 天 —— 同一时刻模型端点的 5h 也是 1.0、reset = 现在+5h ⇒ 窗口确实没开始，不是坏数。
+- 每个号刷新凭证后与云端取数同线程跑（各自独立 ⇒ 并行）；token 刚刷过，agy 在十几秒里不会自刷；临时目录用完即删。
+- 到期：没报过 / 距上次 ≥30 分钟 / 当值号在上次之后用过 agy（本机活动只花当值号的额度）。记录在 `a["usage_report"]`。
+- 实测 4 个号一起报：整轮 18.7s；峰值多 8 个进程、约 +1.0 GB 内存（4 个 agy + 4 个 language server，瞬时），跑完回到基线 3 个。
+  ⚠️ app 的 `run_agy_rotate` 持 `AGY_LOCK`，这十几秒里点「切号」要排队；多数轮次没有到期的号，不跑。
+**闸** `tests/test_agy_weekly_from_usage_report.py`（20 条，19 个变异全红；隔离用假 agy 脚本验它看到的 HOME / token / 权限 / 删目录）；
+`test_agy_gemini_weekly_from_prod.py` 随 B83 来源一起删除。
 
 ---
 
