@@ -15,7 +15,7 @@
 //!    · 光标进了刘海区：起一个 60ms 的跟踪线程，直到光标离开且面板收完。
 //!      监听只负责"叫醒"，进出与停留的判定全在跟踪线程里 —— 光标停在我们自己的窗口上时，
 //!      全局监听可能收不到事件，只靠事件会"离不开"。
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl};
@@ -32,7 +32,7 @@ const CLOSE_DWELL: Duration = Duration::from_millis(220);
 /// 前端收起动画时长（`notch.css` 的 clip-path 过渡 .34s）。收完再缩窗口，否则动画被裁掉。
 const COLLAPSE: Duration = Duration::from_millis(340);
 const TRACK_TICK: Duration = Duration::from_millis(60);
-/// 几何（刘海位置）最多多久重读一次。合盖/改分辨率后靠它自愈，不必监听屏幕变更通知。
+/// 几何（刘海位置）最多多久重读一次。合盖/开盖/改分辨率后靠它自愈（下一次鼠标移动时）。
 const GEOM_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -48,9 +48,25 @@ pub struct Notch {
     primary_h: f64,
 }
 
+/// `set_notch_hud` 的回答。★ 「开关记住了」与「屏幕上真有东西」是两件事 ——
+/// 没有刘海屏时开关照样记着开，但必须让设置页说出来，不能让用户对着空屏幕猜（四方评审 2026-10-17）。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Status {
+    pub active: bool,
+    /// `active == false` 的原因：`"no_notch"` = 现在没有带刘海的屏幕（外接屏 / 合盖 / 本来就没有）
+    pub reason: Option<&'static str>,
+}
+
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static OPEN: AtomicBool = AtomicBool::new(false);
-static TRACKING: AtomicBool = AtomicBool::new(false);
+/// ★ 代次（四方评审 2026-10-17）：每次开/关 +1，每次展开/收起 +1。后台线程与排进主线程的闭包
+///   **执行前**核对自己领到的那一代 —— 关掉之后旧线程不许再把窗口展开、旧的收起计时不许裁掉新一轮动画。
+static ENABLE_GEN: AtomicU64 = AtomicU64::new(0);
+static OPEN_GEN: AtomicU64 = AtomicU64::new(0);
+/// 正在跑的跟踪线程领到的号；0 = 没有。退出时只清**自己那一号**（`compare_exchange`），
+/// 否则旧线程退出会把新线程的标记抹掉，于是又起一条。
+static TRACKER: AtomicU64 = AtomicU64::new(0);
+static TRACKER_SEQ: AtomicU64 = AtomicU64::new(0);
 static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
 static PANEL_H: Mutex<f64> = Mutex::new(180.0);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
@@ -67,8 +83,23 @@ unsafe impl objc2::Encode for EdgeInsets {
     );
 }
 
+/// 一块屏的 AppKit 几何 → 刘海在桌面坐标里的位置。纯函数，单测覆盖「刘海屏不是主屏」。
+///
+/// ★ 只用两块 auxiliary 区域的**宽度**，不用它们的 origin：左块从屏幕左沿开始、右块到屏幕右沿结束
+///   是定义，于是刘海 = `[frame.x + 左块宽, frame.x + frame.w − 右块宽]`。这样不必赌 auxiliary
+///   矩形用的是全局坐标还是屏幕局部坐标 —— 刘海屏是主屏（原点 0）时两种说法恰好相等，测不出来。
+fn notch_from(frame: (f64, f64, f64, f64), primary_h: f64, inset_top: f64,
+              left_w: f64, right_w: f64) -> Option<Notch> {
+    let (fx, fy, fw, fh) = frame;
+    if inset_top <= 0.0 { return None; }
+    let left = fx + left_w;
+    let right = fx + fw - right_w;
+    if right <= left { return None; }
+    Some(Notch { left, width: right - left, height: inset_top, top: primary_h - (fy + fh), primary_h })
+}
+
 /// 带刘海的那块屏幕上，刘海的位置。没有刘海的屏幕 ⇒ `None`（用户 2026-10-17 定：
-/// 外接屏、合盖时**不显示**，不画替身条）。
+/// 外接屏、合盖时**不显示**，不画替身条）。主线程调用。
 fn read_notch() -> Option<Notch> {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
@@ -88,14 +119,10 @@ fn read_notch() -> Option<Notch> {
             let f: NSRect = msg_send![s, frame];
             let l: NSRect = msg_send![s, auxiliaryTopLeftArea];
             let r: NSRect = msg_send![s, auxiliaryTopRightArea];
-            let left = l.origin.x + l.size.width;
-            let right = r.origin.x;
-            if right <= left { continue; }
-            return Some(Notch {
-                left, width: right - left, height: ins.top,
-                top: pf.size.height - (f.origin.y + f.size.height),
-                primary_h: pf.size.height,
-            });
+            if let Some(g) = notch_from((f.origin.x, f.origin.y, f.size.width, f.size.height),
+                                        pf.size.height, ins.top, l.size.width, r.size.width) {
+                return Some(g);
+            }
         }
         None
     }
@@ -136,11 +163,33 @@ fn hit(g: &Notch, open: bool, x: f64, y: f64) -> bool {
     x >= rx && x <= rx + rw && y >= ry - 2.0 && y <= ry + rh
 }
 
+/// 把窗口摆到收起/展开的位置。★ **只在主线程调**：`set_size` 本身会派发，但派发前读缩放
+/// （`NSWindow.backingScaleFactor`）发生在调用线程；后台线程一律经 `place_soon`。
 fn place(app: &AppHandle, open: bool) {
     let (Some(win), Some(g)) = (app.get_webview_window(LABEL), cached()) else { return };
     let (x, y, w, h) = rect(&g, open);
     let _ = win.set_size(LogicalSize::new(w, h));
     let _ = win.set_position(LogicalPosition::new(x, y));
+    pass_clicks(&win, !open);
+}
+
+fn place_soon(app: &AppHandle, open: bool) {
+    let a = app.clone();
+    let _ = app.run_on_main_thread(move || place(&a, open));
+}
+
+/// ★ 收起态**不接鼠标**（四方评审 2026-10-17）：收起窗口比刘海左右各宽 7pt、向下多 7pt，
+///   盖着菜单栏两侧和下面应用的顶边，接鼠标就会吞掉那里的点击、还会把自己变成 key window。
+///   悬停判定本来就不靠窗口收事件（靠 NSEvent 监听 + 光标位置），所以收起时整个穿透没有代价。
+fn pass_clicks(win: &tauri::WebviewWindow, through: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Ok(ptr) = win.ns_window() else { return };
+    if ptr.is_null() { return; }
+    // SAFETY: 主线程；ptr 是本窗口仍存活的 NSWindow；只设一个 BOOL 属性。
+    unsafe {
+        let _: () = msg_send![ptr as *mut AnyObject, setIgnoresMouseEvents: through];
+    }
 }
 
 /// Tauri 不给窗口层级与 Spaces 行为的接口，直接设到 NSWindow 上。必须在主线程。
@@ -160,11 +209,19 @@ fn raise(win: &tauri::WebviewWindow) {
         let _: () = msg_send![w, setCollectionBehavior: behavior];
         let _: () = msg_send![w, setHasShadow: false];
         let _: () = msg_send![w, setHidesOnDeactivate: false];
+        let _: () = msg_send![w, setIgnoresMouseEvents: true];
+        // ★ 不用 `win.show()`：tao 的 show 是 `makeKeyAndOrderFront`，`.focused(false)` 拦不住，
+        //   刘海窗口一出现就抢走主窗口的键盘焦点（⌘1/2/3 失灵）。只排到最前、不当 key。
+        let _: () = msg_send![w, orderFrontRegardless];
     }
 }
 
-/// 光标位置（桌面坐标）。`+[NSEvent mouseLocation]` 给的是左下原点，翻一下。主线程调用。
-fn mouse_on_main(g: &Notch) -> (f64, f64) {
+/// 光标位置（桌面坐标：主屏左上为原点的逻辑 pt）。`+[NSEvent mouseLocation]` 给的是左下原点，翻一下。
+/// ★ 唤醒（主线程）与跟踪（后台线程）**必须用同一套算法** —— 原来跟踪线程用
+///   `cursor_position() / 刘海窗口的 scale`，而 tao 是按**主屏** scale 换的物理坐标：
+///   主屏是 1× 外接屏、刘海在 2× 内建屏时坐标被减半，唤醒判进、跟踪判出，面板永远打不开。
+///   `mouseLocation` 是只读类方法、tao 自己也在任意线程调它；后台线程不再碰 NSWindow / NSScreen。
+fn mouse_desktop(g: &Notch) -> (f64, f64) {
     use objc2::{class, msg_send};
     // SAFETY: 类方法，无参数，返回值是值类型。
     let p: objc2_foundation::NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
@@ -173,33 +230,38 @@ fn mouse_on_main(g: &Notch) -> (f64, f64) {
 
 fn set_open(app: &AppHandle, open: bool) {
     if OPEN.swap(open, Ordering::SeqCst) == open { return; }
+    let gen = OPEN_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     if open {
-        place(app, true);
+        place_soon(app, true);
         let _ = app.emit_to(LABEL, "notch-open", true);
     } else {
         let _ = app.emit_to(LABEL, "notch-open", false);
         let app = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(COLLAPSE);
-            if !OPEN.load(Ordering::SeqCst) { place(&app, false); }
+            // ★ 只收**这一轮**：中途又展开过一次再移出，旧计时醒来不许裁掉新一轮的动画。
+            if OPEN_GEN.load(Ordering::SeqCst) == gen && !OPEN.load(Ordering::SeqCst) {
+                place_soon(&app, false);
+            }
         });
     }
 }
 
 /// 跟踪线程：光标进刘海区之后才存在，离开并收完就退出。
 fn track(app: AppHandle) {
-    if TRACKING.swap(true, Ordering::SeqCst) { return; }
+    let me = TRACKER_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    if TRACKER.compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst).is_err() { return; }
+    let gen = ENABLE_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
         let mut inside = true;
         let mut since = Instant::now();
         loop {
             std::thread::sleep(TRACK_TICK);
-            if !ENABLED.load(Ordering::SeqCst) { break; }
-            let (Some(g), Ok(p), Some(win)) = (cached(), app.cursor_position(), app.get_webview_window(LABEL))
-                else { break };
-            let scale = win.scale_factor().unwrap_or(2.0);
+            if ENABLE_GEN.load(Ordering::SeqCst) != gen || !ENABLED.load(Ordering::SeqCst) { break; }
+            let Some(g) = cached() else { break };
+            let (x, y) = mouse_desktop(&g);
             let open = OPEN.load(Ordering::SeqCst);
-            let now_in = hit(&g, open, p.x / scale, p.y / scale);
+            let now_in = hit(&g, open, x, y);
             if now_in != inside { inside = now_in; since = Instant::now(); }
             if inside && !open && since.elapsed() >= OPEN_DWELL {
                 set_open(&app, true);
@@ -209,18 +271,67 @@ fn track(app: AppHandle) {
                 break;   // 擦过没停够，或已经收完
             }
         }
-        TRACKING.store(false, Ordering::SeqCst);
+        let _ = TRACKER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst);
     });
 }
 
-/// 鼠标事件监听的回调（主线程）。只做"光标进没进刘海区"这一件事，命中就叫醒跟踪线程。
-fn on_mouse(app: &AppHandle) {
-    if !ENABLED.load(Ordering::Relaxed) || TRACKING.load(Ordering::Relaxed) { return; }
+/// 建窗口（主线程）。已经有了就只摆位置。
+fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(LABEL) {
+        raise(&w);
+        place(app, OPEN.load(Ordering::SeqCst));
+        return Ok(());
+    }
+    let (x, y, w, h) = rect(g, false);
+    let win = tauri::webview::WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notch.html".into()))
+        .title("CodexBar Notch")
+        .decorations(false)
+        .transparent(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        .focused(false)
+        // ★ CodexBar 几乎从不在前台：不接首次点击的话，点面板只会激活窗口，「点这里打开」要点两下。
+        .accept_first_mouse(true)
+        .visible(false)
+        .inner_size(w, h)
+        .position(x, y)
+        .build()
+        .map_err(|e| e.to_string())?;
+    raise(&win);
+    Ok(())
+}
+
+fn drop_window(app: &AppHandle) {
+    OPEN.store(false, Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window(LABEL) { let _ = w.destroy(); }
+}
+
+/// 刘海屏出现/消失/挪位置时让窗口跟上（主线程）。
+/// ★ 原来 `geometry()` 读成 `None` 就直接 return：合盖后层级 26 的窗口留在原地、被系统挪到外接屏菜单栏正中
+///   （一块黑块）；合盖时打开开关，开盖后也永远不出现（四方评审 2026-10-17）。
+fn reconcile(app: &AppHandle) {
     let before = cached();
-    let Some(g) = geometry() else { return };
-    // 合盖/改分辨率后刘海位置变了：窗口跟过去
-    if before != Some(g) { place(app, OPEN.load(Ordering::SeqCst)); }
-    let (x, y) = mouse_on_main(&g);
+    let now = geometry();
+    match now {
+        None => if app.get_webview_window(LABEL).is_some() { drop_window(app); },
+        Some(g) => {
+            if app.get_webview_window(LABEL).is_none() {
+                let _ = ensure_window(app, &g);
+            } else if before != Some(g) {
+                place(app, OPEN.load(Ordering::SeqCst));
+                let _ = app.emit_to(LABEL, "notch-geom", g);
+            }
+        }
+    }
+}
+
+/// 鼠标事件监听的回调（主线程）。先对齐几何，再看光标进没进刘海区，命中就叫醒跟踪线程。
+fn on_mouse(app: &AppHandle) {
+    if !ENABLED.load(Ordering::Relaxed) || TRACKER.load(Ordering::Relaxed) != 0 { return; }
+    reconcile(app);
+    let Some(g) = cached() else { return };
+    let (x, y) = mouse_desktop(&g);
     if hit(&g, false, x, y) { track(app.clone()); }
 }
 
@@ -266,55 +377,44 @@ fn remove_monitors() {
     }
 }
 
-/// 开/关。开 = 建窗口 + 装监听；关 = 拆监听 + **销毁窗口**（不只是隐藏 —— 隐藏的
+/// 开/关。开 = 装监听 +（有刘海屏时）建窗口；关 = 拆监听 + **销毁窗口**（不只是隐藏 —— 隐藏的
 /// WKWebView 仍占着两个系统进程，默认关的功能不该常驻任何东西）。
-/// ★ 调用方是**同步**命令（Tauri 2 的同步命令在主线程跑），这里要读 NSScreen。
-pub fn set_enabled(app: &AppHandle, on: bool) -> Result<(), String> {
+/// ★ 监听**无论有没有刘海屏都装**：合盖时打开、之后开盖，下一次鼠标移动就由 `reconcile` 把窗口建出来。
+/// ★ 调用方是**同步**命令（Tauri 2 的同步命令在主线程跑），这里要读 NSScreen、直接操作 NSWindow。
+pub fn set_enabled(app: &AppHandle, on: bool) -> Result<Status, String> {
+    ENABLE_GEN.fetch_add(1, Ordering::SeqCst);
     ENABLED.store(on, Ordering::SeqCst);
     if !on {
-        OPEN.store(false, Ordering::SeqCst);
-        let _ = app.run_on_main_thread(remove_monitors);
-        if let Some(w) = app.get_webview_window(LABEL) { let _ = w.destroy(); }
-        return Ok(());
+        remove_monitors();
+        drop_window(app);
+        return Ok(Status { active: false, reason: None });
     }
+    install_monitors(app);
     *GEOM.lock().unwrap() = None;
     let Some(g) = geometry() else {
-        // 没有刘海屏：什么都不建。开关仍记着"开"，换回带刘海的屏幕后重新开一次即可。
-        return Ok(());
+        return Ok(Status { active: false, reason: Some("no_notch") });
     };
-    if app.get_webview_window(LABEL).is_none() {
-        let (x, y, w, h) = rect(&g, false);
-        let win = tauri::webview::WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notch.html".into()))
-            .title("CodexBar Notch")
-            .decorations(false)
-            .transparent(true)
-            .resizable(false)
-            .skip_taskbar(true)
-            .shadow(false)
-            .focused(false)
-            .visible(false)
-            .inner_size(w, h)
-            .position(x, y)
-            .build()
-            .map_err(|e| e.to_string())?;
-        let w2 = win.clone();
-        let _ = app.run_on_main_thread(move || {
-            raise(&w2);
-            let _ = w2.show();
-        });
+    ensure_window(app, &g)?;
+    Ok(Status { active: true, reason: None })
+}
+
+/// 设置页打开时问一句「现在有没有刘海屏」，不改任何状态（主线程）。
+pub fn status() -> Status {
+    let enabled = ENABLED.load(Ordering::SeqCst);
+    match geometry() {
+        Some(_) => Status { active: enabled, reason: None },
+        None => Status { active: false, reason: Some("no_notch") },
     }
-    place(app, false);
-    let a = app.clone();
-    let _ = app.run_on_main_thread(move || install_monitors(&a));
-    Ok(())
 }
 
 pub fn notch_geometry() -> Option<Notch> { cached() }
 
+pub fn is_open() -> bool { OPEN.load(Ordering::SeqCst) }
+
 /// 前端量出展开面板的自然高度后告诉这里（随额度窗口个数变）。
 pub fn set_panel_height(app: &AppHandle, h: f64) {
     *PANEL_H.lock().unwrap() = h.clamp(80.0, 400.0);
-    if OPEN.load(Ordering::SeqCst) { place(app, true); }
+    if OPEN.load(Ordering::SeqCst) { place_soon(app, true); }
 }
 
 #[cfg(test)]
@@ -337,5 +437,23 @@ mod tests {
         assert!(hit(&g, false, 735.0, 10.0));
         assert!(!hit(&g, false, 641.0, 10.0), "左侧内凹圆角那 7pt 是菜单栏");
         assert!(!hit(&g, false, 735.0, 60.0));
+    }
+    #[test]
+    fn notch_screen_as_primary_matches_the_measured_air() {
+        // 13 寸 Air：屏 1470×956，左右 auxiliary 各 646 / 645 宽，safeArea.top 32
+        let g = notch_from((0.0, 0.0, 1470.0, 956.0), 956.0, 32.0, 646.0, 645.0).unwrap();
+        assert_eq!((g.left, g.width, g.height, g.top), (646.0, 179.0, 32.0, 0.0));
+    }
+    #[test]
+    fn notch_screen_that_is_not_primary_is_offset_by_its_frame() {
+        // 主屏 1920×1080 外接屏；内建刘海屏摆在它右边、底边对齐（AppKit 左下原点）
+        let g = notch_from((1920.0, 0.0, 1470.0, 956.0), 1080.0, 32.0, 646.0, 645.0).unwrap();
+        assert_eq!(g.left, 1920.0 + 646.0, "刘海 x 必须带上那块屏自己的 origin");
+        assert_eq!(g.top, 1080.0 - 956.0, "那块屏顶边在桌面坐标里比主屏低 124pt");
+    }
+    #[test]
+    fn a_screen_without_a_notch_has_none() {
+        assert_eq!(notch_from((0.0, 0.0, 1920.0, 1080.0), 1080.0, 0.0, 0.0, 0.0), None);
+        assert_eq!(notch_from((0.0, 0.0, 1470.0, 956.0), 956.0, 32.0, 800.0, 800.0), None);
     }
 }

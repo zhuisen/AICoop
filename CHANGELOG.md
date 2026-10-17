@@ -762,10 +762,47 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
   （用户确认）；纯轮询版空闲主进程 0.30% CPU、webview 进程 0 —— 正式版换成事件监听就是为去掉这 0.30%，
   **事件监听版的空闲开销尚未实测**。
 - 闸 `tests/test_notch_hud.py`（11 条，16 个变异全部符合预期）+ `notch.rs` 里 3 条几何单测。
+- **合并前四方评审修掉 9 类问题**（agy 读到 24 天前的旧数、合盖后黑块留在外接屏、无刘海时开关静默、
+  混合 DPI 坐标减半、收起态吞点击 / 抢焦点、开关竞态、window-state 记住展开尺寸、0.x% 显示 0 却是琥珀、
+  权限过宽）。设置页那一行现在会说「现在没有检测到刘海屏」。见 B87。
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
   全部加 `--use-mock-keychain`，并加闸。只动测试与 harness 工具，不影响 app。见 B86。
+
+---
+
+### B87 · 刘海额度条（PR #1）合并前四方评审 — 2026-10-17
+
+评审：Opus 5.5 high / gpt-6.1-sol high / gemini-4-argon-high / grok-4.7 high，**4/4 判「修完才能合」**
+（grok「not mergeable」，其余三家「mergeable after fixes」）。原文在
+`~/Downloads/codexbar_pr1_notch_review_20261017/`（`opus.md`、`codex_final.md`、`agy.md`、`grok.out`）。
+本机是 Mac17,14 + 4K 外接屏、**没有刘海** —— 有刘海那半（悬停唤醒、穿透、位置）本机测不了，见末尾。
+
+| # | 缺陷 | 谁抓到 | 证据 | 修法 |
+|---|---|---|---|---|
+| 1 | agy 段只读本机 RPC 快照 | 本会话 + gemini（另三家漏） | 本机 `.agy-quota.json` 恒 `csrf_required`，`last_good` 停在 24.5 天前（2,119,211s） | `agyPool.snapshotOf(当前号, 本机RPC)`，与菜单栏同一条；`useAgyPool(false)` 不起子进程 |
+| 2 | 刘海屏消失不拆窗、合盖时打开则开盖不出现 | 4/4 | `geometry()` 为 `None` 直接 return；`set_enabled` 无刘海时在装监听前就返回 | `reconcile()`：None ⇒ 销毁、Some 且无窗 ⇒ 建；监听无论有无刘海都装 |
+| 3 | 跟踪线程坐标 | 4/4 | tao 0.35.3 `util/mod.rs:105` 按**主屏** scale 转物理坐标，PR 除以**刘海窗口**的 scale | 唤醒与跟踪同用 `NSEvent mouseLocation`；后台线程不再碰 NSWindow/NSScreen，`place` 派回主线程 |
+| 4 | 无刘海时开关静默「成功」，错误被 `.catch(() => {})` 吞掉 | 4/4 | 无刘海走 `Ok(())` | 命令回 `{active, reason}`；设置页 `notchRowDesc` 说原因；失败回滚开关 |
+| 5 | 收起态吞菜单栏两侧 / 下沿点击；`show()` 抢 key | 3/4 | tao `show` = `makeKeyAndOrderFront` | 收起 `setIgnoresMouseEvents: YES`；`orderFrontRegardless`；`accept_first_mouse` |
+| 6 | 开关 / 收起动画竞态 | 3/4 | 关掉后旧线程仍可 `set_open(true)`；旧收起计时裁掉新一轮动画；`TRACKING` 无条件清 | `ENABLE_GEN` / `OPEN_GEN` 代次；跟踪线程只清自己那一号 |
+| 7 | `notch` 不在 window-state 黑名单 | gemini | `with_denylist(&["menubar"])` | 加 `"notch"` |
+| 8 | 剩 0.x% 环上写 0 却是琥珀；stale 提示一律「agy 没在跑」 | 3/4 | `pct <= 0` 判原值、`Math.round` 显示 | 判显示出来的整数；旧数按原因分两句 |
+| 9 | `notch` 并进 default capability | 3/4 | 顺带拿到 autostart / 通知 / 窗口操作 | 独立 `capabilities/notch.json`，只给 `core:default` |
+
+还修了：首个 `notch-open` 可能早于前端 listen（注册后再问一次 `open`）；改分辨率后前端刘海尺寸不跟（`notch-geom` 事件）；
+刘海屏不是主屏时 x 依赖 auxiliary 矩形的坐标系（改成只用宽度 + 屏幕 origin，单测覆盖）；面板空时说「暂无可显示的额度」。
+
+**没做**（评审提了、不阻塞）：刘海窗口仍挂完整 `useStore`（30s `read_state` + 1Hz 冷却计时，刘海不用后者）；
+`counts.live` 含暂停 / 额度未知的号（与菜单栏同口径，没单独改）；事件监听版的空闲 CPU 仍未量。
+
+**闸**：`tests/test_notch_hud.py` 11 → 30 条。`notchSegs.ts` 是纯函数、node 真跑（读不到 ≠ 满格、旧数的两种原因、
+「当前号未知」不借别号的数、0 边界颜色、设置页文案），其余每类缺陷一条结构闸；`notch.rs` 几何单测 3 → 6。
+变异 17 个全红（评审指出原测试下 5~8 种变异能活）。
+
+⚠️ **有刘海那半零真机验证**：收起态穿透后全局 `mouseMoved` 监听能否在刘海区叫醒（opus 认为穿透反而修好唤醒，**推断**）、
+`orderFrontRegardless` 在全屏 Space 的表现、刘海屏非主屏的实际坐标 —— 需要 PR 作者在带刘海的 Mac 上复验。
 
 ---
 

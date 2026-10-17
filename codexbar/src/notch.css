@@ -43,6 +43,7 @@ body {
 .nh-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
 .nh-head b { font-size: 12.5px; font-weight: 600; }
 .nh-head span { color: var(--muted); font: 11px 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+.nh-empty { color: var(--muted); font-size: 11.5px; padding: 6px 0 2px; }
 .nh-rings { display: grid; gap: 6px; text-align: center; }
 .nh-ring { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
 .nh-ring.stale svg { opacity: .5; }

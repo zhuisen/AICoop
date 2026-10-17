@@ -639,19 +639,33 @@ fn set_dock_visible(app: AppHandle, on: bool) {
 /// 刘海额度条开关（设置页，默认关）。实现见 `notch.rs`。
 /// ★ **同步命令**：Tauri 2 的同步命令在主线程跑，`notch::set_enabled` 要读 NSScreen。
 ///   开关在 localStorage，Rust 侧读不到 —— 与 `set_dock_visible` 同理，每次启动由主窗口 webview 应用一次。
+/// ★ 回 `{active, reason}`：没有刘海屏时开关照样记着开，但设置页要能说出「现在没显示、为什么」。
 #[tauri::command]
-fn set_notch_hud(app: AppHandle, on: bool) -> Result<(), String> {
+fn set_notch_hud(app: AppHandle, on: bool) -> Result<Value, String> {
     #[cfg(target_os = "macos")]
-    return notch::set_enabled(&app, on);
+    return notch::set_enabled(&app, on).map(|st| serde_json::to_value(st).unwrap_or(Value::Null));
     #[cfg(not(target_os = "macos"))]
-    { let _ = (app, on); Ok(()) }
+    { let _ = (app, on); Ok(serde_json::json!({ "active": false, "reason": "unsupported" })) }
+}
+
+/// 刘海条现在的状态（设置页打开时问一次，不改任何东西）。
+#[tauri::command]
+fn notch_status() -> Value {
+    #[cfg(target_os = "macos")]
+    return serde_json::to_value(notch::status()).unwrap_or(Value::Null);
+    #[cfg(not(target_os = "macos"))]
+    serde_json::json!({ "active": false, "reason": "unsupported" })
 }
 
 /// 刘海几何（逻辑 pt），刘海窗口的前端拿它定 CSS 尺寸。没有刘海屏 ⇒ null。
 #[tauri::command]
 fn notch_geometry() -> Option<Value> {
     #[cfg(target_os = "macos")]
-    return notch::notch_geometry().and_then(|g| serde_json::to_value(g).ok());
+    return notch::notch_geometry().and_then(|g| serde_json::to_value(g).ok()).map(|mut v| {
+        // 前端监听注册好后问这一次，顺带拿当前展开态 —— 首个 `notch-open` 可能早于 listen 生效
+        v["open"] = Value::Bool(notch::is_open());
+        v
+    });
     #[cfg(not(target_os = "macos"))]
     None
 }
@@ -2435,13 +2449,14 @@ pub fn run() {
         //   - **不含 `DECORATIONS`**:我们用自绘标题栏(`decorations: false`),恢复它可能把原生边框加回来。
         //   - **denylist 掉 `menubar`**:弹窗的高度由 ResizeObserver 按内容算、位置每次按托盘图标定位,
         //     恢复上次几何会同时和这两件事打架,把弹窗放到错误的位置。
+        //     `notch`(刘海条)同理:位置每次按刘海算,存下展开态的尺寸会在下次建窗时被恢复回来。
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::SIZE
                         | tauri_plugin_window_state::StateFlags::POSITION,
                 )
-                .with_denylist(&["menubar"])
+                .with_denylist(&["menubar", "notch"])
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
@@ -2756,7 +2771,7 @@ pub fn run() {
             check_update,
             open_url,
             set_dock_visible,
-            set_notch_hud, notch_geometry, notch_panel_height,
+            set_notch_hud, notch_status, notch_geometry, notch_panel_height,
             set_main_visible,
             read_auth_tokens,
             read_logs,

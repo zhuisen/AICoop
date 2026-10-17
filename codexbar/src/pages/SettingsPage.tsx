@@ -1,4 +1,5 @@
 import { fullVersion, isWindowsUI } from "../helpers";
+import { notchRowDesc, type NotchStatus } from "../notchSegs";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
@@ -193,6 +194,13 @@ export default function SettingsPage({ t }: { t: Theme }) {
   const [autostart, setAutostart] = useState(false);
   const [autostartBusy, setAutostartBusy] = useState(false);
   useEffect(() => { isAutostartEnabled().then(setAutostart).catch(() => {}); }, []);
+  // 刘海条：进设置页时问一次「现在有没有刘海屏 / 显示着没有」，不改任何状态
+  const [notchSt, setNotchSt] = useState<NotchStatus | null>(null);
+  const [notchErr, setNotchErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (isWindowsUI()) return;
+    invoke<NotchStatus>("notch_status").then((st) => setNotchSt(st ?? null)).catch(() => setNotchSt(null));
+  }, []);
   const toggleAutostart = async () => {
     if (autostartBusy) return;
     setAutostartBusy(true);
@@ -248,11 +256,18 @@ export default function SettingsPage({ t }: { t: Theme }) {
           关 = 销毁窗口（不是隐藏，默认关的功能不常驻任何进程）。启动时由 App.tsx 再应用一次。
           Windows 没有刘海，整行不画。 */}
       {!isWindowsUI() && (
-      <Row label="刘海额度条" desc="在刘海下沿用一条细线显示 Codex 和 Antigravity 的剩余额度，鼠标移上去展开详情。只在带刘海的 Mac 上显示，外接屏或合盖时不显示。">
-        <div onClick={() => {
+      <Row label="刘海额度条" desc={notchRowDesc(s.notchHud, notchSt, notchErr)}>
+        <div data-notch-toggle onClick={() => {
           const next = !s.notchHud;
           update({ notchHud: next });
-          invoke("set_notch_hud", { on: next }).catch(() => {});
+          setNotchErr(null);
+          invoke<NotchStatus>("set_notch_hud", { on: next })
+            .then((st) => setNotchSt(st ?? null))
+            // ★ 失败就把开关拨回去并说原因 —— 不许出现「开关是开的、屏幕上什么都没有、也没人说为什么」
+            .catch((e: unknown) => {
+              setS((p) => { const n = { ...p, notchHud: !next }; save(n); return n; });
+              setNotchErr(String(e).slice(0, 120));
+            });
         }} style={{
           width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer",
           background: s.notchHud ? t.accent : t.barTrack, transition: "background .2s",
