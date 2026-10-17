@@ -167,7 +167,7 @@ export default function NotchHud() {
     <div className={[open && "nh-open", lit.length > 0 && "nh-active",
                      lit.length === 0 && segs.length === 0 && "nh-quiet"].filter(Boolean).join(" ") || undefined}
          style={{ ["--pw" as string]: `${PANEL_W}px`, ["--glow" as string]: glow }}>
-      <div className="nh-glow" aria-hidden="true" />
+      <div className="nh-glow" aria-hidden="true"><i className="g2" /><i className="g1" /></div>
       <div className="nh-panel" ref={panelRef}
            onClick={() => { invoke("set_main_visible", { show: true }).catch(() => {}); }}>
         <div className="nh-head"><b>额度剩余 %</b><span>{node ? `Codex 在用 ${node}` : ""}</span></div>

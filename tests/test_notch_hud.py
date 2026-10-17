@@ -85,18 +85,21 @@ class SizesAgree(unittest.TestCase):
         self.assertEqual(rs, css, "notch.rs 的 FLARE 与 notch.css 的 --flare 不一致")
 
     def test_window_has_room_for_the_whole_blurred_glow(self):
-        """光晕带 blur，窗口留的透明边装不下时，模糊的边缘会被窗口裁出一道硬边。"""
+        """光晕带 blur，窗口留的透明边装不下时，模糊的边缘会被窗口裁出一圈直边。
+        blur(σ) 往外 2σ 才淡到 2% —— 第一版按 1σ 留边，用户一眼看出「限制了范围」（2026-10-17）。"""
         css = _code(CSS)
-        glow = re.search(r"(?m)^\.nh-glow \{(.*?)\}", css, re.S).group(1)
-        extra_w = float(re.search(r"width: calc\(var\(--nw\) \+ var\(--flare\) \* 2 \+ (\d+)px\)", glow).group(1))
-        extra_h = float(re.search(r"height: calc\(var\(--nh\) \+ (\d+)px\)", glow).group(1))
-        top = float(re.search(r"top: (-?\d+)px", glow).group(1))
-        blur = float(re.search(r"filter: blur\((\d+)px\)", glow).group(1))
         flare = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
         gx = float(_one(RS, r"^const GLOW_X: f64 = (\d+(?:\.\d+)?);", "GLOW_X"))
         gy = float(_one(RS, r"^const GLOW_Y: f64 = (\d+(?:\.\d+)?);", "GLOW_Y"))
-        self.assertGreaterEqual(flare + gx, flare + extra_w / 2 + blur, "两侧透明边装不下光晕 + blur")
-        self.assertGreaterEqual(gy, top + extra_h + blur, "下方透明边装不下光晕 + blur")
+        layers = re.findall(r"(?m)^\.nh-glow \.(g\d) \{(.*?)\}", css, re.S)
+        self.assertEqual([n for n, _ in layers], ["g1", "g2"], "光晕应是贴边 g1 + 散开 g2 两层")
+        for name, body in layers:
+            extra_w = float(re.search(r"width: calc\(var\(--nw\) \+ var\(--flare\) \* 2 \+ (\d+)px\)", body).group(1))
+            extra_h = float(re.search(r"height: calc\(var\(--nh\) \+ (\d+)px\)", body).group(1))
+            top = float(re.search(r"top: (-?\d+)px", body).group(1))
+            blur = float(re.search(r"filter: blur\((\d+)px\)", body).group(1))
+            self.assertGreaterEqual(flare + gx, flare + extra_w / 2 + 2 * blur, f"{name}：两侧透明边装不下光晕 + 2σ")
+            self.assertGreaterEqual(gy, top + extra_h + 2 * blur, f"{name}：下方透明边装不下光晕 + 2σ")
 
 
 class WindowBehaviour(unittest.TestCase):
@@ -375,20 +378,30 @@ class ActivityGlow(unittest.TestCase):
 
     def test_glow_breathes_slowly_and_faster_while_working(self):
         css = _code(CSS)
-        idle = float(re.search(r"(?m)^\.nh-glow \{[^}]*animation: nh-breathe ([\d.]+)s", css).group(1))
-        run = float(re.search(r"(?m)^\.nh-active \.nh-glow \{ animation-duration: ([\d.]+)s; \}", css).group(1))
-        self.assertLess(run, idle, "在跑时必须比平时呼吸得快")
+        for g in ("g1", "g2"):
+            idle = float(re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1))
+            run = float(re.search(rf"(?m)^\.nh-active \.nh-glow \.{g} \{{ animation-duration: ([\d.]+)s; \}}", css).group(1))
+            self.assertLess(run, idle, f"{g}：在跑时必须比平时呼吸得快")
+
+    def test_two_layers_do_not_breathe_in_lockstep(self):
+        """两层同周期同相位，看着就是一块整齐的光在一明一暗 —— 用户嫌的正是「太整齐规则」。"""
+        css = _code(CSS)
+        dur = {g: re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1)
+               for g in ("g1", "g2")}
+        self.assertNotEqual(dur["g1"], dur["g2"], "两层呼吸周期要错开")
 
     def test_glow_hides_when_open_or_empty(self):
         css = _code(CSS)
-        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow, \.nh-open \.nh-glow \{ opacity: 0; animation: none; \}",
-                         "展开面板时、以及没有任何数据时，光晕要收掉且不再跑动画")
+        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow, \.nh-open \.nh-glow \{ opacity: 0; \}",
+                         "展开面板时、以及没有任何数据时，光晕要收掉")
+        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow i, \.nh-open \.nh-glow i \{ animation: none; \}",
+                         "收掉后不能还在跑动画（白耗 CPU）")
 
     def test_holds_still_under_reduce_motion(self):
         css = _code(CSS)
         m = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*)\}\s*$", css, re.S | re.M)
         self.assertIsNotNone(m)
-        self.assertRegex(m.group(1), r"\.nh-glow \{ animation: none;", "开了「减弱动态效果」光晕就不该再动")
+        self.assertRegex(m.group(1), r"\.nh-glow i \{ animation: none;", "开了「减弱动态效果」光晕就不该再动")
 
     def test_colour_means_quota_unless_a_platform_is_working(self):
         code = _code(TSX)

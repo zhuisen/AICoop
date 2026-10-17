@@ -26,17 +26,29 @@ body {
 
 /* ★ 光晕（用户 2026-10-17：起初是刘海下沿的分段细线，用户嫌不明显，换成 demo 里 A 的光晕）。
    平时颜色 = 额度、6s 慢呼吸；有平台在跑颜色 = 平台色、2.4s 快呼吸（颜色由 NotchHud 算好放进 --glow）。
-   只动透明度。实测细线那版慢呼吸让刘海网页进程常驻约 0.18% CPU；光晕带 blur，开销要重新量。 */
-.nh-glow {
-  position: absolute; top: -8px; left: 50%; pointer-events: none;
-  width: calc(var(--nw) + var(--flare) * 2 + 40px); margin-left: calc((var(--nw) + var(--flare) * 2 + 40px) / -2);
-  height: calc(var(--nh) + 22px); border-radius: 0 0 36px 36px;
-  background: var(--glow); filter: blur(12px);
-  animation: nh-breathe 6s ease-in-out infinite; will-change: opacity;
+   ★ 两层叠出来（用户嫌一层「散得太整齐规则、看得出限制了范围」）：贴边一层亮而窄，散开一层宽而淡、
+     偏向下方、底边是椭圆；两层呼吸周期错开，不同起同落 —— 两个高斯叠起来的衰减比一个自然。
+   ★ blur(σ) 要往外 ~2σ 才淡到看不见（2σ 处剩 2%），窗口透明边按这个留（GLOW_X / GLOW_Y），
+     少了就被窗口裁出一圈直边 —— 第一版只按 1σ 留，就是用户看到的「框」。
+   只动透明度。实测单层光晕时刘海网页进程常驻约 0.28% CPU（细线那版 0.18%）。 */
+.nh-glow { position: absolute; inset: 0; pointer-events: none; }
+.nh-glow i { position: absolute; left: 50%; background: var(--glow); will-change: opacity; }
+.nh-glow .g1 {
+  top: -6px; width: calc(var(--nw) + var(--flare) * 2 + 8px); margin-left: calc((var(--nw) + var(--flare) * 2 + 8px) / -2);
+  height: calc(var(--nh) + 10px); border-radius: 0 0 22px 22px; filter: blur(7px);
+  animation: nh-breathe 6s ease-in-out infinite;
 }
-@keyframes nh-breathe { 0%, 100% { opacity: .92; } 50% { opacity: .42; } }
-.nh-active .nh-glow { animation-duration: 2.4s; }
-.nh-quiet .nh-glow, .nh-open .nh-glow { opacity: 0; animation: none; }
+.nh-glow .g2 {
+  top: -14px; width: calc(var(--nw) + var(--flare) * 2 + 28px); margin-left: calc((var(--nw) + var(--flare) * 2 + 28px) / -2);
+  height: calc(var(--nh) + 26px); border-radius: 0 0 50% 50% / 0 0 70% 70%; filter: blur(20px);
+  animation: nh-breathe-wide 7.4s ease-in-out -2.5s infinite;
+}
+@keyframes nh-breathe { 0%, 100% { opacity: .95; } 50% { opacity: .45; } }
+@keyframes nh-breathe-wide { 0%, 100% { opacity: .7; } 50% { opacity: .22; } }
+.nh-active .nh-glow .g1 { animation-duration: 2.4s; }
+.nh-active .nh-glow .g2 { animation-duration: 3.1s; }
+.nh-quiet .nh-glow, .nh-open .nh-glow { opacity: 0; }
+.nh-quiet .nh-glow i, .nh-open .nh-glow i { animation: none; }
 
 .nh-panel {
   position: absolute; top: 0; left: 50%; width: var(--pw); margin-left: calc(var(--pw) / -2);
@@ -63,4 +75,4 @@ body {
   color: #d5dae1; font-size: 11.5px;
 }
 .nh-foot b { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--fg); font-weight: 500; }
-@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } .nh-glow { animation: none; opacity: .8; } }
+@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } .nh-glow i { animation: none; opacity: .8; } .nh-glow .g2 { opacity: .5; } }
