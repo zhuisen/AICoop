@@ -356,33 +356,70 @@ class PushNotPoll(unittest.TestCase):
 
 
 
-class Breathing(unittest.TestCase):
-    """用户 2026-10-17：细线要 demo 里「Codex 正在跑（光晕呼吸变快）」那个呼吸。"""
+class ActivityGlow(unittest.TestCase):
+    """用户 2026-10-17：Codex 跑时亮 Codex 色、agy 跑时亮 agy 色、同时跑两个都亮；空闲时细线慢呼吸。"""
 
-    def _secs(self, css, sel, prop):
-        m = re.search(rf"^{re.escape(sel)}\s*\{{[^}}]*\b{prop}:\s*(?:nh-breathe\s+)?([\d.]+)s", css, re.M)
-        self.assertIsNotNone(m, f"{sel} 里找不到 {prop}")
-        return float(m.group(1))
-
-    def test_breathes_and_speeds_up_while_running(self):
+    def test_idle_strip_breathes_and_stops_when_lit(self):
         css = _code(CSS)
-        idle = self._secs(css, ".nh-bars", "animation")
-        run = self._secs(css, ".nh-running .nh-bars", "animation-duration")
-        self.assertLess(run, idle, "正在跑时呼吸必须比平时快")
+        self.assertRegex(css, r"(?m)^\.nh-bars \{ animation: nh-breathe [\d.]+s", "空闲时细线要呼吸")
+        self.assertRegex(css, r"(?m)^\.nh-active \.nh-bars \{ animation: none; \}", "亮光晕时细线停住，别两样一起动")
+
+    def test_glow_lights_and_breathes_only_when_active(self):
+        css = _code(CSS)
+        self.assertRegex(css, r"(?m)^\.nh-glow \{[^}]*opacity: 0;", "光晕默认不亮")
+        self.assertRegex(css, r"(?m)^\.nh-active \.nh-glow \{ opacity: [\d.]+; animation: nh-glow ", "在跑时光晕要亮并呼吸")
+        self.assertRegex(css, r"(?m)^\.nh-open \.nh-glow \{ opacity: 0;", "展开面板时光晕要收掉")
 
     def test_holds_still_under_reduce_motion(self):
         css = _code(CSS)
         m = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*)\}\s*$", css, re.S | re.M)
         self.assertIsNotNone(m)
-        self.assertRegex(m.group(1), r"\.nh-bars\s*\{\s*animation:\s*none", "开了「减弱动态效果」细线就不该再动")
+        self.assertRegex(m.group(1), r"\.nh-bars, \.nh-active \.nh-glow \{ animation: none; \}",
+                         "开了「减弱动态效果」细线和光晕都不该再动")
 
-    def test_running_comes_from_the_proxy_and_expires_on_time(self):
+    def test_activity_is_pushed_by_rust(self):
         code = _code(TSX)
-        self.assertRegex(code, r"const running = !!state\.last_proxy_ts && Date\.now\(\) / 1000 - state\.last_proxy_ts < RUNNING_WINDOW_SEC;")
-        self.assertRegex(code, r'running && "nh-running"', "running 没接到 class 上")
-        # 停手后数据不会变，只有 now 在走 —— 没有这个闹钟，细线会一直快下去直到下一次 state 推送
-        self.assertRegex(code, r"times\.push\(state\.last_proxy_ts \+ RUNNING_WINDOW_SEC\)",
-                         "「正在跑」到期那一刻没进闹钟")
+        self.assertRegex(code, r'listen<[^>]+>\("notch-activity"', "要跟着 Rust 的活动推送")
+        self.assertRegex(code, r'invoke<[^>]+>\("notch_activity"\)', "首次挂载要取一次当前状态")
+        self.assertRegex(code, r'lit\.length > 0 && "nh-active"', "活动状态没接到 class 上")
+        self.assertNotIn("last_proxy_ts", code, "codex 会定时 GET /models，代理照样刷新 last_proxy_ts —— 停手后仍会亮")
+        lib = LIB.read_text(encoding="utf-8")
+        block = re.search(r"generate_handler!\[(.*?)\]\)", lib, re.S).group(1)
+        self.assertRegex(block, r"\bnotch_activity\b")
+
+    def test_rust_reads_the_right_files(self):
+        rs = _code(RS)
+        self.assertRegex(rs, r'n\.starts_with\("rollout-"\) && n\.ends_with\("\.jsonl"\)', "Codex 看 rollout 写入")
+        self.assertRegex(rs, r'n\.ends_with\("\.db-wal"\)', "agy 是 WAL 库，生成时写的是 -wal，只看主库会永远判成空闲")
+        self.assertNotIn("last_proxy_ts", rs)
+        self.assertRegex(rs, r"if changed \{ let _ = app\.emit_to\(LABEL, \"notch-activity\", a\); \}", "只在变了才推")
+
+
+
+class ActivityWatcher(unittest.TestCase):
+    """评审 2026-10-17（PR #1 退回意见）：检测线程快速开关后会丢；没有刘海屏时也在每 2s 扫文件。"""
+
+    def setUp(self):
+        rs = code_only(RS)
+        self.watch = rs[rs.index("fn watch_activity("):rs.index("pub fn activity(")]
+        self.ensure = rs[rs.index("fn ensure_window("):rs.index("fn drop_window(")]
+
+    def test_a_new_watcher_takes_over_instead_of_bailing_out(self):
+        self.assertNotIn("WATCHING", code_only(RS), "布尔标记：快速关了再开时新线程起不来、旧线程随后退出 ⇒ 一条都没有")
+        self.assertIn("WATCHER.store(me", self.watch, "新起的一条直接接管")
+        self.assertIn("WATCHER.load(Ordering::SeqCst) == me", self.watch, "旧的看到不是自己就退")
+        self.assertIn("ENABLE_GEN.load(Ordering::SeqCst) == gen", self.watch, "同 track：开关换代后旧线程退出")
+        self.assertIn("WATCHER.compare_exchange(me, 0", self.watch, "退出时只清自己那一号")
+        head = self.watch[:self.watch.index("std::thread::spawn")]
+        self.assertNotIn("return", head, "起线程前不许因为「已经有一条」就退出 —— 那条可能正要因换代退出")
+
+    def test_runs_only_while_the_window_exists(self):
+        self.assertIn("app.get_webview_window(LABEL).is_some()", self.watch, "窗口没了（合盖 / 外接屏）就别再扫文件")
+        self.assertEqual(self.ensure.count("watch_activity(app)"), 2,
+                         "建窗和「窗口已在、只是重新打开」两条路都要接上检测线程（set_enabled 每次都换代）")
+        se = code_only(RS)
+        se = se[se.index("pub fn set_enabled("):se.index("pub fn status(")]
+        self.assertNotIn("watch_activity", se, "不能在 set_enabled 里无条件起 —— 没有刘海屏时也会跑")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,13 @@ const CLOSE_DWELL: Duration = Duration::from_millis(220);
 /// 前端收起动画时长（`notch.css` 的 clip-path 过渡 .34s）。收完再缩窗口，否则动画被裁掉。
 const COLLAPSE: Duration = Duration::from_millis(340);
 const TRACK_TICK: Duration = Duration::from_millis(60);
+/// 收起态窗口在岛两侧 / 下方多留的透明边，给「正在跑」的光晕用（光晕带 blur，会溢出岛外）。
+/// 与 `notch.css` 的光晕尺寸配套；窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
+const GLOW_X: f64 = 28.0;
+const GLOW_Y: f64 = 24.0;
+/// 活动检测的周期，以及「最近这么多秒内写过 = 正在跑」。
+const ACTIVITY_TICK: Duration = Duration::from_secs(2);
+const ACTIVE_SECS: u64 = 45;
 /// 几何（刘海位置）最多多久重读一次。合盖/开盖/改分辨率后靠它自愈（下一次鼠标移动时）。
 const GEOM_TTL: Duration = Duration::from_secs(3);
 
@@ -67,6 +74,15 @@ static OPEN_GEN: AtomicU64 = AtomicU64::new(0);
 /// 否则旧线程退出会把新线程的标记抹掉，于是又起一条。
 static TRACKER: AtomicU64 = AtomicU64::new(0);
 static TRACKER_SEQ: AtomicU64 = AtomicU64::new(0);
+/// 正在跑的活动检测线程领到的号；0 = 没有。★ 新起的一条**直接接管**（store），旧的看到不是自己就退 ——
+/// 原来用一个 `WATCHING` 布尔：快速关了再开时它还是 true，新线程起不来，旧线程随后退出，就一条都没有了（评审 2026-10-17）。
+static WATCHER: AtomicU64 = AtomicU64::new(0);
+static WATCHER_SEQ: AtomicU64 = AtomicU64::new(0);
+static ACTIVITY: Mutex<Activity> = Mutex::new(Activity { codex: false, agy: false });
+
+/// 谁正在跑。用户 2026-10-17：Codex 跑时亮 Codex 的光、agy 跑时亮 agy 的光，同时跑两个都亮。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Activity { pub codex: bool, pub agy: bool }
 static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
 static PANEL_H: Mutex<f64> = Mutex::new(180.0);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
@@ -152,14 +168,14 @@ fn rect(g: &Notch, open: bool) -> (f64, f64, f64, f64) {
         let w = PANEL_W + FLARE * 2.0;
         (g.left + g.width / 2.0 - w / 2.0, g.top, w, h)
     } else {
-        (g.left - FLARE, g.top, g.width + FLARE * 2.0, g.height + LIP)
+        let m = FLARE + GLOW_X;
+        (g.left - m, g.top, g.width + m * 2.0, g.height + LIP + GLOW_Y)
     }
 }
 
-/// 光标是否在触发区内。收起时只认刘海 + 下沿黑边（两侧圆角那 7pt 是菜单栏，不算）。
+/// 光标是否在触发区内。收起时只认刘海 + 下沿黑边 —— 两侧圆角与光晕那圈都是菜单栏，不算。
 fn hit(g: &Notch, open: bool, x: f64, y: f64) -> bool {
-    let (rx, ry, rw, rh) = rect(g, open);
-    let (rx, rw) = if open { (rx, rw) } else { (rx + FLARE, rw - FLARE * 2.0) };
+    let (rx, ry, rw, rh) = if open { rect(g, true) } else { (g.left, g.top, g.width, g.height + LIP) };
     x >= rx && x <= rx + rw && y >= ry - 2.0 && y <= ry + rh
 }
 
@@ -280,6 +296,8 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(LABEL) {
         raise(&w);
         place(app, OPEN.load(Ordering::SeqCst));
+        // ★ `set_enabled` 每次都换代，旧的检测线程会因代次不符退出 —— 窗口还在就得接上一条新的
+        watch_activity(app);
         return Ok(());
     }
     let (x, y, w, h) = rect(g, false);
@@ -299,6 +317,7 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     raise(&win);
+    watch_activity(app);
     Ok(())
 }
 
@@ -407,6 +426,92 @@ pub fn status() -> Status {
     }
 }
 
+/// 一组文件里最新的修改时间（秒）。读不到的跳过。
+fn newest_mtime<I: IntoIterator<Item = std::path::PathBuf>>(files: I) -> Option<u64> {
+    files.into_iter()
+        .filter_map(|p| std::fs::metadata(p).ok()?.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .max()
+}
+
+fn list(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir).map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect()).unwrap_or_default()
+}
+
+/// Codex：最近 3 个日期目录里的 rollout。★ rollout 放在**会话开始那天**的目录里 ——
+/// 昨天开的会话今天还在写 10/16，只看今天会漏；更早开的会话被续上时仍会漏（已知取舍，
+/// 全量 stat 一千多个文件不值）。★ 不用 `state.json` 的 `last_proxy_ts`：codex 会定时
+/// `GET /models`，代理照样刷新它，停手后仍显示「在跑」（2026-10-17 实测）。
+fn codex_files(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut days = Vec::new();
+    let mut years = list(&home.join("sessions"));
+    years.sort();
+    'outer: for y in years.iter().rev() {
+        let mut months = list(y); months.sort();
+        for m in months.iter().rev() {
+            let mut ds = list(m); ds.sort();
+            for d in ds.iter().rev() {
+                days.push(d.clone());
+                if days.len() >= 3 { break 'outer; }
+            }
+        }
+    }
+    days.iter().flat_map(|d| list(d)).filter(|p| {
+        let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        n.starts_with("rollout-") && n.ends_with(".jsonl")
+    }).collect()
+}
+
+/// agy：对话库是 WAL 模式，生成时写的是 `-wal`（主库 mtime 不动，见 scan.py `_agy_db_sig`）。
+fn agy_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    list(dir).into_iter().filter(|p| {
+        let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        n.ends_with(".db-wal") || n.ends_with(".db")
+    }).collect()
+}
+
+fn active(newest: Option<u64>, now: u64) -> bool {
+    newest.is_some_and(|t| now.saturating_sub(t) < ACTIVE_SECS)
+}
+
+/// 活动检测线程。只在状态**变了**才推 `notch-activity`。
+/// ★ 只在**窗口存在**时跑（评审 2026-10-17）：由 `ensure_window` 起，窗口没了（合盖 / 外接屏 / 关掉）就退出，
+///   刘海屏回来时 `reconcile` 建窗会再起一条 —— 开着但没有刘海屏时不再每 2s 扫一遍文件。
+/// ★ 三条任一不满足就退：没被新的一条接管（`WATCHER`）、这一代没被开关过（`ENABLE_GEN`，同 `track`）、窗口还在。
+fn watch_activity(app: &AppHandle) {
+    let gen = ENABLE_GEN.load(Ordering::SeqCst);
+    let me = WATCHER_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    WATCHER.store(me, Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+        let codex_home = std::env::var("CODEX_HOME").map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| home.join(".codex"));
+        let agy_dir = std::env::var("AGY_DB_DIR").map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| home.join(".gemini").join("antigravity-cli").join("conversations"));
+        while WATCHER.load(Ordering::SeqCst) == me && ENABLE_GEN.load(Ordering::SeqCst) == gen
+            && ENABLED.load(Ordering::SeqCst) && app.get_webview_window(LABEL).is_some()
+        {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs()).unwrap_or(0);
+            let a = Activity {
+                codex: active(newest_mtime(codex_files(&codex_home)), now),
+                agy: active(newest_mtime(agy_files(&agy_dir)), now),
+            };
+            let changed = { let mut cur = ACTIVITY.lock().unwrap(); let c = *cur != a; *cur = a; c };
+            if changed { let _ = app.emit_to(LABEL, "notch-activity", a); }
+            std::thread::sleep(ACTIVITY_TICK);
+        }
+        // 被接管时状态归新的那条管，不清
+        if WATCHER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            *ACTIVITY.lock().unwrap() = Activity { codex: false, agy: false };
+        }
+    });
+}
+
+pub fn activity() -> Activity { *ACTIVITY.lock().unwrap() }
+
 pub fn notch_geometry() -> Option<Notch> { cached() }
 
 pub fn is_open() -> bool { OPEN.load(Ordering::SeqCst) }
@@ -423,8 +528,37 @@ mod tests {
     fn air13() -> Notch { Notch { left: 646.0, width: 179.0, height: 32.0, top: 0.0, primary_h: 956.0 } }
 
     #[test]
-    fn collapsed_window_covers_notch_plus_flares_and_lip() {
-        assert_eq!(rect(&air13(), false), (639.0, 0.0, 193.0, 39.0));
+    fn collapsed_window_covers_notch_flares_lip_and_glow_room() {
+        assert_eq!(rect(&air13(), false), (611.0, 0.0, 249.0, 63.0));
+    }
+    #[test]
+    fn the_glow_room_does_not_trigger() {
+        let g = air13();
+        assert!(!hit(&g, false, 620.0, 10.0), "光晕那圈是菜单栏");
+        assert!(!hit(&g, false, 735.0, 50.0), "光晕下沿不算");
+        assert!(hit(&g, false, 735.0, 36.0), "下沿黑边算");
+    }
+    #[test]
+    fn activity_is_recent_writes_only() {
+        assert!(active(Some(1000), 1030));
+        assert!(!active(Some(1000), 1000 + ACTIVE_SECS));
+        assert!(!active(None, 1000));
+    }
+    #[test]
+    fn codex_looks_at_the_three_newest_day_dirs() {
+        let root = std::env::temp_dir().join(format!("notch-codex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["2026/09/30", "2026/10/01", "2026/10/16", "2026/10/17"] {
+            let dir = root.join("sessions").join(d);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("rollout-x.jsonl"), b"").unwrap();
+            std::fs::write(dir.join("rollout-x.jsonl.zst"), b"").unwrap();
+        }
+        let mut got: Vec<String> = codex_files(&root).iter()
+            .map(|p| p.strip_prefix(root.join("sessions")).unwrap().to_string_lossy().into_owned()).collect();
+        got.sort();
+        assert_eq!(got, ["2026/10/01/rollout-x.jsonl", "2026/10/16/rollout-x.jsonl", "2026/10/17/rollout-x.jsonl"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
     #[test]
     fn open_panel_is_centred_on_the_notch() {

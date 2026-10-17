@@ -121,7 +121,7 @@ paths:
 - ★★ **刘海额度条**（用户 2026-10-17 从 demo 选定：收起 B「刘海下沿 7pt 黑边里的分段细线」+ 展开 2「额度环面板」；只显示 Codex 与 agy；**默认关**；外接屏/合盖不显示）。demo 留档 `~/Downloads/codexbar_notch_demo_20261017.html`。
   - **刘海本身没有像素**：画进刘海矩形的东西看不见，所以细线在下沿多出的黑边里。岛恒为黑色，不跟主题。
   - 颜色走**托盘那一条**（`quotaColor` + 0 标红），不走卡片的 `quotaLevel`（≤10 红）—— 它和托盘标题同属"瞄一眼"的指示。所以上面那条「实现有两份」现在是**三份**：`quotaColor()`、`rem_rgb()`、`notchSegs.ts::segColor`（后者复用 `quotaColor`，只多 0 标红；**判的是显示出来的整数**，剩 0.4% 时环上写 0 就必须红）。
-  - **细线会呼吸**（用户同日补要）：平时 6s 浅、代理 45s 内有请求（`last_proxy_ts`）就 2.4s 深；永不停只变慢（停住会被读成坏了）；`prefers-reduced-motion` 下不动。只认经代理的请求，直连 codex 不加速。
+  - **空闲细线慢呼吸，在跑亮光晕**（用户同日补要）：Codex 亮 Codex 色、agy 亮 agy 色、同时跑左右各半；判据是 45s 内写过 rollout / agy `-wal`，Rust 变了才推 `notch-activity`。⚠️ **别用 `last_proxy_ts` 判 Codex**：codex 定时 `GET /models` 也会刷新它，停手后仍显示在跑。收起态窗口比岛大一圈（光晕），所以收起时整窗不收鼠标。呼吸实测让刘海网页进程常驻 ~0.18% CPU，用户知情后保留。
   - 尺寸常量分三处：`notch.rs` 的 `PANEL_W/FLARE/LIP` · `NotchHud.tsx` 的 `PANEL_W` · `notch.css` 的 `--pw/--flare/--lip`。闸 `tests/test_notch_hud.py`。
   - ⚠️ 悬停判定**别改回网页 mouseenter**：CodexBar 是 Accessory 应用、几乎从不在前台；后台窗口里 WKWebView 收不收得到鼠标移动**没验过**，验证程序从一开始就绕开了它，用户实测好用的是光标判定那条路。也别改回纯轮询：验证程序实测空闲主进程 0.60%（Tauri `cursor_position`，每次派发到主线程）→ 0.30%（后台线程直接读 `NSEvent mouseLocation`），**不轮询时的底数没量过**，所以「剩下的 0.30% 都是轮询」是推断。
   - ★★ **agy 的数取池里当前那个号的**（`agyPool.snapshotOf(当前号, 本机RPC)`，与菜单栏同一条），不只拿 `useAgyQuota` —— 本机 RPC 自 agy 1.2 恒 `csrf_required`，只拿它就是画几周前的 `last_good`（2026-10-17 评审时本机那份停在 24.5 天前）。刘海窗口**不做保鲜**（`useAgyPool(false)` + `useAgyQuota({ enabled: false })`，只读盘、收广播），保鲜只有菜单栏一个 webview。

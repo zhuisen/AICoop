@@ -772,9 +772,14 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
   agy 仍走池（`useAgyPool(false)`，只收 `agy-pool-updated` / `agy-live-changed`），本机那份只作 `snapshotOf` 的归属候选。
   「在用哪个号」的判据抽成 `helpers.ts::inUseAid`，`useStore` 与刘海条共用（`test_menubar_follows_proxy` 跟着改）。
   闸 `test_notch_hud.py::PushNotPoll`（9 个变异）。**改完后的开销尚未实测。**
-- **细线呼吸**（用户 2026-10-17 从 demo 要的「Codex 正在跑 → 呼吸变快」）：平时 6s 浅呼吸，代理 45s 内转发过请求
-  （`state.json` 的 `last_proxy_ts`）就换成 2.4s 深呼吸；到期那一刻进闹钟，不靠轮询。只动透明度；「减弱动态效果」下不动。
-  ⚠️ 只认**经代理**的 Codex 请求 —— 直连 codex 不写 `last_proxy_ts`，不会加速。闸 `test_notch_hud.py::Breathing`（8 个变异）。
+- **活动光晕**（用户 2026-10-17）：Codex 在跑亮 Codex 平台色、agy 在跑亮 agy 蓝、同时跑左右各一半，光晕 2.4s 快呼吸；
+  空闲时只剩细线 6s 慢呼吸。「在跑」= 45s 内写过：Codex 看最近 3 个日期目录的 rollout，agy 看对话库的 `-wal`；
+  Rust 每 2s 看一次、**变了才推** `notch-activity`。检测线程只在**刘海窗口存在**时跑（`ensure_window` 起，窗口没了就退；
+  没有刘海屏时不扫文件），新起的一条直接接管、旧的按 `WATCHER` 号与 `ENABLE_GEN` 代次自己退出 —— 快速关了再开不会丢线程（PR #1 评审意见）。
+  收起态窗口两侧 / 下方多留 28 / 24pt 给光晕；收起时整窗不收鼠标沿用 main 的 `pass_clicks`。
+  ⚠️ 中间版本曾用 `state.json` 的 `last_proxy_ts` 判 Codex：codex 会定时 `GET /models`，代理照样刷新它，**停手后仍显示在跑**（实测）。
+  ⚠️ 实测细线慢呼吸让刘海网页进程常驻约 0.18% CPU（不是纯合成层动画）；用户看过数字后仍要空闲呼吸。
+  闸 `test_notch_hud.py::ActivityGlow`（16 个变异）+ `notch.rs` 6 条单测。
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
