@@ -18,9 +18,11 @@ const MAX_WAKE_MS = 60 * 60 * 1000;
 
 /** 与 `notch.rs` 的 `PANEL_W`、`notch.css` 的 `--pw` 同值。闸在 `tests/test_notch_hud.py`。 */
 const PANEL_W = 312;
+/** 读不到的额度窗口在光晕里的颜色（theme 的 muted）。读不到 ≠ 0，不能画红。 */
+const UNKNOWN = "#798390";
 
 /**
- * 刘海额度条（用户 2026-10-17 从 demo 里选定：收起 = 刘海下沿分段细线，悬停 = 额度环面板；
+ * 刘海额度条（用户 2026-10-17 从 demo 里选定：收起 = 刘海周围的光晕〔起初是下沿细线，用户嫌不明显改成光晕〕，悬停 = 额度环面板；
  * 只显示 Codex 与 Antigravity；默认关）。窗口、层级、悬停判定全在 `notch.rs`，这里只画；
  * 画什么在 `notchSegs.ts`（纯函数，有行为闸）。
  *
@@ -152,10 +154,18 @@ export default function NotchHud() {
   const colorOfK = (k: string) => prefs.by?.[k]?.color ?? platformColor(k);
   const lit = [act.codex && !prefs.by?.codex?.off && colorOfK("codex"),
                act.agy && !prefs.by?.agy?.off && colorOfK("agy")].filter(Boolean) as string[];
-  const glow = lit.length === 2 ? `linear-gradient(90deg, ${lit[0]} 0%, ${lit[0]} 30%, ${lit[1]} 70%, ${lit[1]} 100%)`
-             : lit[0] ?? "transparent";
+  // ★ 光晕两种含义（用户 2026-10-17 选定）：平时 = 额度（每个窗口一段，按剩余着色，段间渐变，
+  //   第 i 段的色标在 (i+.5)/n，与 Agent HUD 同法）；有平台在跑 = 整圈换成平台色，停下恢复额度色。
+  const quotaGlow = segs.length === 0 ? "transparent"
+    : segs.length === 1 ? (segs[0].pct == null ? UNKNOWN : segColor(segs[0].pct))
+    : `linear-gradient(90deg, ${segs.map((s, i) =>
+        `${s.pct == null ? UNKNOWN : segColor(s.pct)} ${(((i + 0.5) / segs.length) * 100).toFixed(1)}%`).join(", ")})`;
+  const platformGlow = lit.length === 2 ? `linear-gradient(90deg, ${lit[0]} 0%, ${lit[0]} 30%, ${lit[1]} 70%, ${lit[1]} 100%)`
+                     : lit[0];
+  const glow = lit.length > 0 ? platformGlow : quotaGlow;
   return (
-    <div className={[open && "nh-open", lit.length > 0 && "nh-active"].filter(Boolean).join(" ") || undefined}
+    <div className={[open && "nh-open", lit.length > 0 && "nh-active",
+                     lit.length === 0 && segs.length === 0 && "nh-quiet"].filter(Boolean).join(" ") || undefined}
          style={{ ["--pw" as string]: `${PANEL_W}px`, ["--glow" as string]: glow }}>
       <div className="nh-glow" aria-hidden="true" />
       <div className="nh-panel" ref={panelRef}
@@ -173,15 +183,7 @@ export default function NotchHud() {
         </div>
         <div className="nh-foot">账号池 <b>{live}</b> 个号可用 · 点这里打开 CodexBar</div>
       </div>
-      <div className="nh-island">
-        <div className="nh-bars">
-          {segs.map((s) => (
-            <span key={s.key} className={s.stale ? "stale" : undefined}>
-              {s.pct != null && <i style={{ width: `${ringNum(s.pct)}%`, background: segColor(s.pct) }} />}
-            </span>
-          ))}
-        </div>
-      </div>
+      <div className="nh-island" />
     </div>
   );
 }
