@@ -355,5 +355,35 @@ class PushNotPoll(unittest.TestCase):
         self.assertLess(i - guard, 120, "定时器离 open 守卫太远，可能不在同一个 effect 里")
 
 
+
+class Breathing(unittest.TestCase):
+    """用户 2026-10-17：细线要 demo 里「Codex 正在跑（光晕呼吸变快）」那个呼吸。"""
+
+    def _secs(self, css, sel, prop):
+        m = re.search(rf"^{re.escape(sel)}\s*\{{[^}}]*\b{prop}:\s*(?:nh-breathe\s+)?([\d.]+)s", css, re.M)
+        self.assertIsNotNone(m, f"{sel} 里找不到 {prop}")
+        return float(m.group(1))
+
+    def test_breathes_and_speeds_up_while_running(self):
+        css = _code(CSS)
+        idle = self._secs(css, ".nh-bars", "animation")
+        run = self._secs(css, ".nh-running .nh-bars", "animation-duration")
+        self.assertLess(run, idle, "正在跑时呼吸必须比平时快")
+
+    def test_holds_still_under_reduce_motion(self):
+        css = _code(CSS)
+        m = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*)\}\s*$", css, re.S | re.M)
+        self.assertIsNotNone(m)
+        self.assertRegex(m.group(1), r"\.nh-bars\s*\{\s*animation:\s*none", "开了「减弱动态效果」细线就不该再动")
+
+    def test_running_comes_from_the_proxy_and_expires_on_time(self):
+        code = _code(TSX)
+        self.assertRegex(code, r"const running = !!state\.last_proxy_ts && Date\.now\(\) / 1000 - state\.last_proxy_ts < RUNNING_WINDOW_SEC;")
+        self.assertRegex(code, r'running && "nh-running"', "running 没接到 class 上")
+        # 停手后数据不会变，只有 now 在走 —— 没有这个闹钟，细线会一直快下去直到下一次 state 推送
+        self.assertRegex(code, r"times\.push\(state\.last_proxy_ts \+ RUNNING_WINDOW_SEC\)",
+                         "「正在跑」到期那一刻没进闹钟")
+
+
 if __name__ == "__main__":
     unittest.main()
