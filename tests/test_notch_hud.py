@@ -79,11 +79,24 @@ class SizesAgree(unittest.TestCase):
         self.assertEqual(rs, tsx, "notch.rs 与 NotchHud.tsx 的面板宽不一致 ⇒ 面板被裁或偏到一边")
         self.assertEqual(rs, css, "notch.rs 与 notch.css 的 --pw 不一致")
 
-    def test_flare_and_lip_match_the_css(self):
-        for name, var in (("FLARE", "--flare"), ("LIP", "--lip")):
-            rs = float(_one(RS, rf"^const {name}: f64 = (\d+(?:\.\d+)?);", name))
-            css = float(_one(CSS, rf"{var}: (\d+)px", var))
-            self.assertEqual(rs, css, f"notch.rs 的 {name} 与 notch.css 的 {var} 不一致")
+    def test_flare_matches_the_css(self):
+        rs = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
+        css = float(_one(CSS, r"--flare: (\d+)px", "--flare"))
+        self.assertEqual(rs, css, "notch.rs 的 FLARE 与 notch.css 的 --flare 不一致")
+
+    def test_window_has_room_for_the_whole_blurred_glow(self):
+        """光晕带 blur，窗口留的透明边装不下时，模糊的边缘会被窗口裁出一道硬边。"""
+        css = _code(CSS)
+        glow = re.search(r"(?m)^\.nh-glow \{(.*?)\}", css, re.S).group(1)
+        extra_w = float(re.search(r"width: calc\(var\(--nw\) \+ var\(--flare\) \* 2 \+ (\d+)px\)", glow).group(1))
+        extra_h = float(re.search(r"height: calc\(var\(--nh\) \+ (\d+)px\)", glow).group(1))
+        top = float(re.search(r"top: (-?\d+)px", glow).group(1))
+        blur = float(re.search(r"filter: blur\((\d+)px\)", glow).group(1))
+        flare = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
+        gx = float(_one(RS, r"^const GLOW_X: f64 = (\d+(?:\.\d+)?);", "GLOW_X"))
+        gy = float(_one(RS, r"^const GLOW_Y: f64 = (\d+(?:\.\d+)?);", "GLOW_Y"))
+        self.assertGreaterEqual(flare + gx, flare + extra_w / 2 + blur, "两侧透明边装不下光晕 + blur")
+        self.assertGreaterEqual(gy, top + extra_h + blur, "下方透明边装不下光晕 + blur")
 
 
 class WindowBehaviour(unittest.TestCase):
@@ -357,25 +370,33 @@ class PushNotPoll(unittest.TestCase):
 
 
 class ActivityGlow(unittest.TestCase):
-    """用户 2026-10-17：Codex 跑时亮 Codex 色、agy 跑时亮 agy 色、同时跑两个都亮；空闲时细线慢呼吸。"""
+    """用户 2026-10-17：收起态改成光晕。平时颜色 = 额度、慢呼吸；有平台在跑 = 平台色、快呼吸
+    （Codex 青绿、agy 蓝、同时跑左右各半），停下恢复额度色。"""
 
-    def test_idle_strip_breathes_and_stops_when_lit(self):
+    def test_glow_breathes_slowly_and_faster_while_working(self):
         css = _code(CSS)
-        self.assertRegex(css, r"(?m)^\.nh-bars \{ animation: nh-breathe [\d.]+s", "空闲时细线要呼吸")
-        self.assertRegex(css, r"(?m)^\.nh-active \.nh-bars \{ animation: none; \}", "亮光晕时细线停住，别两样一起动")
+        idle = float(re.search(r"(?m)^\.nh-glow \{[^}]*animation: nh-breathe ([\d.]+)s", css).group(1))
+        run = float(re.search(r"(?m)^\.nh-active \.nh-glow \{ animation-duration: ([\d.]+)s; \}", css).group(1))
+        self.assertLess(run, idle, "在跑时必须比平时呼吸得快")
 
-    def test_glow_lights_and_breathes_only_when_active(self):
+    def test_glow_hides_when_open_or_empty(self):
         css = _code(CSS)
-        self.assertRegex(css, r"(?m)^\.nh-glow \{[^}]*opacity: 0;", "光晕默认不亮")
-        self.assertRegex(css, r"(?m)^\.nh-active \.nh-glow \{ opacity: [\d.]+; animation: nh-glow ", "在跑时光晕要亮并呼吸")
-        self.assertRegex(css, r"(?m)^\.nh-open \.nh-glow \{ opacity: 0;", "展开面板时光晕要收掉")
+        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow, \.nh-open \.nh-glow \{ opacity: 0; animation: none; \}",
+                         "展开面板时、以及没有任何数据时，光晕要收掉且不再跑动画")
 
     def test_holds_still_under_reduce_motion(self):
         css = _code(CSS)
         m = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*)\}\s*$", css, re.S | re.M)
         self.assertIsNotNone(m)
-        self.assertRegex(m.group(1), r"\.nh-bars, \.nh-active \.nh-glow \{ animation: none; \}",
-                         "开了「减弱动态效果」细线和光晕都不该再动")
+        self.assertRegex(m.group(1), r"\.nh-glow \{ animation: none;", "开了「减弱动态效果」光晕就不该再动")
+
+    def test_colour_means_quota_unless_a_platform_is_working(self):
+        code = _code(TSX)
+        self.assertRegex(code, r"const glow = lit\.length > 0 \? platformGlow : quotaGlow;",
+                         "平时是额度色，在跑才换平台色")
+        self.assertRegex(code, r"s\.pct == null \? UNKNOWN : segColor\(s\.pct\)",
+                         "额度色走 segColor（与托盘同一条），读不到用 UNKNOWN 而不是当 0 画红")
+        self.assertNotRegex(code, r'UNKNOWN = "#E0524D"', "读不到不能画成红色")
 
     def test_activity_is_pushed_by_rust(self):
         code = _code(TSX)

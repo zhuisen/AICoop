@@ -1,12 +1,12 @@
 //! 刘海额度条（macOS 专属，**默认关**，设置页开）。用户 2026-10-17 从 demo 里选定
-//! 「收起 = 刘海下沿 7pt 黑边里的分段细线、悬停 = 额度环面板」。
+//! 「收起 = 刘海周围的光晕、悬停 = 额度环面板」（起初是刘海下沿的分段细线，用户嫌不明显换成光晕）。
 //!
 //! ★ 为什么能做成 Tauri 窗口而不是另起一个 Swift 进程：2026-10-17 独立验证程序实测 ——
 //!   层级设到 `NSStatusWindowLevel + 1` 后窗口顶边与屏幕顶边间距 0、盖在菜单栏之上；
 //!   全屏应用里可见（用户确认）；悬停在 CodexBar 不在前台时照样触发（用户试了十几次）。
 //!
-//! ★★ 刘海本身**没有像素**。画在刘海矩形里的东西看不见，所以收起态是在刘海**下沿**多出
-//!    `LIP` 那 7pt 黑边，细线画在那里；两侧各 `FLARE` 是刘海上沿的内凹圆角。
+//! ★★ 刘海本身**没有像素**。画在刘海矩形里的东西看不见，所以光晕画在刘海**外沿**
+//!    （窗口四周多留 `GLOW_X` / `GLOW_Y`）；两侧各 `FLARE` 是刘海上沿的内凹圆角。
 //!
 //! ★★ 悬停判定**不靠网页里的 mouseenter**：CodexBar 是 Accessory 应用、几乎永远不在前台，
 //!    WKWebView 在后台窗口里收不收得到鼠标移动没验过，不赌它。做法分两段（Agent HUD 同理）：
@@ -23,8 +23,6 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 pub const LABEL: &str = "notch";
 /// 刘海上沿两侧的内凹圆角，窗口要比刘海各宽这么多。与 `notch.css` 的 `--flare` 同值。
 const FLARE: f64 = 7.0;
-/// 收起态在刘海下沿多出的黑边（细线就画在这里）。与 `notch.css` 的 `--lip` 同值。
-const LIP: f64 = 7.0;
 /// 展开面板宽。与 `NotchHud.tsx` 的 `PANEL_W` 同值，闸在 `tests/test_notch_hud.py`。
 pub const PANEL_W: f64 = 312.0;
 const OPEN_DWELL: Duration = Duration::from_millis(90);
@@ -32,10 +30,12 @@ const CLOSE_DWELL: Duration = Duration::from_millis(220);
 /// 前端收起动画时长（`notch.css` 的 clip-path 过渡 .34s）。收完再缩窗口，否则动画被裁掉。
 const COLLAPSE: Duration = Duration::from_millis(340);
 const TRACK_TICK: Duration = Duration::from_millis(60);
-/// 收起态窗口在岛两侧 / 下方多留的透明边，给「正在跑」的光晕用（光晕带 blur，会溢出岛外）。
-/// 与 `notch.css` 的光晕尺寸配套；窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
-const GLOW_X: f64 = 28.0;
-const GLOW_Y: f64 = 24.0;
+/// 收起态窗口在刘海两侧 / 下方多留的透明边，给光晕用。光晕半宽 = 刘海半宽 + 圆角 + 20、
+/// 再加 blur 12 ⇒ 要 ≥ 32；下沿到刘海下 14、再加 blur 12 ⇒ 要 ≥ 26。各留一点余量 ——
+/// 不够的话 blur 的边缘会被窗口裁出一道硬边。与 `notch.css` 的 `.nh-glow` 尺寸配套。
+/// 窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
+const GLOW_X: f64 = 34.0;
+const GLOW_Y: f64 = 30.0;
 /// 活动检测的周期，以及「最近这么多秒内写过 = 正在跑」。
 const ACTIVITY_TICK: Duration = Duration::from_secs(2);
 const ACTIVE_SECS: u64 = 45;
@@ -169,13 +169,13 @@ fn rect(g: &Notch, open: bool) -> (f64, f64, f64, f64) {
         (g.left + g.width / 2.0 - w / 2.0, g.top, w, h)
     } else {
         let m = FLARE + GLOW_X;
-        (g.left - m, g.top, g.width + m * 2.0, g.height + LIP + GLOW_Y)
+        (g.left - m, g.top, g.width + m * 2.0, g.height + GLOW_Y)
     }
 }
 
-/// 光标是否在触发区内。收起时只认刘海 + 下沿黑边 —— 两侧圆角与光晕那圈都是菜单栏，不算。
+/// 光标是否在触发区内。收起时只认刘海本身 —— 两侧圆角与光晕那圈都是菜单栏，不算。
 fn hit(g: &Notch, open: bool, x: f64, y: f64) -> bool {
-    let (rx, ry, rw, rh) = if open { rect(g, true) } else { (g.left, g.top, g.width, g.height + LIP) };
+    let (rx, ry, rw, rh) = if open { rect(g, true) } else { (g.left, g.top, g.width, g.height) };
     x >= rx && x <= rx + rw && y >= ry - 2.0 && y <= ry + rh
 }
 
@@ -528,15 +528,15 @@ mod tests {
     fn air13() -> Notch { Notch { left: 646.0, width: 179.0, height: 32.0, top: 0.0, primary_h: 956.0 } }
 
     #[test]
-    fn collapsed_window_covers_notch_flares_lip_and_glow_room() {
-        assert_eq!(rect(&air13(), false), (611.0, 0.0, 249.0, 63.0));
+    fn collapsed_window_covers_notch_flares_and_glow_room() {
+        assert_eq!(rect(&air13(), false), (605.0, 0.0, 261.0, 62.0));
     }
     #[test]
     fn the_glow_room_does_not_trigger() {
         let g = air13();
         assert!(!hit(&g, false, 620.0, 10.0), "光晕那圈是菜单栏");
-        assert!(!hit(&g, false, 735.0, 50.0), "光晕下沿不算");
-        assert!(hit(&g, false, 735.0, 36.0), "下沿黑边算");
+        assert!(!hit(&g, false, 735.0, 40.0), "光晕下沿不算");
+        assert!(hit(&g, false, 735.0, 30.0), "刘海本身算");
     }
     #[test]
     fn activity_is_recent_writes_only() {
