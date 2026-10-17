@@ -600,7 +600,7 @@ def parse_google_error(raw):
     return reason, msg, url
 
 
-def fetch_quota(access_token, anchor=None):
+def fetch_quota(access_token):
     """-> (额度摘要的 `groups` 列表, 错误说明)。
 
     ★★★ 走 `retrieveUserQuotaSummary`，**不再走 `fetchAvailableModels`**（2026-09-15）。
@@ -648,16 +648,15 @@ def fetch_quota(access_token, anchor=None):
         #   "额度全是 0"，而那是一个看着很合理的谎。
         return None, "额度响应里没有 groups（上游形状可能变了）"
     if not any(str(g.get("displayName", "")).lower().startswith("gemini") for g in groups):
-        # ★★ 2026-10-16 05:06 起摘要对每个号都不再回 Gemini 组（换 3 种客户端身份结果相同）。
-        #   5h 从模型端点补；周从生产 host 的摘要补（B83，见 `gemini_weekly_from_prod`）。
-        #   两个都补不上 ⇒ 交给 `carry_missing_groups` 沿用并标龄。补的失败不影响摘要本身。
+        # ★★ 2026-10-16 05:06 起摘要对每个号都不再回 Gemini 组（换 UA / 元数据 / project / 用 agy 自己的
+        #   token 都一样，2026-10-17 复测）。5h 从模型端点补；**周没有云端来源**：当值号由
+        #   `agy-rotate` 跑 agy 自己的 `/usage` 报告补（B88，见 `groups_from_usage_report`），
+        #   其余号交给 `carry_missing_groups` 沿用并标龄。补的失败不影响摘要本身。
+        # ⚠️ 生产 host 的周（B83）已停用：2026-10-17 实测它停在**上一个窗口**的旧账
+        #   （剩 38.7%、reset 10-21），agy 自己报的是剩 98.1%、reset 10-24 —— 见 B88。
         g5 = _gemini_5h_from_models(access_token)
-        wk = _gemini_weekly_from_prod(access_token, anchor)
-        if g5 or wk:
-            gem = g5 or {"displayName": "Gemini Models", "buckets": []}
-            if wk:
-                gem = dict(gem, buckets=[wk] + list(gem["buckets"]))
-            groups = list(groups) + [gem]
+        if g5:
+            groups = list(groups) + [g5]
     return groups, ""
 
 
@@ -700,58 +699,43 @@ def _gemini_5h_from_models(access_token):
         return None
 
 
-#: 生产 host 摘要里周桶的 reset 落在「现在 + 7 天」这么近 ⇒ 当成空账本（B69 的签名），不采信。
-PROD_EMPTY_TOL_SECS = 300
-#: 账本已钉住本窗口的周 reset 时，生产 host 的 reset 与它差超过这么多 ⇒ 不是同一个窗口，不采信。
-PROD_ANCHOR_TOL_SECS = 600
+#: B83 的生产 host 来源标记。B88 起不再采用；带这个 `source` 的旧桶**不沿用**（见 `carry_missing_groups`）。
+PROD_SOURCE = API_HOST
 
 
-def gemini_weekly_from_prod(d, anchor=None, now=None):
-    """生产 host（`cloudcode-pa`）摘要 → `gemini-weekly` 桶；不可信或没有返回 None（B83，2026-10-16）。
+def groups_from_usage_report(d):
+    """`agy -p /usage --output-format json` 的输出 → 与云端摘要同形的 `groups`；形状不对返回 None（B88）。
 
-    `daily-cloudcode-pa` 从 05:06 起不回 Gemini 组之后，生产 host 又开始回它，且不再是 B69 的空账本：
-    3 个号的周剩余与 `daily` 最后一次读数差 ≤1pp、周 reset 与锚点账本钉住的同一时刻，agy 自己的
-    `/usage` 状态栏（B 号 `📅 1%`）也对得上。**只取周**：同一份响应里 B 号 的 5h 是「100%、reset = 现在+5h」，
-    而模型端点与 agy 状态栏都说已用 2% —— 生产 host 的 5h 不能信。
-
-    ★ 两道闸防它退回空账本（那时四桶恒 1.0、reset 恒 now+窗口，200 且同形，打错不报错）：
-      ① reset ≈ now + 7 天 ⇒ 不采信（真号的闲置周窗口也长这样，代价是那时显示沿用值/「—」，不冒充满格）；
-      ② 账本里本窗口已 anchored 且未过期 ⇒ reset 必须与它对得上。
-    ★ 桶在、`remainingFraction` 缺席 ⇒ 照样返回（= 读不到），同 `quota_by_group` 的口径。
+    ★ 这是 agy 自己状态栏 `⏱ · 📅` 的数据源，**零 token**（`usage` 全 0，2026-10-17 实测 3 次，每次约 12s）。
+      CodexBar（steipete）/ agy-hud / orca 读 agy 额度也走这条（GitHub 2026-10 检索）。
+    ★ 字段是 snake_case（`id` / `remaining_fraction` / `reset_time`），这里换成摘要的 camelCase，
+      下游（`carry_missing_groups` / `quota_by_group` / 前端 `toSnapshot`）一行不用改。
+    ★ 桶在、`remaining_fraction` 缺席 ⇒ 落成读不到（不丢桶、不补 1.0），同 `quota_by_group` 的口径。
+    ★ 一个数字都没有 ⇒ None（当失败），不返回空结构 —— 空会被当成「额度是 0」。
     """
-    now = time.time() if now is None else now
-    for g in (d or {}).get("groups") or []:
-        if not str(g.get("displayName", "")).lower().startswith("gemini"):
-            continue
-        for b in g.get("buckets") or []:
-            if b.get("bucketId") != "gemini-weekly":
-                continue
-            rs = _iso_ts(b.get("resetTime"))
-            if rs is None or rs <= now or abs(rs - (now + 7 * 86400)) <= PROD_EMPTY_TOL_SECS:
-                return None
-            pin = (anchor or {}).get("gemini-weekly") or {}
-            pr = pin.get("reset")
-            if (pin.get("state") == "anchored" and isinstance(pr, (int, float)) and pr > now
-                    and abs(rs - pr) > PROD_ANCHOR_TOL_SECS):
-                return None
-            return dict(b, source=API_HOST)
-    return None
-
-
-def _gemini_weekly_from_prod(access_token, anchor=None):
     try:
-        c = HTTPSConnection(API_HOST, timeout=TIMEOUT)
-        c.request("POST", QUOTA_SUMMARY_PATH, body="{}",
-                  headers={"Authorization": "Bearer " + access_token,
-                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
-        r = c.getresponse()
-        raw = r.read()
-        c.close()
-        if r.status != 200:
-            return None
-        return gemini_weekly_from_prod(json.loads(raw), anchor)
-    except Exception:                                  # noqa: BLE001 — 兜底那次失败 = 没补上，不是读失败
+        groups_in = ((d or {}).get("command") or {}).get("data", {}).get("groups") or []
+    except AttributeError:
         return None
+    out = []
+    for g in groups_in:
+        if not isinstance(g, dict):
+            continue
+        buckets = []
+        for b in g.get("buckets") or []:
+            if not isinstance(b, dict) or not b.get("id"):
+                continue
+            nb = {"bucketId": b["id"], "window": b.get("window"), "source": "agy-usage"}
+            if isinstance(b.get("remaining_fraction"), (int, float)):
+                nb["remainingFraction"] = float(b["remaining_fraction"])
+            if b.get("reset_time"):
+                nb["resetTime"] = b["reset_time"]
+            buckets.append(nb)
+        if buckets:
+            out.append({"displayName": g.get("name") or "?", "buckets": buckets})
+    if not any("remainingFraction" in b for g in out for b in g["buckets"]):
+        return None
+    return out
 
 
 LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist"
@@ -822,6 +806,9 @@ def carry_missing_groups(old_groups, old_at, new_groups, now=None):
 
     def carried(b):
         nb = dict(b)
+        if nb.get("source") == PROD_SOURCE:
+            # ★ B88：生产 host 的周是旧窗口的账，沿用它 = 把错数当「刚读到」再撑 24h。
+            nb.pop("remainingFraction", None)
         nb.setdefault("seenAt", int(old_at or 0))
         rs = _iso_ts(nb.get("resetTime"))
         if (rs is not None and rs <= now) or now - float(nb["seenAt"] or 0) > CARRY_MAX_SECS:

@@ -29,6 +29,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import time
 
@@ -365,12 +366,30 @@ def cmd_quota(args):
         cred, err = _refresh_one(sub, a, pool)
         if err:
             return sub, a, None, err, True
-        groups, err = P.fetch_quota(cred["token"]["access_token"], a.get("quota_anchor"))
+        groups, err = P.fetch_quota(cred["token"]["access_token"])
         _maybe_tier(a, cred)
         return sub, a, groups, err, False
 
-    with ThreadPoolExecutor(max_workers=max(1, min(8, len(accs)))) as ex:
+    # ★★ B88：当值号的周额度来自 agy 自己的 `/usage`（约 12s）—— 与云端取数**并行**，不拉长关键路径。
+    report_due = _usage_report_on() and _usage_report_due(pool, live_sub)
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(accs))) + 1) as ex:
+        rep_f = ex.submit(_usage_report) if report_due else None
         fetched = list(ex.map(_fetch, list(accs.items())))
+        rep = rep_f.result() if rep_f else None
+    if rep is not None:
+        rgroups, ran_as, rerr = rep
+        want = (accs.get(live_sub) or {}).get("email")
+        # ★★ 归属要有证据：认不出 / 对不上就不挂到任何号上（钥匙串是多个常驻 agy 并发写的单槽）。
+        if not rerr and not (want and ran_as and ran_as.lower() == want.lower()):
+            rerr = "归属对不上（报告来自 %s，当值号是 %s）" % (ran_as or "认不出", want or "?")
+        pool["usage_report"] = {"at": int(time.time()), "sub": live_sub, "ok": not rerr,
+                                "err": rerr or None}
+        _log("usage [%s] %s" % ((accs.get(live_sub) or {}).get("label"),
+             "✓ 来自 agy /usage" if not rerr else "✗ " + str(rerr)[:90]))
+        if not rerr:
+            # 报告不依赖池里那份凭证 —— 当值号这一条直接换成报告（含它的周）
+            fetched = [(s_, a_, rgroups, "", False) if s_ == live_sub else (s_, a_, g_, e_, cf_)
+                       for s_, a_, g_, e_, cf_ in fetched]
     for sub, a, groups, err, cred_failed in fetched:
         # ★ 错误的**结构**（reason / 验证链接）落兄弟键，成败都写 —— 成功时清掉，
         #   否则一个早已验证过的号会一直挂着「需验证」。
@@ -719,7 +738,7 @@ def cmd_health(args):
             rows.append((sub, a, kind, err))
             continue
         P.write_cred(sub, cred)
-        q, qerr = P.fetch_quota(cred["token"]["access_token"], a.get("quota_anchor"))
+        q, qerr = P.fetch_quota(cred["token"]["access_token"])
         rows.append((sub, a, "ok" if not qerr else "api_error", qerr or ""))
         if not qerr:
             q = P.carry_missing_groups(a.get("quota_summary"), a.get("quota_at"), q, now=time.time())
@@ -764,6 +783,77 @@ AGY_LOG_DIR = Path(os.environ.get(
 #: 进程启动时刻与日志文件名时间戳的允许偏差（秒）。agy 在启动那一刻建日志，
 #: 但两者不保证同一秒。
 _LOG_SKEW = 5
+
+#: B88：当值号的 Gemini **周**额度只有 agy 自己的 `/usage` 报告给得出 ——
+#:   云端摘要 2026-10-16 起不回 Gemini 组，生产 host 是上一个窗口的旧账（2026-10-17 实测剩 38.7% vs 真值 98.1%）。
+#:   报告零 token、约 12s；只报**钥匙串里此刻那个号**，所以只用于当值号。
+USAGE_TIMEOUT = int(os.environ.get("AGY_USAGE_TIMEOUT", "45"))
+#: agy 没有新活动时，最多隔这么久再报一次（窗口会自己恢复 / 换窗口）。
+USAGE_MAX_AGE = int(os.environ.get("AGY_USAGE_MAX_AGE", str(30 * 60)))
+#: agy 的对话库目录：这里有新写入 ⇒ 额度可能动了 ⇒ 该报一次。`/usage` 自己不写这里（实测）。
+AGY_CONV_DIR = Path(os.environ.get(
+    "AGY_CONV_DIR", str(Path.home() / ".gemini" / "antigravity-cli" / "conversations")))
+
+
+def _usage_report_on():
+    """`AGY_USAGE_REPORT=0/1` 显式开关；没设就跟着钥匙串开关走。测试三处 bootstrap 都设成 0 ⇒ 不会起真 agy。"""
+    v = os.environ.get("AGY_USAGE_REPORT")
+    return v != "0" if v is not None else P._keyring_on()
+
+
+def _agy_last_activity():
+    """对话库最新一次写入的时刻；目录不在 / 空 ⇒ None。"""
+    try:
+        ts = [f.stat().st_mtime for f in AGY_CONV_DIR.iterdir()
+              if f.name.endswith((".db", ".db-wal", ".db-shm"))]
+    except OSError:
+        return None
+    return max(ts) if ts else None
+
+
+def _usage_report_due(pool, live_sub, now=None):
+    """该不该给当值号跑一次 `/usage`：换了号 / 距上次超过 `USAGE_MAX_AGE` / 上次之后 agy 写过对话库。"""
+    now = time.time() if now is None else now
+    last = pool.get("usage_report") or {}
+    if not live_sub:
+        return False
+    if last.get("sub") != live_sub:
+        return True
+    at = float(last.get("at") or 0)
+    if now - at >= USAGE_MAX_AGE:
+        return True
+    act = _agy_last_activity()
+    return act is not None and act > at
+
+
+def _usage_report():
+    """起一次 `agy -p /usage --output-format json` -> (groups|None, 实际跑成的 email|None, 错误说明)。
+
+    ★ 归属同探针：跑的是「此刻钥匙串里那个号」，调用方必须拿第二个返回值核对（`_run_identity`）。
+    """
+    real = Path(os.environ.get("AGY_REAL", str(Path.home() / ".local" / "bin" / "agy")))
+    if not real.exists():
+        return None, None, "找不到 agy（%s）" % real
+    started_at = time.time()
+    try:
+        r = subprocess.run([str(real), "-p", "/usage", "--output-format", "json"],
+                           capture_output=True, text=True, timeout=USAGE_TIMEOUT,
+                           stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+    except subprocess.TimeoutExpired:
+        return None, None, "超时（%ds）" % USAGE_TIMEOUT
+    except OSError as e:
+        return None, None, "起不来：%s" % e
+    who = _run_identity(started_at)
+    if r.returncode != 0:
+        return None, who, "agy 退出码 %d：%s" % (r.returncode, _err_gist(r.stderr))
+    try:
+        d = json.loads((r.stdout or "").strip())
+    except ValueError:
+        return None, who, "输出不是 JSON（前 120 字：%s）" % (r.stdout or "")[:120]
+    groups = P.groups_from_usage_report(d)
+    if not groups:
+        return None, who, "报告里没有额度（上游形状可能变了）"
+    return groups, who, ""
 
 
 def _run_identity(started_at):

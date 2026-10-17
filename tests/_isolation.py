@@ -20,6 +20,7 @@ if not os.environ.get("CODEXBAR_QUOTA_ANCHORS"):
     atexit.register(shutil.rmtree, _d, True)
 # 钥匙串**没有临时目录这种东西** —— 只能关掉。
 os.environ.setdefault("AGY_KEYRING", "0")
+os.environ.setdefault("AGY_USAGE_REPORT", "0")   # B88：别在测试里起真 agy 跑 /usage
 os.environ.setdefault("CODEXBAR_LAUNCHCTL", "0")
 # ★★ agy 账号池默认也指到临时目录：`bin/agy` → `agy-rotate auto` 对真池跑一次，
 #   装进钥匙串的就是**真凭证**（Google 签发），源头那道 `is_google_issued` 挡不住它。

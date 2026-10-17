@@ -769,6 +769,37 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
   全部加 `--use-mock-keychain`，并加闸。只动测试与 harness 工具，不影响 app。见 B86。
+- **agy Gemini 周额度不更新**（用户 2026-10-17）：生产 host 给的是上一个窗口的旧账（剩 38.7%，真值 98.1%）。
+  当值号的周改由 agy 自己的 `/usage` 报告给（零 token、约 12s，与云端取数并行）；其余号沿用它们当值时的读数并标龄。见 B88。
+
+---
+
+### B88 · agy Gemini 周额度停在上一个窗口 —— 生产 host 是旧账，当值号改读 agy `/usage` — 2026-10-17 ✅（未发版）
+
+用户：「现在 gemini 的额度没有更新，需要你看看 github 大家是做什么的？怎么做的？」
+**现场（22:24–22:39 SGT，当值号，零计费，只读）**：
+- 我们的周：剩 **0.38703892**、reset `10-21T09:38Z`，`source = cloudcode-pa`，07:12 起没动过。
+- agy 自己的 `/usage`：周剩 **0.98144**、reset `10-24T01:02Z`；5h 剩 0.97241；状态栏 `⏱ 3% · 📅 2%`。
+- 同一时刻生产 host 的 5h 是 1.0（真值约 0.97）。⇒ **生产 host 回的是上一个窗口的账**，B83 当天对得上只是因为那时还在同一个窗口里。
+- B83 的两道闸都没拦住：新窗口还没有锚点（「锚点已 anchored 时 reset 对不上」那条不触发），reset 也不是「现在+7 天」。
+
+**排除过的（零计费，别再试）**：daily 摘要带 `{"project": "aicode-consumers"}` 仍无 Gemini 组；`metadata` / `cloudaicompanionProject` 字段 400；
+换 UA `antigravity/1.4.0 darwin/arm64`、只换 UA、Client-Metadata `ANTIGRAVITY`/`DARWIN_ARM64` 都无 Gemini 组；不带头 403；
+用 agy 自己钥匙串里的 token（sub 对得上）结果相同；`retrieveUserQuota` 与 `fetchAvailableModels` 只有 5h；`loadCodeAssist` 无额度字段；
+请求 proto `RetrieveUserQuotaSummaryRequest` 只有 `project` 一个字段。**agy 为什么能从 daily 拿到 Gemini 组、我们拿不到，仍未知。**
+
+**GitHub（2026-10-17 检索）**：没人报 daily 缺 Gemini 组；生产 host 陈旧有人报（cockpit-tools #2520、review-system #17、9router #3891）。
+通行做法是 `agy -p "/usage" --output-format json`（CodexBar #3607/#4077、agy-hud、orca、masc）。
+
+**修**：
+- `agy-rotate quota` 在到期时（换了号 / 距上次 ≥30 分钟 / 上次之后 agy 写过对话库）起一次真 agy（绕过 `bin/agy`）跑 `/usage`，与云端取数并行。
+  实测 1 次：整轮 10s；`/usage` 本身 12s、0 token，前后 agy 进程数 3 → 3，对话库无写入。
+- 归属同探针：用 agy 日志的 `applyAuthResult:` 核对；对不上 / 认不出 ⇒ 不用，`pool.usage_report.ok=false` 并写 `agy.log`。
+- `fetch_quota` 不再连生产 host；`carry_missing_groups` 沿用旧桶时，带生产 host 来源的去掉数字（= 读不到）。
+- 测试三处 bootstrap 设 `AGY_USAGE_REPORT=0`，不会起真 agy。
+
+**副作用（已知、未拍板）**：非当值号的 Gemini 周只能沿用它上次当值时的报告（`CARRY_MAX_SECS` 24h），本次修完那 3 个号显示「—」。
+**闸** `tests/test_agy_weekly_from_usage_report.py`（19 条，17 个变异全红）；`test_agy_gemini_weekly_from_prod.py` 随 B83 来源一起删除。
 
 ---
 
@@ -940,6 +971,8 @@ v1.10.3 之后的一批（B83 / B84 / B85）。
 **还没解释的**（交接说明 §8）：51 个会话扫描结果比 SQLite 最终累计大，合计 1.38B，疑似会话中途累计值重置，未核实。
 
 ### B83 · agy Gemini 周额度变灰 —— 周从生产 host 补 — 2026-10-16 ✅（v1.10.4）
+
+> ⚠️ 2026-10-17 被 B88 取代：生产 host 的周是上一个窗口的旧账，这条来源已停用。
 
 用户：「gemini 卡片周额度的字体显示变灰了，是有点问题的」。
 **现场**：B82 之后周没有来源，只能沿用 05:06 的读数（`seenAt` 已 13h），卡片按设计把那一行降到 62% 不透明度；而「这是旧读数」只写在悬浮里，看上去就是渲染坏了。

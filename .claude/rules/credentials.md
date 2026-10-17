@@ -447,7 +447,8 @@ paths:
   **新增任何写 `quota_summary` 的路径都要过它**（闸 `tests/test_agy_missing_group_carried.py::EveryWritePathCarries` 按源码逐个核）。
   前端 `seen_at` 的画法 AgyCard / AgyRow 必须一致（降不透明度 + 标龄）。
   ★ 2026-10-16 起摘要对所有号都不回 Gemini 组（B82）：5h 由 `fetch_quota` 从 `fetchAvailableModels` 补；
-  **周从生产 host `cloudcode-pa` 的同一个摘要补**（B83，`gemini_weekly_from_prod`）——那边 9 月是空账本，10-16 起回真数
-  （3 个号与 daily 最后读数差 ≤1pp、周 reset 与锚点账本 Δ=0s）。**只取 `gemini-weekly`**：同一份响应里的 5h 实测是假的「未启动 100%」。
-  两道闸：reset ≈ 现在+7 天（空账本签名）不采信；锚点已 anchored 时 reset 差 >600s 不采信。都补不上才沿用（桶级，最长 `CARRY_MAX_SECS`=24h）。
+  **周只有当值号有**：`agy-rotate quota` 到期时起真 agy 跑 `/usage --output-format json`（B88，零 token、约 12s，`groups_from_usage_report`），
+  归属用 agy 日志的 `applyAuthResult:` 核对，对不上不用。其余号沿用（桶级，最长 `CARRY_MAX_SECS`=24h）。
+  ⚠️ **生产 host `cloudcode-pa` 的周别再用**（B83 用过）：2026-10-17 实测它是**上一个窗口**的旧账（剩 38.7% vs agy 报 98.1%），
+  当天对得上只是因为还在同一个窗口里；两道闸（空账本签名 / 锚点 reset）都拦不住「新窗口还没锚点」。带这个来源的旧桶沿用时去掉数字。
   **不许把读不到的周默认成 100%**（用户提议过，已否：会把周只剩 40% 的号当满号挑走）。

@@ -36,6 +36,7 @@ if not os.environ.get("CODEXBAR_QUOTA_ANCHORS"):
 #   一条用例调到 `install_live()` 就会把用户当前的 agy 登录态覆盖掉，
 #   代价是重新走一遍浏览器 OAuth。所以整条通路在测试里**默认关死**。
 os.environ.setdefault("AGY_KEYRING", "0")
+os.environ.setdefault("AGY_USAGE_REPORT", "0")   # B88：别在测试里起真 agy 跑 /usage
 
 # ★★★ **launchctl 一律关死。**（2026-09-19 真事故）
 #   `connector.remove()` 会 `launchctl bootout` 四个常驻服务,而服务 label 是**固定的**,
