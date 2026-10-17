@@ -30,12 +30,13 @@ const CLOSE_DWELL: Duration = Duration::from_millis(220);
 /// 前端收起动画时长（`notch.css` 的 clip-path 过渡 .34s）。收完再缩窗口，否则动画被裁掉。
 const COLLAPSE: Duration = Duration::from_millis(340);
 const TRACK_TICK: Duration = Duration::from_millis(60);
-/// 收起态窗口在刘海两侧 / 下方多留的透明边，给光晕用。光晕半宽 = 刘海半宽 + 圆角 + 20、
-/// 再加 blur 12 ⇒ 要 ≥ 32；下沿到刘海下 14、再加 blur 12 ⇒ 要 ≥ 26。各留一点余量 ——
-/// 不够的话 blur 的边缘会被窗口裁出一道硬边。与 `notch.css` 的 `.nh-glow` 尺寸配套。
+/// 收起态窗口在刘海两侧 / 下方多留的透明边，给光晕用。blur(σ) 要往外 ~2σ 才淡到看不见，
+/// 外层光晕半宽 = 刘海半宽 + 圆角 + 14、blur 20 ⇒ 要 ≥ 54；下沿到刘海下 12 + 40 ⇒ 要 ≥ 52。
+/// 不够的话 blur 的边缘会被窗口裁出一圈直边（第一版只留了 1σ，用户一眼看出「限制了范围」）。
+/// 与 `notch.css` 的 `.nh-glow .g1/.g2` 尺寸配套。
 /// 窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
-const GLOW_X: f64 = 34.0;
-const GLOW_Y: f64 = 30.0;
+const GLOW_X: f64 = 60.0;
+const GLOW_Y: f64 = 60.0;
 /// 活动检测的周期，以及「最近这么多秒内写过 = 正在跑」。
 const ACTIVITY_TICK: Duration = Duration::from_secs(2);
 const ACTIVE_SECS: u64 = 45;
@@ -529,7 +530,7 @@ mod tests {
 
     #[test]
     fn collapsed_window_covers_notch_flares_and_glow_room() {
-        assert_eq!(rect(&air13(), false), (605.0, 0.0, 261.0, 62.0));
+        assert_eq!(rect(&air13(), false), (579.0, 0.0, 313.0, 92.0));
     }
     #[test]
     fn the_glow_room_does_not_trigger() {
