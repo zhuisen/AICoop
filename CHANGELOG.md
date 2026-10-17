@@ -772,6 +772,9 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
   agy 仍走池（`useAgyPool(false)`，只收 `agy-pool-updated` / `agy-live-changed`），本机那份只作 `snapshotOf` 的归属候选。
   「在用哪个号」的判据抽成 `helpers.ts::inUseAid`，`useStore` 与刘海条共用（`test_menubar_follows_proxy` 跟着改）。
   闸 `test_notch_hud.py::PushNotPoll`（9 个变异）。**改完后的开销尚未实测。**
+- **细线呼吸**（用户 2026-10-17 从 demo 要的「Codex 正在跑 → 呼吸变快」）：平时 6s 浅呼吸，代理 45s 内转发过请求
+  （`state.json` 的 `last_proxy_ts`）就换成 2.4s 深呼吸；到期那一刻进闹钟，不靠轮询。只动透明度；「减弱动态效果」下不动。
+  ⚠️ 只认**经代理**的 Codex 请求 —— 直连 codex 不写 `last_proxy_ts`，不会加速。闸 `test_notch_hud.py::Breathing`（8 个变异）。
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处

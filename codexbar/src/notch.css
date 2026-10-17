@@ -28,6 +28,11 @@ body {
 .nh-bars span { flex: 1; border-radius: 2px; background: var(--track); overflow: hidden; }
 .nh-bars i { display: block; height: 100%; border-radius: 2px; }
 .nh-bars span.stale i { opacity: .45; }
+/* ★ 呼吸（用户 2026-10-17 从 demo 要的「Codex 正在跑 → 呼吸变快」）。只动透明度：交给图层合成跑，
+   网页进程不必逐帧干活。平时慢而浅，正在跑时快而深；永不停，只变慢 —— 停住会被读成"坏了"。 */
+.nh-bars { animation: nh-breathe 6s ease-in-out infinite; will-change: opacity; --nh-dim: .6; }
+.nh-running .nh-bars { animation-duration: 2.4s; --nh-dim: .4; }
+@keyframes nh-breathe { 0%, 100% { opacity: 1; } 50% { opacity: var(--nh-dim); } }
 
 .nh-panel {
   position: absolute; top: 0; left: 50%; width: var(--pw); margin-left: calc(var(--pw) / -2);
@@ -54,4 +59,4 @@ body {
   color: #d5dae1; font-size: 11.5px;
 }
 .nh-foot b { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--fg); font-weight: 500; }
-@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } }
+@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } .nh-bars { animation: none; } }
