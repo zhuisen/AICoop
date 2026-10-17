@@ -746,7 +746,22 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
-## 未发版（main）
+## 未发版（main）— 2026-10-17
+
+**新：刘海额度条（macOS，默认关，设置页「刘海额度条」开）。**
+
+- 刘海下沿多出 7pt 黑边，里面一段一条细线：Codex 在用那个号的每个额度窗口 + agy 的 5h / 周。
+  鼠标移上去展开额度环面板，点面板打开主界面。只显示 Codex 与 agy（用户 2026-10-17 定），
+  只在带刘海的屏幕上显示，外接屏 / 合盖不显示。
+- 样式是用户从 demo 里挑的（收起 B「底边细线」+ 展开 2「只看额度」），demo 留档
+  `~/Downloads/codexbar_notch_demo_20261017.html`。
+- 实现是 Tauri 第三个 webview（`notch.html`）+ `src-tauri/src/notch.rs`：层级 `NSStatusWindowLevel+1`
+  盖过菜单栏、`fullScreenAuxiliary` 全屏可见；悬停判定用系统鼠标事件监听 + 进区后才起的 60ms 跟踪线程，
+  不靠 WKWebView 的 mouseenter（CodexBar 几乎从不在前台）。关掉 = 销毁窗口，不常驻进程。
+- 独立验证程序实测（2026-10-17，13 寸 Air M4）：窗口顶边与屏幕顶边间距 0；全屏可见、悬停展开正常
+  （用户确认）；纯轮询版空闲主进程 0.30% CPU、webview 进程 0 —— 正式版换成事件监听就是为去掉这 0.30%，
+  **事件监听版的空闲开销尚未实测**。
+- 闸 `tests/test_notch_hud.py`（11 条，16 个变异全部符合预期）+ `notch.rs` 里 3 条几何单测。
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处

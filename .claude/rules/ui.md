@@ -118,6 +118,11 @@ paths:
   - 输入框的 `onKeyDown` **必须 `stopPropagation`** —— 全局 ⌘1~⌘9 是切号快捷键，不拦的话在框里打数字会切号。`onBlur` 一律放弃（不静默提交），Esc 取消，卡片取消选中时退出编辑态。
   - label 只是昵称：`plan` / `file` / 凭证 / `active`（存 aid）全不受影响，实测往返验证过。
 - 额度色阈值只有一条规则（handoff §5.1.5）：剩余 `<50%` 琥珀 `#E0901C`、否则绿 `#27B26B`；托盘标题额外把 `rem == 0` 标红 `#E0524D`（0 是天然边界，不是新阈值）。**实现有两份**：两个 webview 共用 `helpers.ts` 的 `quotaColor()`；托盘走 Rust 的 `rem_rgb()`（给 `attributedTitle` 里百分比那一段上色）—— 跨语言没法共用，**改阈值或色值必须两处一起改**。
+- ★★ **刘海额度条**（用户 2026-10-17 从 demo 选定：收起 B「刘海下沿 7pt 黑边里的分段细线」+ 展开 2「额度环面板」；只显示 Codex 与 agy；**默认关**；外接屏/合盖不显示）。demo 留档 `~/Downloads/codexbar_notch_demo_20261017.html`。
+  - **刘海本身没有像素**：画进刘海矩形的东西看不见，所以细线在下沿多出的黑边里。岛恒为黑色，不跟主题。
+  - 颜色走**托盘那一条**（`quotaColor` + 0 标红），不走卡片的 `quotaLevel`（≤10 红）—— 它和托盘标题同属"瞄一眼"的指示。所以上面那条「实现有两份」现在是**三份**：`quotaColor()`、`rem_rgb()`、`NotchHud.tsx::segColor`（后者复用 `quotaColor`，只多 0 标红）。
+  - 尺寸常量分三处：`notch.rs` 的 `PANEL_W/FLARE/LIP` · `NotchHud.tsx` 的 `PANEL_W` · `notch.css` 的 `--pw/--flare/--lip`。闸 `tests/test_notch_hud.py`。
+  - ⚠️ 悬停判定**别改回网页 mouseenter**：CodexBar 是 Accessory 应用、几乎从不在前台；后台窗口里 WKWebView 收不收得到鼠标移动**没验过**，验证程序从一开始就绕开了它，用户实测好用的是光标判定那条路。也别改回纯轮询：验证程序实测空闲主进程 0.60%（Tauri `cursor_position`，每次派发到主线程）→ 0.30%（后台线程直接读 `NSEvent mouseLocation`），**不轮询时的底数没量过**，所以「剩下的 0.30% 都是轮询」是推断。
 
 ---
 

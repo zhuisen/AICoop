@@ -1,4 +1,4 @@
-import { fullVersion } from "../helpers";
+import { fullVersion, isWindowsUI } from "../helpers";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
@@ -44,6 +44,7 @@ interface Settings {
   subExpiryWarnDays: number;
   tokenExpiryWarnHours: number;
   dockVisible: boolean;
+  notchHud: boolean;
   trayStyle: TrayStyle;
   intro: boolean;
   navOpen: boolean;
@@ -56,6 +57,7 @@ const DEFAULTS: Settings = {
   subExpiryWarnDays: 7,
   tokenExpiryWarnHours: 48,
   dockVisible: false,        // 默认保持纯菜单栏形态(现有行为)
+  notchHud: false,           // 刘海额度条默认**关**(用户 2026-10-17 定),只在带刘海的 Mac 上有效
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
   navOpen: false,            // 侧栏默认**折叠**(用户 2026-08-16 指定),展开后带中文名
@@ -241,6 +243,24 @@ export default function SettingsPage({ t }: { t: Theme }) {
           <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: s.dockVisible ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
         </div>
       </Row>
+
+      {/* ★ 刘海额度条（用户 2026-10-17 从 demo 选定，默认关）。开 = Rust 建窗口 + 装鼠标监听，
+          关 = 销毁窗口（不是隐藏，默认关的功能不常驻任何进程）。启动时由 App.tsx 再应用一次。
+          Windows 没有刘海，整行不画。 */}
+      {!isWindowsUI() && (
+      <Row label="刘海额度条" desc="在刘海下沿用一条细线显示 Codex 和 Antigravity 的剩余额度，鼠标移上去展开详情。只在带刘海的 Mac 上显示，外接屏或合盖时不显示。">
+        <div onClick={() => {
+          const next = !s.notchHud;
+          update({ notchHud: next });
+          invoke("set_notch_hud", { on: next }).catch(() => {});
+        }} style={{
+          width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer",
+          background: s.notchHud ? t.accent : t.barTrack, transition: "background .2s",
+        }}>
+          <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: s.notchHud ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
+        </div>
+      </Row>
+      )}
 
       {/* ★ 菜单栏标题样式。Rust 侧存在 `TRAY_STYLE`(atomic),这里改完立刻调命令刷标题;
           启动时由 App.tsx 再应用一次 —— 否则重启后 Rust 回到默认 0,设置还显示着别的档。 */}

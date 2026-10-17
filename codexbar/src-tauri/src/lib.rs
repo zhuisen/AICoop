@@ -10,6 +10,9 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl,
 };
 
+#[cfg(target_os = "macos")]
+mod notch;
+
 /// 仓库根目录 —— `codex-rotate` / `traffic/scan.py` / `state.json` 都从这里找。
 ///
 /// ★ **GUI app 从 Finder / launchd 启动时不继承 shell 环境**,所以"让用户配个 `CODEXBAR_STORE`"
@@ -631,6 +634,35 @@ fn set_main_visible(app: AppHandle, show: bool) {
 fn set_dock_visible(app: AppHandle, on: bool) {
     DOCK_ENABLED.store(on, Ordering::Relaxed);
     apply_activation_policy(&app);
+}
+
+/// 刘海额度条开关（设置页，默认关）。实现见 `notch.rs`。
+/// ★ **同步命令**：Tauri 2 的同步命令在主线程跑，`notch::set_enabled` 要读 NSScreen。
+///   开关在 localStorage，Rust 侧读不到 —— 与 `set_dock_visible` 同理，每次启动由主窗口 webview 应用一次。
+#[tauri::command]
+fn set_notch_hud(app: AppHandle, on: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return notch::set_enabled(&app, on);
+    #[cfg(not(target_os = "macos"))]
+    { let _ = (app, on); Ok(()) }
+}
+
+/// 刘海几何（逻辑 pt），刘海窗口的前端拿它定 CSS 尺寸。没有刘海屏 ⇒ null。
+#[tauri::command]
+fn notch_geometry() -> Option<Value> {
+    #[cfg(target_os = "macos")]
+    return notch::notch_geometry().and_then(|g| serde_json::to_value(g).ok());
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// 刘海面板量出来的自然高度（随额度窗口个数变）。
+#[tauri::command]
+fn notch_panel_height(app: AppHandle, h: f64) {
+    #[cfg(target_os = "macos")]
+    notch::set_panel_height(&app, h);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, h);
 }
 
 /// 多 AI 流量总览(Claude / Codex / Grok)。
@@ -2724,6 +2756,7 @@ pub fn run() {
             check_update,
             open_url,
             set_dock_visible,
+            set_notch_hud, notch_geometry, notch_panel_height,
             set_main_visible,
             read_auth_tokens,
             read_logs,

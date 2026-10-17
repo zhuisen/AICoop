@@ -596,6 +596,7 @@ dependencies = [
 name = "codexbar"
 version = "1.10.4"
 dependencies = [
+ "block2",
  "libc",
  "log",
  "objc2",

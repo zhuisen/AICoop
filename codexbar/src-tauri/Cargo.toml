@@ -54,3 +54,5 @@ windows-sys = { version = "0.59", features = [
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+# ★ 刘海额度条的鼠标事件监听（`NSEvent addGlobalMonitor…` 收 block）。版本对齐依赖树里已有的 0.6。
+block2 = "0.6"
