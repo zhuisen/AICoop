@@ -13,6 +13,12 @@
 
 不 import 任何项目模块、不碰凭证；node 那半只读 `codexbar/src/*.ts`。
 """
+try:
+    # ★ 本文件只起 node（跑 notchSegs.ts），不起任何脚本；但它断言了 `agy-quota-updated` 这类事件名，
+    #   `test_isolation_bootstrap` 按子串把它算作脚本测试 —— 照规矩引入隔离，免得以后真加了脚本测试时漏掉。
+    from . import _isolation  # noqa: F401
+except ImportError:
+    import _isolation  # noqa: F401
 import json
 import pathlib
 import re
@@ -31,6 +37,7 @@ SETTINGS = APP / "src" / "pages" / "SettingsPage.tsx"
 APP_TSX = APP / "src" / "App.tsx"
 SEGS = APP / "src" / "notchSegs.ts"
 CAPS = APP / "src-tauri" / "capabilities"
+DATA = APP / "src" / "hooks" / "useNotchData.ts"
 
 
 def code_only(path):
@@ -38,6 +45,9 @@ def code_only(path):
     s = path.read_text(encoding="utf-8")
     s = re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", s)
     return re.sub(r"(?<![:/\"])//[^\n]*", "", s)
+
+
+_code = code_only
 
 
 def run_segs(expr):
@@ -249,7 +259,8 @@ class ReviewFindingsStayFixed(unittest.TestCase):
         """★★ 本机 RPC 自 agy 1.2 起恒 csrf_required，只拿它 = 画一个几周前的 last_good（本机实测 24.5 天前）。"""
         self.assertIn("agyPool.snapshotOf(agyCur, agySnap)", self.hud)
         self.assertIn("useAgyPool(false)", self.hud, "★ 刘海窗口不做保鲜（那是菜单栏的活），只读盘 + 收广播")
-        self.assertIn("useAgyQuota({ enabled: false })", self.hud)
+        self.assertIn("const { state, agy: agySnap } = useNotchData();", self.hud,
+                      "本机那份只作 snapshotOf 的归属候选，且只听推送（不用自带定时器的 useAgyQuota）")
         self.assertNotRegex(self.hud, r"useAgyPool\([^)]*background", "保鲜只能有一个 webview（菜单栏）")
 
     def test_the_tracking_thread_never_touches_nswindow_or_tao_cursor(self):
@@ -302,6 +313,46 @@ class ReviewFindingsStayFixed(unittest.TestCase):
         self.assertRegex(self.hud, r"Promise\.all\(uns\)\.then\(\(\) => invoke",
                          "监听注册好之后再问一次当前展开态")
         self.assertIn('"notch-geom"', self.hud, "改分辨率 / 换屏后前端的刘海尺寸要跟着变")
+
+
+
+class PushNotPoll(unittest.TestCase):
+    """用户 2026-10-17：刘海网页进程改成数据变化时再推送。打开刘海条时它的 WebContent 曾 60s 平均 0.25%，
+    来源是借用了主界面/菜单栏那两个自带定时器的 hook。"""
+
+    def test_does_not_borrow_the_polling_hooks(self):
+        code = _code(TSX)
+        for hook in ("useStore", "useAgyQuota", "useQuotaSidecar"):
+            self.assertNotRegex(code, rf"\b{hook}\b", f"刘海条不许用 {hook}：它自带 30s 定时器")
+        self.assertRegex(code, r"useNotchData\(\)", "刘海条要走只听推送的 useNotchData")
+
+    def test_data_hook_only_listens(self):
+        code = _code(DATA)
+        self.assertNotIn("setInterval", code, "取数 hook 里不许有周期定时器")
+        self.assertNotIn("run_agy_quota", code, "刘海条只读 sidecar，不发起取数（会起 python）")
+        self.assertNotIn("read_auth_tokens", code, "额度窗口用不到 token，别每次连全部 token 一起读")
+        self.assertRegex(code, r'listen\("state-changed"', "要跟着 state.json 的推送重读")
+        self.assertRegex(code, r'listen\("agy-quota-updated"', "要跟着 agy sidecar 的推送重读")
+
+    def test_the_pool_hook_is_push_only_when_neither_enabled_nor_background(self):
+        """刘海用 `useAgyPool(false)`。它的每个定时器都必须挡在 enabled / background 之后，
+        否则刘海窗口会跟着跑 30s 心跳（甚至起取额度的子进程）。"""
+        pool = _code(APP / "src" / "hooks" / "useAgyPool.ts")
+        n = pool.count("setInterval")
+        self.assertGreater(n, 0)
+        for i in [j for j in range(len(pool)) if pool.startswith("setInterval", j)]:
+            eff = pool[pool.rfind("useEffect(", 0, i):i]
+            self.assertRegex(eff, r"if \(!(enabled|background)\) return;", "池 hook 的定时器没挡在 enabled / background 之后")
+        self.assertIn("listen(POOL_EVT", pool, "池文件变了要跟着读盘")
+        self.assertIn("listen<LivePayload>(LIVE_EVT", pool, "当前号变了要跟着换")
+
+    def test_the_only_interval_runs_while_the_panel_is_open(self):
+        code = _code(TSX)
+        self.assertEqual(code.count("setInterval"), 1, "只允许面板展开时那一个倒计时定时器")
+        i = code.index("setInterval")
+        guard = code.rfind("if (!open) return;", 0, i)
+        self.assertNotEqual(guard, -1, "唯一的定时器必须挂在 `if (!open) return;` 之后")
+        self.assertLess(i - guard, 120, "定时器离 open 守卫太远，可能不在同一个 effect 里")
 
 
 if __name__ == "__main__":

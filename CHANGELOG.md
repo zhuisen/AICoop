@@ -765,6 +765,13 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 - **合并前四方评审修掉 9 类问题**（agy 读到 24 天前的旧数、合盖后黑块留在外接屏、无刘海时开关静默、
   混合 DPI 坐标减半、收起态吞点击 / 抢焦点、开关竞态、window-state 记住展开尺寸、0.x% 显示 0 却是琥珀、
   权限过宽）。设置页那一行现在会说「现在没有检测到刘海屏」。见 B87。
+- **刘海网页改成只听推送**（用户 2026-10-17）：原来借用 `useStore` / `useAgyQuota`，自带 30s 读 state + 全部 token、
+  1s 冷却倒计时、过期还会 `run_agy_quota` 起 python —— 实测打开刘海条时它的 WebContent 60s 平均 0.25%。
+  现在走 `hooks/useNotchData.ts`：启动读一次，之后只在 Rust 推 `state-changed`（限流 2s）/ `agy-quota-updated` 时重读；
+  随时间变的部分（窗口过重置点、冷却结束）按「下一个时间点」定一次闹钟，面板开着才每 30s 走倒计时。
+  agy 仍走池（`useAgyPool(false)`，只收 `agy-pool-updated` / `agy-live-changed`），本机那份只作 `snapshotOf` 的归属候选。
+  「在用哪个号」的判据抽成 `helpers.ts::inUseAid`，`useStore` 与刘海条共用（`test_menubar_follows_proxy` 跟着改）。
+  闸 `test_notch_hud.py::PushNotPoll`（9 个变异）。**改完后的开销尚未实测。**
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
