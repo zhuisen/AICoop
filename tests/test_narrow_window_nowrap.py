@@ -400,7 +400,7 @@ class ControlGroupsNeverWrapIntoTwoRows(unittest.TestCase):
     def _segs(self, view: str, width: int):
         import html as _html
         out = self._sub.run(
-            [self.chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+            [self.chrome, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--no-sandbox",
              "--window-size={},900".format(width), "--virtual-time-budget=3500", "--dump-dom",
              "http://127.0.0.1:3304/harness.html?nav={}&intro=0".format(view)],
             capture_output=True, text=True, timeout=120).stdout

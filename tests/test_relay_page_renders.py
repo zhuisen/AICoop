@@ -55,7 +55,7 @@ def dom(url, size="1200,900"):
     if not shutil.which(CHROME) and not os.path.exists(CHROME):
         raise RuntimeError("没有 Chrome")
     r = subprocess.run(
-        [CHROME, "--headless=new", "--disable-gpu", "--no-sandbox",
+        [CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--no-sandbox",
          f"--window-size={size}", "--virtual-time-budget=6000", "--dump-dom", url],
         capture_output=True, text=True, timeout=120)
     return SCRIPT_RE.sub("", r.stdout)
@@ -64,7 +64,7 @@ def dom(url, size="1200,900"):
 def raw(url, size="1200,900"):
     """不剥脚本的原始 DOM —— 只用来判「服务是否可达 / 探针是否跑过」。"""
     r = subprocess.run(
-        [CHROME, "--headless=new", "--disable-gpu", "--no-sandbox",
+        [CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--no-sandbox",
          f"--window-size={size}", "--virtual-time-budget=6000", "--dump-dom", url],
         capture_output=True, text=True, timeout=120)
     return r.stdout

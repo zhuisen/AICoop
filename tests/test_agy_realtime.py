@@ -427,7 +427,7 @@ class ThePushActuallyMovesTheNumberOnScreen(unittest.TestCase):
     @classmethod
     def dom(cls, qs):
         import subprocess as sp
-        r = sp.run([cls.CHROME, "--headless=new", "--disable-gpu", "--no-sandbox",
+        r = sp.run([cls.CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--no-sandbox",
                     "--window-size=1200,900", "--virtual-time-budget=6000", "--dump-dom",
                     f"{cls.BASE}/harness.html?{qs}"],
                    capture_output=True, text=True, timeout=120)

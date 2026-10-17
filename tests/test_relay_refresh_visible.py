@@ -63,7 +63,7 @@ def _measure(query):
         "</body>", f"<script>setTimeout(() => {{{_MEASURE}}}, 2600);</script></body>", 1),
         encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             "--window-size=1300,900", "--virtual-time-budget=9000",
                             "--dump-dom", f"{HARNESS}/rfprobe.html?{query}"],
                            capture_output=True, text=True, timeout=180)

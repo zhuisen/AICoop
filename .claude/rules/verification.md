@@ -135,6 +135,12 @@ m.done("MyClass")                                        # 还原 + 复跑
      所以改模块级字面量对它完全不可见，变异实测不红。**属性在函数的写入点上，
      判据就必须打在写入点**（改用 AST 数 `_relay_cache[...] = ...` 的赋值次数后，
      同一个变异立刻变红）。
+- ★★ **别用假 HOME 跑会起 Chrome 的测试，除非每个 Chrome 都带 `--use-mock-keychain`**（2026-10-17，CHANGELOG B86）。
+  `HOME=$(mktemp -d)` 下 Headless Chrome 找不到 `login.keychain-db` ⇒ SecurityAgent 弹「Keychain Not Found」**模态框**，
+  测试无限阻塞。会话里看到的只是「日志不再长」，**和「慢」长得一模一样** —— 我就当成慢、跑了 25 分钟才杀。
+  判别看进程（`pgrep -x SecurityAgent`、Chrome 的 etime），不看日志。闸 `tests/test_headless_chrome_mock_keychain.py`。
+  ★ 同一次验证里探针又自匹配了一回：`ps | grep "[S]ecurityAgent"` 撞上**同一条命令行里** `echo "SecurityAgent seen"` 的字面量
+  ——`[S]` 只防 grep 匹配自己，不防命令行别处有这个词。**一律 `pgrep -x <进程名>`**；先跑「正常环境」对照，对照也报阳性 = 探针坏了。
 - ★★ **空守卫第九、十种形态（2026-09-10 下午各抓一个，仍是我自己写的）**：
   ⑨ **参数被重复的同名 query 静默吃掉**。UI 闸的 `usage_q()` 里 URL 已硬编码了
      `relay=relay`，我在 `extra` 里再传 `relay=sparse` 想换夹具 —— `URLSearchParams.get`

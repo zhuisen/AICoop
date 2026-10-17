@@ -46,7 +46,7 @@ def _dump(query):
         urllib.request.urlopen(HARNESS, timeout=2).read(1)
     except Exception:
         return None
-    r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+    r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                         "--window-size=1300,900", "--virtual-time-budget=9000",
                         "--dump-dom", f"{HARNESS}/harness.html?{query}"],
                        capture_output=True, text=True, timeout=180)

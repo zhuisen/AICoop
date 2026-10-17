@@ -442,7 +442,7 @@ def _run_drag_probe():
         "</body>", f"<script>setTimeout(() => {{{_PROBE_JS}}}, 2600);</script></body>", 1),
         encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             "--window-size=1000,900", "--virtual-time-budget=11000",
                             "--dump-dom", f"{HARNESS}/dragprobe.html?nav=home"],
                            capture_output=True, text=True, timeout=120)
@@ -594,7 +594,7 @@ def _run_threshold_probe():
         "</body>", f"<script>setTimeout(() => {{{_THRESHOLD_JS}}}, 2600);</script></body>", 1),
         encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             "--window-size=1000,900", "--virtual-time-budget=13000",
                             "--dump-dom", f"{HARNESS}/threshprobe.html?nav=home"],
                            capture_output=True, text=True, timeout=120)

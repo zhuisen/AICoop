@@ -286,7 +286,7 @@ class TheRouteRowActuallyRenders(unittest.TestCase):
     def dom(cls, url):
         import re as _re
         r = subprocess.run(
-            [cls.CHROME, "--headless=new", "--disable-gpu", "--no-sandbox",
+            [cls.CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--no-sandbox",
              "--window-size=1200,900", "--virtual-time-budget=6000", "--dump-dom", url],
             capture_output=True, text=True, timeout=120)
         return r.stdout, _re.sub(r"<script\b[^>]*>.*?</script>", "", r.stdout, flags=_re.S | _re.I)

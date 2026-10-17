@@ -78,7 +78,7 @@ def _probe(nav):
         "</body>", f"<script>setTimeout(() => {{{_PROBE}}}, 2600);</script></body>", 1),
         encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             "--window-size=1400,1000", "--virtual-time-budget=9000",
                             "--dump-dom", f"{HARNESS}/dtprobe.html?nav={nav}&hover=1"],
                            capture_output=True, text=True, timeout=180)

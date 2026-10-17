@@ -158,7 +158,7 @@ def _run_probe(width=1200):
         "</body>", f"<script>setTimeout(() => {{{_PROBE_JS}}}, 2600);</script></body>", 1),
         encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             f"--window-size={width},1000", "--virtual-time-budget=16000",
                             "--dump-dom", f"{HARNESS}/uniprobe.html?nav=home"],
                            capture_output=True, text=True, timeout=180)

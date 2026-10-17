@@ -42,7 +42,7 @@ def _probe(page_file, query, js, width=1300, budget=9000):
     page.write_text(src.read_text(encoding="utf-8").replace(
         "</body>", f"<script>{js}</script></body>", 1), encoding="utf-8")
     try:
-        r = subprocess.run([CHROME, "--headless=new", "--disable-gpu",
+        r = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu",
                             f"--window-size={width},900", f"--virtual-time-budget={budget}",
                             "--dump-dom", f"{HARNESS}/{page.name}?{query}"],
                            capture_output=True, text=True, timeout=240)

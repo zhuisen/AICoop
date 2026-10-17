@@ -53,7 +53,7 @@ def strip_ts(src):
 
 
 def dom(url, size="1200,900"):
-    p = subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--window-size=" + size,
+    p = subprocess.run([CHROME, "--headless=new", "--use-mock-keychain", "--disable-gpu", "--window-size=" + size,
                         "--virtual-time-budget=3000", "--dump-dom", url],
                        capture_output=True, text=True, timeout=120)
     return p.stdout

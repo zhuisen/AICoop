@@ -746,6 +746,45 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## 未发版（main）
+
+### 修复
+- **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
+  全部加 `--use-mock-keychain`，并加闸。只动测试与 harness 工具，不影响 app。见 B86。
+
+---
+
+### B86 · 假 HOME 跑测试 ⇒ Headless Chrome 弹「Keychain Not Found」模态框、测试无限阻塞 — 2026-10-17 ✅（未发版）
+
+**现场**（用户在另一个会话里抓到进程链）：v1.10.4 发版时，为了模拟干净的 CI runner，我跑了
+`T=$(mktemp -d); HOME=$T python3 -m unittest discover -s tests -p 'test_*.py'`。07:33:12 跑到
+`test_card_uniformity.py:161` 起 `Google Chrome --headless=new --disable-gpu … --dump-dom http://127.0.0.1:3304/uniprobe.html?nav=home`（PID 62280）。
+Chrome 要读「Chrome Safe Storage」钥匙串 → 在 `$T/Library/Keychains/login.keychain-db` 找不到 →
+SecurityAgent（PID 60330）弹出 **Keychain Not Found** 模态框，测试停在那里等人点按钮。
+
+**我这边看到的样子**：这一轮全量跑了 25 分钟还没出 `Ran`（平时 7 分钟），日志每 30s 只长 ~33 字节，
+我判断成「空 HOME 让某些测试变慢」、超过 10 分钟上限后按 PID 杀掉。**实际是阻塞在一个用户看得见、会话里看不见的弹窗上**。
+⚠️ 「慢」与「卡在弹窗」在日志上长得一样 —— 都是不出新行。判别要看**卡在哪个进程上**（`ps` 里有没有 SecurityAgent、Chrome 的 etime），不是看日志。
+
+**根因**：直接 `subprocess.run([CHROME, "--headless=new", …])` 的 16 处（14 个文件：13 个测试 + `codexbar/uishot/sweep.py`）
+都没带 `--use-mock-keychain`。Playwright 的 13 处不受影响 —— 它默认就带 `--use-mock-keychain` 与 `--password-store=basic`
+（读 Playwright 起的 Chrome 进程命令行实测，n=1）。
+
+**修**：16 处全部加 `--use-mock-keychain`。实测假 HOME + 该参数：无 SecurityAgent、页面完整渲染（DOM 1.2 MB、3 个卡片网格，n=1）。
+不加参数的对照组就是用户撞上的那一次（n=1）—— **刻意没再复现**，复现一次就是再给用户弹一次窗。
+
+**验证途中我自己的仪器撒了一次谎**：第一版探测用 `ps -axo command | grep -q "[S]ecurityAgent"`，而同一条命令里的
+`echo "SecurityAgent seen=…"` 让**我自己的 zsh 命令行**被匹配上 ⇒ 三次实验（含正常 HOME 的对照）都报「出现了」，
+并且一「出现」就杀 Chrome，所以 DOM 全是 0 字节 —— 一度得出「这个参数不够」的错误结论。改用 `pgrep -x SecurityAgent`
+（按进程名精确匹配）后才拿到真结果。是本仓已记过的「`pgrep -f` 自匹配」同一类，换了个形状：`[S]` 技巧只防 grep 匹配自己，
+防不了**同一条命令行里别处写着这个词**。识破它靠的是对照组：正常 HOME 也「出现」，就说明探针坏了。
+
+闸 `tests/test_headless_chrome_mock_keychain.py`：AST 扫 `tests/`、`codexbar/uishot/`、`tools/` 里每个含 `--headless…` 的
+list/tuple 字面量，必须同时含 `--use-mock-keychain`；先断言扫到 ≥16 处（探针自证）。变异：去掉 `test_card_uniformity.py` 那一处 ⇒ 红、指名该行。
+⚠️ 闸只认**字面量**参数表 —— 动态拼的参数列表它看不见。
+
+---
+
 ## v1.10.4 — 2026-10-17
 
 **修：GitHub `.dmg` 装机后终端入口与后台服务读写两份数据；Codex 压缩会话漏算；agy 周额度变灰。新：总览 ⌘1/2/3 切档、设置页「数据源状态」。**
