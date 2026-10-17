@@ -8,13 +8,11 @@ import { usePrivacy } from "./hooks/usePrivacy";
 import { agyShown, agyWinRows } from "./agy";
 import { maskId, slotToAccount, inUseAid } from "./helpers";
 import { agySegs, codexSegs, ringNum, segColor, type NotchSeg } from "./notchSegs";
+import { platformColor } from "./theme";
 import "./notch.css";
 
 /** 面板开着时倒计时文字的刷新间隔。收起时细线只画百分比，不需要它。 */
 const OPEN_TICK_MS = 30_000;
-/** 代理最近这么多秒内转发过请求，就算「Codex 正在跑」（细线呼吸变快）。`proxy.py` 每个成功响应都写
- *  `last_proxy_ts`；一轮对话里请求间隔是秒级，45s 足以跨过模型思考的停顿，又不会停手后还快很久。 */
-const RUNNING_WINDOW_SEC = 45;
 /** 「下一个时间点」闹钟的上限：睡眠唤醒后计时器会晚到，最多晚这么久自己纠正。 */
 const MAX_WAKE_MS = 60 * 60 * 1000;
 
@@ -109,8 +107,6 @@ export default function NotchHud() {
     const q = (state.slots ?? {})[inUseAid(state) ?? ""]?.quota;
     for (const w of [q?.primary, q?.secondary]) if (w?.resets_at) times.push(w.resets_at);
     for (const sl of Object.values(state.slots ?? {})) if (sl.cooling_until) times.push(sl.cooling_until);
-    // 「正在跑」到期的那一刻：数据不会变，变的是 now，所以也要定在闹钟里
-    if (state.last_proxy_ts) times.push(state.last_proxy_ts + RUNNING_WINDOW_SEC);
     for (const r of agyWinRows(agyShown(agyShownSnap)?.quota)) if (r.reset_at) times.push(r.reset_at);
     const next = Math.min(...times.filter((t) => t > now));
     const ms = Number.isFinite(next) ? Math.min((next - now) * 1000 + 1000, MAX_WAKE_MS) : MAX_WAKE_MS;
@@ -143,10 +139,25 @@ export default function NotchHud() {
   }, []);
 
   const node = inUse ? maskId(inUse.node, privacy) : null;
-  const running = !!state.last_proxy_ts && Date.now() / 1000 - state.last_proxy_ts < RUNNING_WINDOW_SEC;
+
+  // 谁正在跑 —— Rust 看 Codex rollout / agy 对话库的写入时间，**变了才推**（`notch.rs::watch_activity`）。
+  // 用户 2026-10-17：Codex 跑亮 Codex 色、agy 跑亮 agy 色、同时跑两个都亮；空闲只剩细线慢呼吸。
+  const [act, setAct] = useState<{ codex: boolean; agy: boolean }>({ codex: false, agy: false });
+  useEffect(() => {
+    invoke<{ codex: boolean; agy: boolean } | null>("notch_activity").then((a) => { if (a) setAct(a); }).catch(() => {});
+    const un = listen<{ codex: boolean; agy: boolean }>("notch-activity", (e) => setAct(e.payload));
+    return () => { void un.then((f) => f()); };
+  }, []);
+  // 平台色：用户在设置里改过就用改过的，否则静态表（同 colorOf 的优先级，刘海条没有扫描结果那一层）
+  const colorOfK = (k: string) => prefs.by?.[k]?.color ?? platformColor(k);
+  const lit = [act.codex && !prefs.by?.codex?.off && colorOfK("codex"),
+               act.agy && !prefs.by?.agy?.off && colorOfK("agy")].filter(Boolean) as string[];
+  const glow = lit.length === 2 ? `linear-gradient(90deg, ${lit[0]} 0%, ${lit[0]} 30%, ${lit[1]} 70%, ${lit[1]} 100%)`
+             : lit[0] ?? "transparent";
   return (
-    <div className={[open && "nh-open", running && "nh-running"].filter(Boolean).join(" ") || undefined}
-         style={{ ["--pw" as string]: `${PANEL_W}px` }}>
+    <div className={[open && "nh-open", lit.length > 0 && "nh-active"].filter(Boolean).join(" ") || undefined}
+         style={{ ["--pw" as string]: `${PANEL_W}px`, ["--glow" as string]: glow }}>
+      <div className="nh-glow" aria-hidden="true" />
       <div className="nh-panel" ref={panelRef}
            onClick={() => { invoke("set_main_visible", { show: true }).catch(() => {}); }}>
         <div className="nh-head"><b>额度剩余 %</b><span>{node ? `Codex 在用 ${node}` : ""}</span></div>

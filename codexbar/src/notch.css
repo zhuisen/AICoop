@@ -28,11 +28,22 @@ body {
 .nh-bars span { flex: 1; border-radius: 2px; background: var(--track); overflow: hidden; }
 .nh-bars i { display: block; height: 100%; border-radius: 2px; }
 .nh-bars span.stale i { opacity: .45; }
-/* ★ 呼吸（用户 2026-10-17 从 demo 要的「Codex 正在跑 → 呼吸变快」）。只动透明度：交给图层合成跑，
-   网页进程不必逐帧干活。平时慢而浅，正在跑时快而深；永不停，只变慢 —— 停住会被读成"坏了"。 */
-.nh-bars { animation: nh-breathe 6s ease-in-out infinite; will-change: opacity; --nh-dim: .6; }
-.nh-running .nh-bars { animation-duration: 2.4s; --nh-dim: .4; }
-@keyframes nh-breathe { 0%, 100% { opacity: 1; } 50% { opacity: var(--nh-dim); } }
+/* ★ 呼吸与光晕（用户 2026-10-17）：空闲时细线慢呼吸；Codex / agy 在跑时细线停住，
+   岛周围亮起该平台色的光晕并快呼吸，两个同时跑就左右各一半。
+   实测：细线慢呼吸让刘海的网页进程常驻约 0.18% CPU（不是纯合成层动画）——用户看过数字后仍要空闲呼吸。 */
+.nh-bars { animation: nh-breathe 6s ease-in-out infinite; will-change: opacity; }
+@keyframes nh-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+.nh-active .nh-bars { animation: none; }
+/* 光晕在岛后面，尺寸配 notch.rs 的 GLOW_X / GLOW_Y（窗口收起时多留的透明边） */
+.nh-glow {
+  position: absolute; top: 0; left: 50%; pointer-events: none;
+  width: calc(var(--nw) + var(--flare) * 2 + 36px); margin-left: calc((var(--nw) + var(--flare) * 2 + 36px) / -2);
+  height: calc(var(--nh) + var(--lip) + 12px); border-radius: 0 0 28px 28px;
+  background: var(--glow); filter: blur(10px); opacity: 0; transition: opacity .4s;
+}
+.nh-active .nh-glow { opacity: .9; animation: nh-glow 2.4s ease-in-out infinite; }
+@keyframes nh-glow { 0%, 100% { opacity: .95; } 50% { opacity: .4; } }
+.nh-open .nh-glow { opacity: 0; animation: none; }
 
 .nh-panel {
   position: absolute; top: 0; left: 50%; width: var(--pw); margin-left: calc(var(--pw) / -2);
@@ -59,4 +70,4 @@ body {
   color: #d5dae1; font-size: 11.5px;
 }
 .nh-foot b { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--fg); font-weight: 500; }
-@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } .nh-bars { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } .nh-bars, .nh-active .nh-glow { animation: none; } }
