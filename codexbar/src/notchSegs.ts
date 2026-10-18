@@ -70,7 +70,7 @@ export function agySegs(snap: AgySnapshot | null | undefined, off: boolean, noCu
 /** `set_notch_hud` / `notch_status` 的回答（见 `notch.rs::Status`）。 */
 export interface NotchStatus { active: boolean; reason?: string | null }
 
-export const NOTCH_DESC = "在刘海下沿用一条细线显示 Codex 和 Antigravity 的剩余额度，鼠标移上去展开详情。没有刘海的 Mac 不用开。";
+export const NOTCH_DESC = "有 AI 在跑时，刘海四周亮起它的颜色。鼠标移上去，显示 Codex 和 Antigravity 的剩余额度。没有刘海的 Mac 不用开。";
 
 /**
  * 设置页那一行的说明。★ 「开关记住了」与「屏幕上真有东西」是两件事，没对上时必须说出来 ——

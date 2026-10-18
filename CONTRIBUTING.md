@@ -20,7 +20,7 @@
 
 ## 什么留在派生版本
 
-- 只有你需要的界面或交互。例如：刘海额度条（PR #1，2026-10-18 起由作者在 fork 里维护，见 CHANGELOG B87）。
+- 只有你需要的界面或交互。例如：只为你自己的设备或习惯定制的面板。
 - 改变底座已有界面外观的设计。
 - 底座维护者不打算长期维护的功能。
 
@@ -42,7 +42,7 @@ git fetch upstream && git rebase upstream/main
 
 让同步少冲突的做法：
 
-1. 你的功能放进**独立的文件**（例如 `notch.rs`、`NotchHud.tsx`、`notch.css`）。
+1. 你的功能放进**独立的文件**（例如 `my_panel.rs`、`MyPanel.tsx`、`my_panel.css`）。
 2. 共享文件里只留**最少的挂接点**：命令注册一行、设置页一行、构建入口一行。共享文件改得越多，每次 rebase 冲突越多。
 3. 需要底座提供一个挂接点（事件、导出的函数、配置项）时，单独提一个只含这个挂接点的小 PR。底座接受后，你的 fork 就不用再改那个共享文件。
 4. 不要在派生版本里改底座的文档（`CLAUDE.md`、`.claude/rules/`、`CHANGELOG.md` 的 `B` 条目）。你的说明写在自己的文件里，例如 `docs/EDITION.md`。底座文档里的「用户」指维护者本人。
@@ -57,5 +57,5 @@ git fetch upstream && git rebase upstream/main
 ## 派生版本的发布
 
 - 你从自己的 fork 构建和发布。推 `v*` tag 会触发 `.github/workflows/release.yml`，在你的 fork 里同样能用。
-- tag 请带上派生版本的名字，例如 `v1.10.4-notch.1`，这样用户能分清底座版本和派生版本。
+- tag 请带上派生版本的名字，例如 `v1.10.4-yourname.1`，这样用户能分清底座版本和派生版本。
 - 底座的版本号由底座发布，不要在 fork 里改 `X.Y.Z`。

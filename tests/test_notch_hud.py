@@ -2,7 +2,7 @@
 
 守的都是「错了不报错、只是看着怪」的那一类：
   · 尺寸常量分在 Rust / TSX / CSS 三处，对不上时面板被裁或偏到一边；
-  · 少了 fullScreenAuxiliary，切到全屏应用就不见了 —— 2026-10-17 用户实测确认过要的就是全屏可见；
+  · 少了 fullScreenAuxiliary，切到全屏应用就不见了 —— 2026-10-17 PR #1 作者实测确认过要的就是全屏可见；
   · 新窗口没进 capabilities，invoke/listen 全部静默失败，刘海上永远是一条空槽；
   · 默认关是用户定的（2026-10-17），被顺手改成默认开会让所有人的刘海上多出一条东西。
 
@@ -86,7 +86,7 @@ class SizesAgree(unittest.TestCase):
 
     def test_window_has_room_for_the_whole_blurred_glow(self):
         """光晕带 blur，窗口留的透明边装不下时，模糊的边缘会被窗口裁出一圈直边。
-        blur(σ) 往外 2σ 才淡到 2% —— 第一版按 1σ 留边，用户一眼看出「限制了范围」（2026-10-17）。"""
+        blur(σ) 往外 2σ 才淡到 2% —— 第一版按 1σ 留边，作者一眼看出「限制了范围」（2026-10-17）。"""
         css = _code(CSS)
         flare = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
         gx = float(_one(RS, r"^const GLOW_X: f64 = (\d+(?:\.\d+)?);", "GLOW_X"))
@@ -333,7 +333,7 @@ class ReviewFindingsStayFixed(unittest.TestCase):
 
 
 class PushNotPoll(unittest.TestCase):
-    """用户 2026-10-17：刘海网页进程改成数据变化时再推送。打开刘海条时它的 WebContent 曾 60s 平均 0.25%，
+    """PR #1 作者 2026-10-17：刘海网页进程改成数据变化时再推送。打开刘海条时它的 WebContent 曾 60s 平均 0.25%，
     来源是借用了主界面/菜单栏那两个自带定时器的 hook。"""
 
     def test_does_not_borrow_the_polling_hooks(self):
@@ -372,28 +372,85 @@ class PushNotPoll(unittest.TestCase):
 
 
 
-class ActivityGlow(unittest.TestCase):
-    """用户 2026-10-17：收起态改成光晕。平时颜色 = 额度、慢呼吸；有平台在跑 = 平台色、快呼吸
-    （Codex 青绿、agy 蓝、同时跑左右各半），停下恢复额度色。"""
+GLOW = APP / "src" / "notchGlow.ts"
 
-    def test_glow_breathes_slowly_and_faster_while_working(self):
+
+def run_glow(expr):
+    """notchGlow.ts 零 import，直接用 node 跑（CI 没有 node_modules）。"""
+    r = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "-e",
+                        "import('%s').then(m => console.log(JSON.stringify(%s)))" % (GLOW.as_posix(), expr)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-800:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+COLS = "(k) => ({codex: '#2dd4bf', claude: '#E0784F', agy: '#4d9fff', grok: '#8b7cf6'})[k]"
+
+
+class ActivityGlow(unittest.TestCase):
+    """PR #1 作者 2026-10-17 提出光晕；维护者 2026-10-18 接受并改成：**空闲不亮**，四家（Codex / Claude / agy / grok）
+    谁在跑亮谁的平台色，几家同时跑就几段，停下熄灭。"""
+
+    def colors(self, act, off="[]"):
+        return run_glow(f"m.glowColors({act}, (k) => {off}.includes(k), {COLS})")
+
+    def test_idle_means_no_glow(self):
+        self.assertEqual(self.colors("m.NO_ACTIVITY"), [], "没有平台在跑就不亮")
+        self.assertEqual(run_glow("m.glowBackground([])"), "", "没有颜色 = 没有背景")
+
+    def test_each_platform_lights_its_own_colour(self):
+        for k, c in (("codex", "#2dd4bf"), ("claude", "#E0784F"), ("agy", "#4d9fff"), ("grok", "#8b7cf6")):
+            self.assertEqual(self.colors(f"{{...m.NO_ACTIVITY, {k}: true}}"), [c], k)
+        self.assertEqual(run_glow("m.glowBackground(['#4d9fff'])"), "#4d9fff", "一家 = 纯色，不是渐变")
+
+    def test_order_is_fixed_whatever_order_the_payload_has(self):
+        got = self.colors("{grok: true, agy: true, claude: true, codex: true}")
+        self.assertEqual(got, ["#2dd4bf", "#E0784F", "#4d9fff", "#8b7cf6"], "颜色位置不能随推送字段顺序跳")
+
+    def test_a_platform_turned_off_in_settings_stays_dark(self):
+        got = self.colors("{codex: true, claude: true, agy: false, grok: false}", off="['claude']")
+        self.assertEqual(got, ["#2dd4bf"], "设置里停用的平台不亮")
+
+    def test_several_platforms_share_the_ring_evenly(self):
+        bg = run_glow("m.glowBackground(['#a', '#b', '#c', '#d'])")
+        self.assertEqual(bg, "linear-gradient(90deg, #a 12.5%, #b 37.5%, #c 62.5%, #d 87.5%)", "每家占一段，色标在 (i+.5)/n")
+        self.assertEqual(run_glow("m.glowBackground(['#a', '#b'])"), "linear-gradient(90deg, #a 25.0%, #b 75.0%)")
+
+    def test_rust_and_ts_agree_on_the_payload(self):
+        rs = _code(RS)
+        fields = re.search(r"pub struct Activity \{([^}]*)\}", rs).group(1)
+        rs_keys = re.findall(r"pub (\w+): bool", fields)
+        ts = _code(GLOW)
+        ts_keys = re.findall(r"(\w+): boolean", re.search(r"interface NotchActivity \{([^}]*)\}", ts).group(1))
+        self.assertEqual(rs_keys, ts_keys, "notch.rs::Activity 与 NotchActivity 字段不一致 ⇒ 有一家永远不亮")
+        self.assertEqual(run_glow("m.GLOW_ORDER"), rs_keys, "GLOW_ORDER 漏了某家 ⇒ 它在跑也不亮")
+
+    def test_hud_uses_the_pure_functions(self):
+        code = _code(TSX)
+        self.assertRegex(code, r"const lit = glowColors\(act,", "光晕颜色必须走 notchGlow.ts（有行为闸的那份）")
+        self.assertRegex(code, r"const glow = glowBackground\(lit\);")
+        self.assertRegex(code, r'\["--glow" as string\]: glow', "算好的颜色没传给 --glow")
+        self.assertRegex(code, r'lit\.length > 0 \? "nh-active" : "nh-quiet"', "没有平台在跑就必须是 nh-quiet（不亮）")
+        self.assertNotIn("quotaGlow", code, "空闲不再显示额度色")
+
+    def test_glow_breathes_faster_while_working(self):
         css = _code(CSS)
         for g in ("g1", "g2"):
-            idle = float(re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1))
+            base = float(re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1))
             run = float(re.search(rf"(?m)^\.nh-active \.nh-glow \.{g} \{{ animation-duration: ([\d.]+)s; \}}", css).group(1))
-            self.assertLess(run, idle, f"{g}：在跑时必须比平时呼吸得快")
+            self.assertLess(run, base, f"{g}：在跑时用快呼吸")
 
     def test_two_layers_do_not_breathe_in_lockstep(self):
-        """两层同周期同相位，看着就是一块整齐的光在一明一暗 —— 用户嫌的正是「太整齐规则」。"""
+        """两层同周期同相位，看着就是一块整齐的光在一明一暗 —— 作者嫌的正是「太整齐规则」。"""
         css = _code(CSS)
-        dur = {g: re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1)
+        dur = {g: re.search(rf"(?m)^\.nh-active \.nh-glow \.{g} \{{ animation-duration: ([\d.]+)s; \}}", css).group(1)
                for g in ("g1", "g2")}
         self.assertNotEqual(dur["g1"], dur["g2"], "两层呼吸周期要错开")
 
-    def test_glow_hides_when_open_or_empty(self):
+    def test_glow_hides_when_open_or_idle(self):
         css = _code(CSS)
         self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow, \.nh-open \.nh-glow \{ opacity: 0; \}",
-                         "展开面板时、以及没有任何数据时，光晕要收掉")
+                         "展开面板时、以及没有平台在跑时，光晕要收掉")
         self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow i, \.nh-open \.nh-glow i \{ animation: none; \}",
                          "收掉后不能还在跑动画（白耗 CPU）")
 
@@ -403,29 +460,27 @@ class ActivityGlow(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertRegex(m.group(1), r"\.nh-glow i \{ animation: none;", "开了「减弱动态效果」光晕就不该再动")
 
-    def test_colour_means_quota_unless_a_platform_is_working(self):
-        code = _code(TSX)
-        self.assertRegex(code, r"const glow = lit\.length > 0 \? platformGlow : quotaGlow;",
-                         "平时是额度色，在跑才换平台色")
-        self.assertRegex(code, r"s\.pct == null \? UNKNOWN : segColor\(s\.pct\)",
-                         "额度色走 segColor（与托盘同一条），读不到用 UNKNOWN 而不是当 0 画红")
-        self.assertNotRegex(code, r'UNKNOWN = "#E0524D"', "读不到不能画成红色")
-
     def test_activity_is_pushed_by_rust(self):
         code = _code(TSX)
         self.assertRegex(code, r'listen<[^>]+>\("notch-activity"', "要跟着 Rust 的活动推送")
         self.assertRegex(code, r'invoke<[^>]+>\("notch_activity"\)', "首次挂载要取一次当前状态")
-        self.assertRegex(code, r'lit\.length > 0 && "nh-active"', "活动状态没接到 class 上")
         self.assertNotIn("last_proxy_ts", code, "codex 会定时 GET /models，代理照样刷新 last_proxy_ts —— 停手后仍会亮")
         lib = LIB.read_text(encoding="utf-8")
         block = re.search(r"generate_handler!\[(.*?)\]\)", lib, re.S).group(1)
         self.assertRegex(block, r"\bnotch_activity\b")
 
-    def test_rust_reads_the_right_files(self):
+    def test_rust_watches_instead_of_polling(self):
+        """维护者 2026-10-18：Claude Code 加子 agent 约 8000 个会话文件，每 2s stat 一遍约 50 ms ⇒ 改 FSEvents 推送。
+        判哪家在写的规则由 `cargo test` 的 `each_platform_is_told_apart_by_its_own_session_files` 守。"""
         rs = _code(RS)
-        self.assertRegex(rs, r'n\.starts_with\("rollout-"\) && n\.ends_with\("\.jsonl"\)', "Codex 看 rollout 写入")
-        self.assertRegex(rs, r'n\.ends_with\("\.db-wal"\)', "agy 是 WAL 库，生成时写的是 -wal，只看主库会永远判成空闲")
+        watch = rs[rs.index("fn watch_activity("):rs.index("pub fn activity(")]
+        self.assertIn("notify::recommended_watcher(", watch, "活动检测要靠文件系统推送")
+        self.assertIn("RecursiveMode::Recursive", watch)
+        self.assertNotIn("read_dir", rs, "不许回到逐个目录扫文件")
         self.assertNotIn("last_proxy_ts", rs)
+        cls = rs[rs.index("fn classify("):rs.index("fn is_write(")]
+        self.assertRegex(cls, r'n\.starts_with\("rollout-"\) && n\.ends_with\("\.jsonl"\)', "Codex 看 rollout 写入")
+        self.assertRegex(cls, r'n\.ends_with\("\.db-wal"\)', "agy 是 WAL 库，生成时写的是 -wal，只看主库会永远判成空闲")
         self.assertRegex(rs, r"if changed \{ let _ = app\.emit_to\(LABEL, \"notch-activity\", a\); \}", "只在变了才推")
 
 

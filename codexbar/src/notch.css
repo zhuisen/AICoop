@@ -24,12 +24,13 @@ body {
 .nh-island::before, .nh-panel::before { left: calc(var(--flare) * -1); background: radial-gradient(circle at 0 100%, transparent 6.5px, var(--island) 7px); }
 .nh-island::after, .nh-panel::after { right: calc(var(--flare) * -1); background: radial-gradient(circle at 100% 100%, transparent 6.5px, var(--island) 7px); }
 
-/* ★ 光晕（用户 2026-10-17：起初是刘海下沿的分段细线，用户嫌不明显，换成 demo 里 A 的光晕）。
-   平时颜色 = 额度、6s 慢呼吸；有平台在跑颜色 = 平台色、2.4s 快呼吸（颜色由 NotchHud 算好放进 --glow）。
-   ★ 两层叠出来（用户嫌一层「散得太整齐规则、看得出限制了范围」）：贴边一层亮而窄，散开一层宽而淡、
+/* ★ 光晕（PR #1 作者 2026-10-17：起初是刘海下沿的分段细线，作者嫌不明显，换成 demo 里 A 的光晕）。
+   维护者 2026-10-18 接受时改成：**空闲不亮**（`nh-quiet`；原设计空闲 = 额度色、6s 慢呼吸）；有平台在跑 = 平台色、
+   2.4s 快呼吸，几家同时跑就几段（颜色由 `notchGlow.ts` 算好放进 --glow）。
+   ★ 两层叠出来（作者嫌一层「散得太整齐规则、看得出限制了范围」）：贴边一层亮而窄，散开一层宽而淡、
      偏向下方、底边是椭圆；两层呼吸周期错开，不同起同落 —— 两个高斯叠起来的衰减比一个自然。
    ★ blur(σ) 要往外 ~2σ 才淡到看不见（2σ 处剩 2%），窗口透明边按这个留（GLOW_X / GLOW_Y），
-     少了就被窗口裁出一圈直边 —— 第一版只按 1σ 留，就是用户看到的「框」。
+     少了就被窗口裁出一圈直边 —— 第一版只按 1σ 留，就是作者看到的「框」。
    只动透明度。实测单层光晕时刘海网页进程常驻约 0.28% CPU（细线那版 0.18%）。 */
 .nh-glow { position: absolute; inset: 0; pointer-events: none; }
 .nh-glow i { position: absolute; left: 50%; background: var(--glow); will-change: opacity; }

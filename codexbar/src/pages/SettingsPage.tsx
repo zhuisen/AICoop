@@ -58,7 +58,7 @@ const DEFAULTS: Settings = {
   subExpiryWarnDays: 7,
   tokenExpiryWarnHours: 48,
   dockVisible: false,        // 默认保持纯菜单栏形态(现有行为)
-  notchHud: false,           // 刘海额度条默认**关**(用户 2026-10-17 定),只在带刘海的 Mac 上有效
+  notchHud: false,           // 刘海额度条默认**关**(PR #1 作者 2026-10-17 定),只在带刘海的 Mac 上有效
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
   navOpen: false,            // 侧栏默认**折叠**(用户 2026-08-16 指定),展开后带中文名
@@ -252,7 +252,7 @@ export default function SettingsPage({ t }: { t: Theme }) {
         </div>
       </Row>
 
-      {/* ★ 刘海额度条（用户 2026-10-17 从 demo 选定，默认关）。开 = Rust 建窗口 + 装鼠标监听，
+      {/* ★ 刘海额度条（PR #1 作者 2026-10-17 从 demo 选定，默认关）。开 = Rust 建窗口 + 装鼠标监听，
           关 = 销毁窗口（不是隐藏，默认关的功能不常驻任何进程）。启动时由 App.tsx 再应用一次。
           Windows 没有刘海，整行不画。 */}
       {!isWindowsUI() && (

@@ -748,7 +748,9 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ## 未发版（main）— 2026-10-17
 
-**刘海额度条不随本版发布**：B87 曾合入 main，2026-10-18 移出，改由 PR #1 作者在他的 fork 里维护（协作方式见 `CONTRIBUTING.md`）。见 B87 末尾。
+### 新
+- **刘海光晕（macOS，默认关，设置页「刘海额度条」开）**：Codex / Claude Code / agy / grok 谁在跑，刘海四周就亮谁的颜色；
+  几家同时跑就分几段。空闲时不亮。鼠标移上去仍是额度环面板。设计与光晕来自 PR #1 作者（commit 带 `Co-authored-by`）。见 B89。
 
 ### 修复
 - **在隔离 HOME 下跑测试会弹「Keychain Not Found」并把测试卡住**（用户 2026-10-17 实报）：直接起 Headless Chrome 的 16 处
@@ -757,6 +759,39 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
   周改由 agy 自己的 `/usage` 报告给（零 token、约 12s）：每个号在自己的临时 HOME 里跑，不碰钥匙串，约半小时一次。见 B88。
 
 ---
+
+### B89 · 刘海光晕收回底座：四家平台色、空闲不亮、FSEvents 代替轮询 — 2026-10-18（未发版）
+
+用户：「还要新增刘海屏的光晕效果，这是为了适配 macbook 设备的开关设计，实现逻辑按 samchen 的方式」。
+同日上午刚把刘海条移出 main（B87 末尾）；这次决定收回底座。
+
+**做法**：`git revert` 那条移出 commit（`6541551`），再把 PR #1 作者光晕版的 5 个 commit 原样 cherry-pick 过来，
+每个带 `Co-authored-by` 署名。之前在 PR 里说的「作者署名保留」**不成立**：最早合进来的 `7b927a6` / `ed13b2a`
+作者字段是本仓维护者，已推送，改不了。
+
+**维护者在 PR 设计上改的三处**（用户拍板）：
+1. **空闲不亮**。PR 原设计空闲时显示额度色、6s 慢呼吸。现在光晕只表示「有 AI 在跑」，额度只看悬停面板。
+2. **四家，各用现有平台色**：Codex `#2dd4bf` · Claude `#E0784F` · agy `#4d9fff` · grok `#8b7cf6`。
+   用户提过「绿色 codex」，看过选项后选了现有的青色，不新增颜色。设置里停用的平台不亮。
+   顺序固定 `codex → claude → agy → grok`，色标在 (i+.5)/n。纯函数抽到 `notchGlow.ts`（零 import）。
+3. **活动检测改用 FSEvents**（`notify` 8.2，只开 `macos_fsevent`）。PR 原来每 2s 挨个 stat Codex 和 agy 的文件，约 3 ms。
+   加上 Claude Code 后，本机 `~/.claude/projects` 有 **7965** 个 jsonl（含 `subagents/agent-*.jsonl`），
+   全扫一遍约 50 ms。按每 2s 一次推算，常驻 CPU 约 2–3%（**这是推算，没实测**）。
+   现在线程每 2s 只读 4 个原子量。只认内容写入（Create / Modify Data），读文件和改元数据不算。
+
+**判据**（每家都看自己的会话文件，45s 内写过 = 在跑）：Codex `sessions/**/rollout-*.jsonl` · Claude `projects/**/*.jsonl`
+· agy `conversations/*.db-wal`（或 `.db`）· grok `~/.grok/**/updates.jsonl`。
+
+**闸**：`tests/test_notch_hud.py::ActivityGlow`（13 条；行为测试直接用 node 跑 `notchGlow.ts`；
+Rust `Activity` 字段 == TS `NotchActivity` 字段 == `GLOW_ORDER`），**12 个变异全部符合预期**（11 红 1 绿）
+—— `scratch/mutate_notch_glow_20261018.py`。Rust 侧 `cargo test --lib notch::` 11 条，其中 3 条是新加的
+（判哪家在写 / 只认内容写入 / 只亮写过的那家）。
+
+**未验**：
+- 本机 Mac17,14 **没有刘海**，带刘海那半零真机验证（同 B87）。
+- FSEvents 版空闲 CPU 没量。
+- Claude Code 空闲时会不会写 jsonl（例如会话收尾写摘要）没观测。如果会写，光晕会在停下后多亮最多 45s。
+- 本会话本身就是 Claude Code，所以开发时 Claude 段会一直亮。这符合判据，不是误报。
 
 ### B88 · agy Gemini 周额度停在上一个窗口 —— 生产 host 是旧账，当值号改读 agy `/usage` — 2026-10-17 ✅（未发版）
 
@@ -845,13 +880,14 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 **2026-10-18 移出 main**：维护者确认刘海条是 PR 作者的需求，不是本仓的需求。三个 commit（`7b927a6` / `ed13b2a` / `30fd552`）
 已 `git revert`，代码与闸随之移除；作者在自己的 fork 上继续维护（光晕版 `f16751c` 等 5 个 commit 也在那边）。
 本条的实测与评审记录保留在这里。底座与派生版本怎么分工见 `CONTRIBUTING.md`。
+**同日收回底座**：维护者决定把光晕版收回 main，并改了三处。见 B89。
 
 原「未发版」说明（搬来，逐字未改）：
 
 **新：刘海额度条（macOS，默认关，设置页「刘海额度条」开）。**
 
 - 刘海下沿多出 7pt 黑边，里面一段一条细线：Codex 在用那个号的每个额度窗口 + agy 的 5h / 周。
-  鼠标移上去展开额度环面板，点面板打开主界面。只显示 Codex 与 agy（用户 2026-10-17 定），
+  鼠标移上去展开额度环面板，点面板打开主界面。只显示 Codex 与 agy（PR #1 作者 2026-10-17 定），
   只在带刘海的屏幕上显示，外接屏 / 合盖不显示。
 - 样式是用户从 demo 里挑的（收起 B「底边细线」+ 展开 2「只看额度」），demo 留档
   `~/Downloads/codexbar_notch_demo_20261017.html`。
