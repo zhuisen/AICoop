@@ -1982,8 +1982,7 @@ stub = (STUB.replace("__SNAPSHOT__", json.dumps(snapshot))
             .replace("__STATE__", json.dumps(redacted_state()))
             .replace("__AGYROT__", json.dumps(agy_rot_fixture())))
 ANCHOR = "<script type=\"module\""
-for src, dst in (("index.html", "harness.html"), ("menubar.html", "harness-menubar.html"),
-                 ("notch.html", "harness-notch.html")):
+for src, dst in (("index.html", "harness.html"), ("menubar.html", "harness-menubar.html")):
     html = (APP / src).read_text()
     assert html.count(ANCHOR) >= 1, f"{src} 注入锚点未命中"
     (APP / dst).write_text(html.replace(ANCHOR, stub + "\n    " + ANCHOR, 1))
