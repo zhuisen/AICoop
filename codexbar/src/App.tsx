@@ -208,6 +208,8 @@ export default function App() {
   useEffect(() => {
     const st = getSettings();
     invoke("set_dock_visible", { on: st.dockVisible }).catch(() => {});
+    // 刘海额度条同理（默认关；关着时这句什么都不建）。
+    if (st.notchHud) invoke("set_notch_hud", { on: true }).catch(() => {});
     // 菜单栏标题样式同理:Rust 侧的 TRAY_STYLE 是进程内 atomic,重启就回默认,
     // 得由主窗口 webview 每次启动重新告诉它一次。
     invoke("set_tray_style", { style: TRAY_STYLES.indexOf(st.trayStyle) }).catch(() => {});

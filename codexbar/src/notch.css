@@ -1,0 +1,57 @@
+/* 刘海额度条（`NotchHud.tsx`）。窗口透明、无边框，贴在刘海上；岛恒为黑色 ——
+   刘海本身是黑的，岛跟着换主题会在浅色下变成一块白补丁。
+   ★ `--flare` / `--lip` 与 `notch.rs` 的 FLARE / LIP 同值；`--pw` 与 PANEL_W 同值。 */
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+
+:root {
+  --nw: 179px; --nh: 32px; --flare: 7px; --lip: 7px; --pw: 312px;
+  --island: #000; --fg: #f2f4f7; --muted: #8a929c; --track: rgba(255, 255, 255, .14);
+}
+html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  color: var(--fg); -webkit-user-select: none; user-select: none; cursor: default;
+}
+.nh-island {
+  position: absolute; top: 0; left: 50%; width: var(--nw); height: calc(var(--nh) + var(--lip));
+  margin-left: calc(var(--nw) / -2); background: var(--island); border-radius: 0 0 13px 13px;
+  transition: opacity .12s;
+}
+/* 刘海上沿两侧的内凹圆角 */
+.nh-island::before, .nh-island::after, .nh-panel::before, .nh-panel::after {
+  content: ""; position: absolute; top: 0; width: var(--flare); height: var(--flare);
+}
+.nh-island::before, .nh-panel::before { left: calc(var(--flare) * -1); background: radial-gradient(circle at 0 100%, transparent 6.5px, var(--island) 7px); }
+.nh-island::after, .nh-panel::after { right: calc(var(--flare) * -1); background: radial-gradient(circle at 100% 100%, transparent 6.5px, var(--island) 7px); }
+
+.nh-bars { position: absolute; left: 15px; right: 15px; bottom: 5px; height: 3px; display: flex; gap: 4px; }
+.nh-bars span { flex: 1; border-radius: 2px; background: var(--track); overflow: hidden; }
+.nh-bars i { display: block; height: 100%; border-radius: 2px; }
+.nh-bars span.stale i { opacity: .45; }
+
+.nh-panel {
+  position: absolute; top: 0; left: 50%; width: var(--pw); margin-left: calc(var(--pw) / -2);
+  box-sizing: border-box; background: var(--island); border-radius: 0 0 22px 22px;
+  padding: calc(var(--nh) + 10px) 16px 14px; font-size: 12px;
+  clip-path: inset(0 calc(50% - var(--nw) / 2) calc(100% - var(--nh) - var(--lip)) calc(50% - var(--nw) / 2) round 0 0 13px 13px);
+  opacity: 0; pointer-events: none;
+  transition: clip-path .34s cubic-bezier(.2, .8, .2, 1), opacity .14s ease;
+}
+.nh-open .nh-panel { clip-path: inset(0 0 0 0 round 0 0 22px 22px); opacity: 1; pointer-events: auto; cursor: pointer; }
+.nh-open .nh-island { opacity: 0; }
+
+.nh-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.nh-head b { font-size: 12.5px; font-weight: 600; }
+.nh-head span { color: var(--muted); font: 11px 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+.nh-empty { color: var(--muted); font-size: 11.5px; padding: 6px 0 2px; }
+.nh-rings { display: grid; gap: 6px; text-align: center; }
+.nh-ring { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.nh-ring.stale svg { opacity: .5; }
+.nh-ring .nm { font-size: 11px; white-space: nowrap; }
+.nh-ring .rs { font: 10px 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--muted); white-space: nowrap; }
+.nh-foot {
+  margin-top: 8px; padding: 7px 9px; border-radius: 8px; background: rgba(255, 255, 255, .06);
+  color: #d5dae1; font-size: 11.5px;
+}
+.nh-foot b { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--fg); font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .nh-panel { transition: opacity .15s; } }

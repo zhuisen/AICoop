@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         menubar: resolve(__dirname, 'menubar.html'),
+        notch: resolve(__dirname, 'notch.html'),
       },
     },
   },
