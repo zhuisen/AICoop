@@ -450,6 +450,9 @@ paths:
   **周来自 agy 自己的 `/usage --output-format json`**（B88，零 token、约 12s，`groups_from_usage_report`）：`agy-rotate quota` 给每个到期的号
   在**临时 HOME** 里跑（钥匙串查不到、不弹窗 ⇒ agy 读临时目录里我们写的 token 文件）⇒ 不碰真钥匙串、号与号可并行。
   归属用临时目录里 agy 日志的 `applyAuthResult:` 核对（唯一才认），对不上不用。读不到时沿用（桶级，最长 `CARRY_MAX_SECS`=24h）。
+  ★★★ **临时 HOME 下 agy 只能「读」不能「写」钥匙串**：写会弹「Keychain Not Found」（2026-10-18 用户截图）。agy 拿到快到期的 token 会自己刷新再写 ⇒
+  交给它的 token 必须剩 ≥ `USAGE_TOKEN_MIN`（20 分钟，实测 200s 必刷、1200s 不刷）。日志里见到「Failed to save … keyring」⇒ 停用一天（绊线）。
+  只验「读」不弹窗不能推出「写」也不弹 —— 两条路要分别验。
   ⚠️ **生产 host `cloudcode-pa` 的周别再用**（B83 用过）：2026-10-17 实测它是**上一个窗口**的旧账（剩 38.7% vs agy 报 98.1%），
   当天对得上只是因为还在同一个窗口里；两道闸（空账本签名 / 锚点 reset）都拦不住「新窗口还没锚点」。带这个来源的旧桶沿用时去掉数字。
   **不许把读不到的周默认成 100%**（用户提议过，已否：会把周只剩 40% 的号当满号挑走）。

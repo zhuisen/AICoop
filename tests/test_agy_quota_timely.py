@@ -107,7 +107,7 @@ class TheAccountsAreFetchedInParallel(unittest.TestCase):
             POOL=None,
         )
         self.cli.P = fake
-        self.cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": "tok-" + sub}}, "")
+        self.cli._refresh_one = lambda sub, a, pool, skew=120: ({"token": {"access_token": "tok-" + sub}}, "")
         self.cli._mark_live = lambda pool: None
         self.cli._log = lambda msg: None
         self.saved = saved

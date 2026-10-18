@@ -86,7 +86,7 @@ class _Base(unittest.TestCase):
         self.cli.time = self.clock
         self.cli._log = lambda m: None
         self.cli._mark_live = lambda pool: None
-        self.cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": sub}}, "")
+        self.cli._refresh_one = lambda sub, a, pool, skew=120: ({"token": {"access_token": sub}}, "")
 
     def tearDown(self):
         if self._old is None:

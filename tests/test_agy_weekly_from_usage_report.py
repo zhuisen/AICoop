@@ -167,7 +167,12 @@ class EachAccountGetsItsOwnReport(unittest.TestCase):
             _keyring_on=lambda: False,
             POOL=None,
         )
-        cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": "tok-" + sub}, "sub": sub}, "")
+        self.skews = {}
+
+        def refresh_one(sub, a, pool, skew=120):
+            self.skews[sub] = skew
+            return {"token": {"access_token": "tok-" + sub}, "sub": sub}, ""
+        cli._refresh_one = refresh_one
         cli._mark_live = lambda pool: "A"
         cli._log = lambda msg: None
         cli._note_pool_anchors = lambda *a, **k: None
@@ -219,6 +224,30 @@ class EachAccountGetsItsOwnReport(unittest.TestCase):
         accs = self.run_quota()
         self.assertEqual(accs["A"]["quota_summary"], CLOUD, "★ 报告失败不影响云端那份")
         self.assertEqual(accs["A"]["usage_report"]["err"], "超时（45s）")
+
+    def test_the_token_is_made_fresh_before_a_report(self):
+        """★★★ agy 拿到快到期的 token 会自己刷新、再写钥匙串 ⇒ 临时 HOME 下弹「Keychain Not Found」（2026-10-18 实测）。"""
+        self.run_quota()
+        self.assertEqual(self.skews, {"A": self.cli.USAGE_TOKEN_MIN, "B": self.cli.USAGE_TOKEN_MIN})
+        self.assertGreaterEqual(self.cli.USAGE_TOKEN_MIN, 15 * 60, "★ 余量太小，agy 仍可能自己刷新")
+
+    def test_no_report_keeps_the_normal_refresh_margin(self):
+        now = int(time.time())
+        for a in self.pool["accounts"].values():
+            a["usage_report"] = {"at": now - 60, "ok": True}
+        self.run_quota()
+        self.assertEqual(self.skews, {"A": 120, "B": 120}, "不跑报告就别多刷")
+
+    def test_a_keychain_write_stops_reports_for_a_day(self):
+        self.reply = lambda cred: (None, "a@x", self.cli.KEYRING_TRIP + "：Failed to save token to keyring")
+        self.run_quota()
+        self.assertEqual(len(self.ran), 1, "★★ 绊了一次就停，同一轮里别再起下一个 agy 去弹窗")
+        self.assertGreater(self.pool.get("usage_report_off_until", 0), time.time() + 23 * 3600)
+        self.ran.clear()
+        for a in self.pool["accounts"].values():
+            a.pop("usage_report", None)
+        self.run_quota()
+        self.assertEqual(self.ran, [], "★★ 停用期内不再跑")
 
     def test_a_fresh_report_is_not_rerun(self):
         now = int(time.time())
@@ -295,6 +324,15 @@ class TheReportRunsInAnIsolatedHome(unittest.TestCase):
         self.assertEqual(who, "x@y", "★ 身份从临时 HOME 的日志读")
         self.assertAlmostEqual(_bucket(groups, "gemini-weekly")["remainingFraction"], 0.98144, places=4)
         self.assertFalse(Path(seen["home"]).exists(), "★★ 临时目录里有 token，用完必须删")
+
+    def test_a_keychain_write_in_the_log_is_reported(self):
+        self.agy.write_text(FAKE_AGY.replace("__REPORT__", repr(REPORT)).replace(
+            'authMethod=consumer\\n"',
+            'authMethod=consumer\\nW1018 composite_token_storage.go:237] Failed to save token to keyring, falling back to file: exit status 154\\n"'))
+        groups, who, err = self.cli._usage_report({"email": "x@y", "token": {}})
+        self.assertIsNone(groups)
+        self.assertTrue(err.startswith(self.cli.KEYRING_TRIP), err)
+        self.assertIn("exit status 154", err)
 
     def test_identity_must_be_unique(self):
         d = Path(self.dir.name) / "log"

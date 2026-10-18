@@ -129,7 +129,7 @@ class TheQuotaCommandPersistsAndClearsIt(unittest.TestCase):
             load=lambda: pool, fetch_quota=lambda tok, anchor=None: result,
             quota_by_group=P.quota_by_group, carry_missing_groups=P.carry_missing_groups, save=lambda p: None,
             _lock=lambda path: open(os.devnull), POOL=None)
-        cli._refresh_one = lambda sub, a, pool: ({"token": {"access_token": "t"}}, "")
+        cli._refresh_one = lambda sub, a, pool, skew=120: ({"token": {"access_token": "t"}}, "")
         cli._mark_live = lambda pool: None
         cli._log = lambda msg: None
         with redirect_stdout(io.StringIO()):

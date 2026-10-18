@@ -809,7 +809,16 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 - 到期：没报过 / 距上次 ≥30 分钟 / 当值号在上次之后用过 agy（本机活动只花当值号的额度）。记录在 `a["usage_report"]`。
 - 实测 4 个号一起报：整轮 18.7s；峰值多 8 个进程、约 +1.0 GB 内存（4 个 agy + 4 个 language server，瞬时），跑完回到基线 3 个。
   ⚠️ app 的 `run_agy_rotate` 持 `AGY_LOCK`，这十几秒里点「切号」要排队；多数轮次没有到期的号，不跑。
-**闸** `tests/test_agy_weekly_from_usage_report.py`（20 条，19 个变异全红；隔离用假 agy 脚本验它看到的 HOME / token / 权限 / 删目录）；
+**第二版上线后弹「Keychain Not Found — A keychain cannot be found to store "antigravity"」**（用户 2026-10-18 截图）：
+- 我当时只验了「读」不弹窗（`security find-generic-password` 退出 44），没验「写」。
+- 受控实验：临时副本的到期改成现在+200s ⇒ agy 自己刷新（`token refreshed`）⇒ `Failed to save token to keyring, falling back to file: exit status 154`
+  ⇒ SecurityAgent 弹窗。同一个号到期改成现在+1200s ⇒ 不刷新、不写、不弹（各 1 次）。
+- 真因：我们只在剩 <120s 时刷新，交给 agy 的 token 可能只剩几分钟。按 4 个号、每号 30 分钟一次，约 5% 的运行落进 agy 的刷新区间。
+- 修：要跑报告的号先刷到剩 ≥20 分钟（`USAGE_TOKEN_MIN`）。绊线：临时日志里出现「Failed to save … keyring」⇒ 本轮不再起下一个、
+  `/usage` 报告停用 24 小时（`pool.usage_report_off_until`），`agy.log` 写一条红线说点 Cancel。
+- ⚠️ agy 另有一条写钥匙串的路（`Failed to save user tier to keyring`），本轮 6 次运行里没触发过，绊线同样认它。
+- ⚠️ 弹窗里的「Reset To Defaults」会重置钥匙串，**不要点**。
+**闸** `tests/test_agy_weekly_from_usage_report.py`（24 条，19 + 8 个变异全红；隔离用假 agy 脚本验它看到的 HOME / token / 权限 / 删目录 / 绊线）；
 `test_agy_gemini_weekly_from_prod.py` 随 B83 来源一起删除。
 
 ---

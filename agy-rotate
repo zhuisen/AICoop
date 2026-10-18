@@ -235,12 +235,12 @@ def _hint_next(pool):
         print("  池里现在 %d 个号。`agy-rotate quota` 看额度，`agy --as <label>` 指定号跑。" % n)
 
 
-def _refresh_one(sub, acc, pool):
-    """→ (cred, err)。必要时刷新并**写回池里的凭证**（不碰 agy 的登录态）。"""
+def _refresh_one(sub, acc, pool, skew=120):
+    """→ (cred, err)。剩不到 `skew` 秒就刷新并**写回池里的凭证**（不碰 agy 的登录态）。"""
     cred = P.read_cred(sub)
     if not cred:
         return None, "凭证文件不在（auth/agy/%s.json）" % sub
-    if not P.expired(cred):
+    if not P.expired(cred, skew=skew):
         return cred, ""
     fresh, err = P.refresh(cred, pool)
     if err:
@@ -362,21 +362,27 @@ def cmd_quota(args):
     #   池文件仍只在下面**统一落盘一次**（持锁），所以并行不改变落盘的形状。
     from concurrent.futures import ThreadPoolExecutor
 
-    report_on = _usage_report_on()
+    report_on = _usage_report_on() and float(pool.get("usage_report_off_until") or 0) <= time.time()
     pool.pop("usage_report", None)   # 池级那份是 B88 第一版（只报当值号）留下的，改成按号记在 `a["usage_report"]`
     activity = _agy_last_activity() if report_on else None
+    tripped = []
 
     def _fetch(item):
         sub, a = item
-        cred, err = _refresh_one(sub, a, pool)
+        due = report_on and _usage_report_due(a, sub == live_sub, activity)
+        # ★★ 要跑报告就先把 token 刷到够新：agy 拿到快到期的 token 会自己刷、再写钥匙串，
+        #   临时 HOME 里没有钥匙串 ⇒ 弹「Keychain Not Found」（2026-10-18 实测，见 `USAGE_TOKEN_MIN`）。
+        cred, err = _refresh_one(sub, a, pool, skew=USAGE_TOKEN_MIN if due else 120)
         if err:
             return sub, a, None, err, True
         groups, err = P.fetch_quota(cred["token"]["access_token"])
         _maybe_tier(a, cred)
         # ★★ B88：Gemini 周只有 agy 自己的 `/usage` 给得出。每个号在**自己的临时 HOME** 里跑
         #   （钥匙串查不到 ⇒ agy 读我们写的兜底文件），不碰真钥匙串，号与号之间不抢槽 ⇒ 可以并行。
-        if report_on and _usage_report_due(a, sub == live_sub, activity):
+        if due and not tripped:
             rgroups, ran_as, rerr = _usage_report(cred)
+            if rerr.startswith(KEYRING_TRIP):
+                tripped.append(a.get("label"))
             want = a.get("email")
             if not rerr and not (want and ran_as and ran_as.lower() == want.lower()):
                 rerr = "归属对不上（报告来自 %s，这个号是 %s）" % (ran_as or "认不出", want or "?")
@@ -388,6 +394,11 @@ def cmd_quota(args):
 
     with ThreadPoolExecutor(max_workers=max(1, min(8, len(accs)))) as ex:
         fetched = list(ex.map(_fetch, list(accs.items())))
+    if tripped:
+        # ★ 绊线：agy 在临时 HOME 里试过写钥匙串 ⇒ 用户屏幕上很可能已经弹过窗。停一天，别一直弹下去。
+        pool["usage_report_off_until"] = int(time.time()) + 24 * 3600
+        _log("usage ✗ agy 试图写钥匙串（%s）—— /usage 报告停用 24 小时；屏幕上若有「Keychain Not Found」请点 Cancel"
+             % "、".join(str(x) for x in tripped))
     for sub, a, groups, err, cred_failed in fetched:
         # ★ 错误的**结构**（reason / 验证链接）落兄弟键，成败都写 —— 成功时清掉，
         #   否则一个早已验证过的号会一直挂着「需验证」。
@@ -786,6 +797,12 @@ _LOG_SKEW = 5
 #:   云端摘要 2026-10-16 起不回 Gemini 组，生产 host 是上一个窗口的旧账（2026-10-17 实测剩 38.7% vs 真值 98.1%）。
 #:   报告零 token、约 12~14s；每个号在自己的临时 HOME 里跑（见 `_usage_report`）。
 USAGE_TIMEOUT = int(os.environ.get("AGY_USAGE_TIMEOUT", "45"))
+#: 跑报告前 token 至少还剩这么久，不够就先在池里刷新（零成本，Google 刷新不换 refresh_token）。
+#:   2026-10-18 实测：给 agy 一个 200s 后到期的 token ⇒ 它自己刷新、再写钥匙串失败（`exit status 154`）、
+#:   SecurityAgent 弹「Keychain Not Found」。报告只跑十几秒，留 20 分钟足够让 agy 不起刷新的念头。
+USAGE_TOKEN_MIN = 20 * 60
+#: 临时日志里出现这种行 = agy 试过写钥匙串（见 `_usage_report` 的绊线）。
+KEYRING_TRIP = "agy 试图写钥匙串"
 #: agy 没有新活动时，最多隔这么久再报一次（窗口会自己恢复 / 换窗口）。
 USAGE_MAX_AGE = int(os.environ.get("AGY_USAGE_MAX_AGE", str(30 * 60)))
 #: agy 的对话库目录：这里有新写入 ⇒ 额度可能动了 ⇒ 该报一次。`/usage` 自己不写这里（实测）。
@@ -832,13 +849,26 @@ def _identity_in(log_dir):
     return seen.pop() if len(seen) == 1 else None
 
 
+def _keyring_write_in(log_dir):
+    """临时 HOME 里 agy 日志有没有「往钥匙串存东西失败」的行（token / user tier）；有就返回那一行。"""
+    for f in Path(log_dir).glob("cli-*.log"):
+        try:
+            for ln in f.read_text(errors="replace").splitlines():
+                if "Failed to save" in ln and "keyring" in ln:
+                    return ln.split("] ", 1)[-1]
+        except OSError:
+            continue
+    return ""
+
+
 def _usage_report(cred):
     """以 `cred` 这个号起一次 `agy -p /usage --output-format json` -> (groups|None, 实际跑成的 email|None, 错误说明)。
 
     ★★ 凭证隔离（2026-10-17 实测）：`HOME` 指向临时目录 ⇒ macOS 钥匙串查不到（`security` 退出 44，不弹窗）
       ⇒ agy 回落到 `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`，也就是我们写进去的那份。
       实测 2 个号：日志 `applyAuthResult` 都是写进去的号；真钥匙串前后逐字相同；当值号读数与直接跑一致到每一位。
-    ★ `cred` 是刚刷新过的 ⇒ agy 在这十几秒里不会自己刷 token。临时目录里有 token，用完必删。
+    ★★ `cred` 必须还剩 ≥ `USAGE_TOKEN_MIN`：否则 agy 自己刷新后写钥匙串 ⇒ 弹窗（2026-10-18 实测）。
+      跑完扫临时日志，见过写钥匙串失败 ⇒ 返回 `KEYRING_TRIP` 开头的错误，调用方停用一天。临时目录里有 token，用完必删。
     """
     real = Path(os.environ.get("AGY_REAL", str(Path.home() / ".local" / "bin" / "agy")))
     if not real.exists():
@@ -861,6 +891,9 @@ def _usage_report(cred):
         except OSError as e:
             return None, None, "起不来：%s" % e
         who = _identity_in(d / "log")
+        trip = _keyring_write_in(d / "log")
+        if trip:
+            return None, who, "%s：%s" % (KEYRING_TRIP, trip[:120])
         if r.returncode != 0:
             return None, who, "agy 退出码 %d：%s" % (r.returncode, _err_gist(r.stderr))
         try:
