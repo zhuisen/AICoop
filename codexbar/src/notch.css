@@ -31,17 +31,19 @@ body {
      偏向下方、底边是椭圆；两层呼吸周期错开，不同起同落 —— 两个高斯叠起来的衰减比一个自然。
    ★ blur(σ) 要往外 ~2σ 才淡到看不见（2σ 处剩 2%），窗口透明边按这个留（GLOW_X / GLOW_Y），
      少了就被窗口裁出一圈直边 —— 第一版只按 1σ 留，就是作者看到的「框」。
+   ★ 用户 2026-10-18 嫌多家同跑时下沿的颜色看不清：贴边层往下多伸 8px（下沿露出 4→12px）、blur 7→5px，
+     散开层 blur 20→14px（邻色混得少）。配合 `notchGlow.ts` 每家先有一段纯色。
    只动透明度。实测单层光晕时刘海网页进程常驻约 0.28% CPU（细线那版 0.18%）。 */
 .nh-glow { position: absolute; inset: 0; pointer-events: none; }
 .nh-glow i { position: absolute; left: 50%; background: var(--glow); will-change: opacity; }
 .nh-glow .g1 {
   top: -6px; width: calc(var(--nw) + var(--flare) * 2 + 8px); margin-left: calc((var(--nw) + var(--flare) * 2 + 8px) / -2);
-  height: calc(var(--nh) + 10px); border-radius: 0 0 22px 22px; filter: blur(7px);
+  height: calc(var(--nh) + 18px); border-radius: 0 0 22px 22px; filter: blur(5px);
   animation: nh-breathe 6s ease-in-out infinite;
 }
 .nh-glow .g2 {
   top: -14px; width: calc(var(--nw) + var(--flare) * 2 + 28px); margin-left: calc((var(--nw) + var(--flare) * 2 + 28px) / -2);
-  height: calc(var(--nh) + 26px); border-radius: 0 0 50% 50% / 0 0 70% 70%; filter: blur(20px);
+  height: calc(var(--nh) + 26px); border-radius: 0 0 50% 50% / 0 0 70% 70%; filter: blur(14px);
   animation: nh-breathe-wide 7.4s ease-in-out -2.5s infinite;
 }
 @keyframes nh-breathe { 0%, 100% { opacity: .95; } 50% { opacity: .45; } }

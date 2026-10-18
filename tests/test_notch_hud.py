@@ -412,9 +412,12 @@ class ActivityGlow(unittest.TestCase):
         self.assertEqual(got, ["#2dd4bf"], "设置里停用的平台不亮")
 
     def test_several_platforms_share_the_ring_evenly(self):
+        """用户 2026-10-18：「底部的 2 个颜色我都看不清」—— 每家要先有一段纯色，不能整条都在渐变。"""
         bg = run_glow("m.glowBackground(['#a', '#b', '#c', '#d'])")
-        self.assertEqual(bg, "linear-gradient(90deg, #a 12.5%, #b 37.5%, #c 62.5%, #d 87.5%)", "每家占一段，色标在 (i+.5)/n")
-        self.assertEqual(run_glow("m.glowBackground(['#a', '#b'])"), "linear-gradient(90deg, #a 25.0%, #b 75.0%)")
+        self.assertEqual(bg, "linear-gradient(90deg, #a 0.0%, #a 20.0%, #b 30.0%, #b 45.0%, #c 55.0%, #c 70.0%, #d 80.0%, #d 100.0%)",
+                         "每家占 1/n 段，段中间 60% 纯色")
+        self.assertEqual(run_glow("m.glowBackground(['#a', '#b'])"),
+                         "linear-gradient(90deg, #a 0.0%, #a 40.0%, #b 60.0%, #b 100.0%)")
 
     def test_rust_and_ts_agree_on_the_payload(self):
         rs = _code(RS)
@@ -432,6 +435,16 @@ class ActivityGlow(unittest.TestCase):
         self.assertRegex(code, r'\["--glow" as string\]: glow', "算好的颜色没传给 --glow")
         self.assertRegex(code, r'lit\.length > 0 \? "nh-active" : "nh-quiet"', "没有平台在跑就必须是 nh-quiet（不亮）")
         self.assertNotIn("quotaGlow", code, "空闲不再显示额度色")
+
+    def test_the_bottom_edge_is_thick_enough_to_read(self):
+        """用户 2026-10-18：多家同跑时中间几家只露在刘海下沿。下沿至少露 12px，散开层 blur ≤ 14px（再大邻色就混成一片）。"""
+        css = _code(CSS)
+        g1 = re.search(r"(?m)^\.nh-glow \.g1 \{([^}]*)\}", css).group(1)
+        top = float(re.search(r"top: (-?[\d.]+)px", g1).group(1))
+        extra = float(re.search(r"height: calc\(var\(--nh\) \+ ([\d.]+)px\)", g1).group(1))
+        self.assertGreaterEqual(top + extra, 12, "贴边层伸出刘海下沿不足 12px")
+        g2 = re.search(r"(?m)^\.nh-glow \.g2 \{([^}]*)\}", css).group(1)
+        self.assertLessEqual(float(re.search(r"blur\(([\d.]+)px\)", g2).group(1)), 14, "散开层 blur 太大，邻色会混在一起")
 
     def test_glow_breathes_faster_while_working(self):
         css = _code(CSS)

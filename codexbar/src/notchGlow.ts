@@ -18,10 +18,20 @@ export function glowColors(act: NotchActivity, isOff: (k: string) => boolean,
   return GLOW_ORDER.filter((k) => act[k] && !isOff(k)).map((k) => colorOf(k));
 }
 
-/** 颜色 → 光晕的背景。一家 = 纯色；多家 = 横向渐变，第 i 家的色标在 (i+.5)/n（每家占一段）。没有 = 空串。 */
+/** 每家在自己那一段里保持纯色的比例；其余 40% 留给与邻家之间的渐变。 */
+export const GLOW_HOLD = 0.6;
+
+/**
+ * 颜色 → 光晕的背景。一家 = 纯色；多家 = 横向渐变，每家占 1/n 段，段中间 `GLOW_HOLD` 是纯色。没有 = 空串。
+ * ★ 用户 2026-10-18：「之前底部的 2 个颜色我都看不清」。原来色标只在每段中点 (i+.5)/n，整条都在渐变，
+ *   四家时中间两家只在下沿露一条、又和邻色混在一起。保留渐变的样子，只让每家先有一段纯色。
+ */
 export function glowBackground(colors: string[]): string {
   if (colors.length === 0) return "";
   if (colors.length === 1) return colors[0];
-  const n = colors.length;
-  return `linear-gradient(90deg, ${colors.map((c, i) => `${c} ${(((i + 0.5) / n) * 100).toFixed(1)}%`).join(", ")})`;
+  const n = colors.length, w = 100 / n, m = (w * (1 - GLOW_HOLD)) / 2;
+  return `linear-gradient(90deg, ${colors.map((c, i) => {
+    const from = i === 0 ? 0 : i * w + m, to = i === n - 1 ? 100 : (i + 1) * w - m;
+    return `${c} ${from.toFixed(1)}%, ${c} ${to.toFixed(1)}%`;
+  }).join(", ")})`;
 }

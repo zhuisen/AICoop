@@ -779,6 +779,13 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
    全扫一遍约 50 ms。按每 2s 一次推算，常驻 CPU 约 2–3%（**这是推算，没实测**）。
    现在线程每 2s 只读 4 个原子量。只认内容写入（Create / Modify Data），读文件和改元数据不算。
 
+**同日补一刀：多家同跑时下沿看不清。** 用户看四家同跑的截图：「之前底部的 2 个颜色，我都看不清晰」。
+原因：渐变横向铺，两翼只露最左、最右两家；中间几家只剩下沿 4px，色标又只在每段中点，整条都在渐变，
+再被 20px 的散开层 blur 和邻色混成一片。给过 demo（硬分段 / 分段加暗缝 / 轮播），用户要「按现状去改明显点」。
+改法：每家先有 60% 纯色段（`GLOW_HOLD`）再渐变；贴边层下沿 4→12px、blur 7→5px；散开层 blur 20→14px。
+窗口不用改（`GLOW_Y` 60 仍装得下 2σ）。闸新增 1 条，6 个变异全部符合预期（`scratch/mutate_notch_glow_hold_20261018.py`）。
+demo 留档 `~/Downloads/codexbar_notch_glow_multi_demo_20261018.html`。
+
 **判据**（每家都看自己的会话文件，45s 内写过 = 在跑）：Codex `sessions/**/rollout-*.jsonl` · Claude `projects/**/*.jsonl`
 · agy `conversations/*.db-wal`（或 `.db`）· grok `~/.grok/**/updates.jsonl`。
 
