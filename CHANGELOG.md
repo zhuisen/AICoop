@@ -746,7 +746,11 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
-## 未发版（main）— 2026-10-17
+## v1.11.0 — 2026-10-18
+
+**新：刘海光晕（四家 AI 谁在跑亮谁的颜色）。修：agy Gemini 周额度不更新；隔离 HOME 下跑测试被钥匙串弹窗卡住。**
+
+v1.10.4 之后的一批（B86 / B88 / B89）。
 
 ### 新
 - **刘海光晕（macOS，默认关，设置页「刘海额度条」开）**：Codex / Claude Code / agy / grok 谁在跑，刘海四周就亮谁的颜色；
@@ -760,7 +764,7 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---
 
-### B89 · 刘海光晕收回底座：四家平台色、空闲不亮、FSEvents 代替轮询 — 2026-10-18（未发版）
+### B89 · 刘海光晕收回底座：四家平台色、空闲不亮、FSEvents 代替轮询 — 2026-10-18 ✅（v1.11.0）
 
 用户：「还要新增刘海屏的光晕效果，这是为了适配 macbook 设备的开关设计，实现逻辑按 samchen 的方式」。
 同日上午刚把刘海条移出 main（B87 末尾）；这次决定收回底座。
@@ -800,7 +804,7 @@ Rust `Activity` 字段 == TS `NotchActivity` 字段 == `GLOW_ORDER`），**12 �
 - Claude Code 空闲时会不会写 jsonl（例如会话收尾写摘要）没观测。如果会写，光晕会在停下后多亮最多 45s。
 - 本会话本身就是 Claude Code，所以开发时 Claude 段会一直亮。这符合判据，不是误报。
 
-### B88 · agy Gemini 周额度停在上一个窗口 —— 生产 host 是旧账，当值号改读 agy `/usage` — 2026-10-17 ✅（未发版）
+### B88 · agy Gemini 周额度停在上一个窗口 —— 生产 host 是旧账，当值号改读 agy `/usage` — 2026-10-17 ✅（v1.11.0）
 
 用户：「现在 gemini 的额度没有更新，需要你看看 github 大家是做什么的？怎么做的？」
 **现场（22:24–22:39 SGT，当值号，零计费，只读）**：
@@ -909,7 +913,7 @@ Rust `Activity` 字段 == TS `NotchActivity` 字段 == `GLOW_ORDER`），**12 �
   混合 DPI 坐标减半、收起态吞点击 / 抢焦点、开关竞态、window-state 记住展开尺寸、0.x% 显示 0 却是琥珀、
   权限过宽）。设置页那一行现在会说「现在没有检测到刘海屏」。见 B87。
 
-### B86 · 假 HOME 跑测试 ⇒ Headless Chrome 弹「Keychain Not Found」模态框、测试无限阻塞 — 2026-10-17 ✅（未发版）
+### B86 · 假 HOME 跑测试 ⇒ Headless Chrome 弹「Keychain Not Found」模态框、测试无限阻塞 — 2026-10-17 ✅（v1.11.0）
 
 **现场**（用户在另一个会话里抓到进程链）：v1.10.4 发版时，为了模拟干净的 CI runner，我跑了
 `T=$(mktemp -d); HOME=$T python3 -m unittest discover -s tests -p 'test_*.py'`。07:33:12 跑到
