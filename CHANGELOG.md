@@ -746,6 +746,175 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## v1.12.0-beta.1 — 2026-10-19（beta：仅 git tag 与 GitHub prerelease，清单版本 1.12.0）
+
+**重构：照交接包 2026-10-19 1:1 复刻 —— 托盘实时 t/s 胶囊、悬停面板、「请求」页、菜单栏弹窗 4f、刘海卡片 4e、工作台总览 5b、设置三开关。**
+beta 发给刘海 Mac 用户（samchen202201-cmd）验刘海与悬停；Windows 已取消（只出 macOS）。检查点在 `scratch/redesign_20261019/checkpoints/`（`00_baseline` → `06_after_F5`）。见 B90。
+
+### B90 · 交接包 2026-10-19 1:1 复刻（数据层 + 六块界面 + 设置）— 2026-10-19 ⏳ 待用户真机看 + 拍板 3 处总览偏离
+
+用户原话（交接包附言）：「补充一个刘海版的功能，是做进设置的开关按钮的。」
+设计正本 `~/Downloads/codexbar_design_handoff_20261019/`（README / DECISIONS / page1–5，只读）；总计划与共享契约
+`scratch/redesign_20261019/PLAN.md`。用户睡着时由协调者分 8 片顺序做完（A1 A2 → R F1 → F2 → F3 → F4 → F5 → F6），**不咨询用户**；
+交接包与实测事实冲突时事实赢，全部写进下面「偏离」。
+
+#### 数据层
+- **`traffic/requests.py`（A1）· 逐请求账本**：四家每条模型响应一行（用量 · 首字 · 生成 · t/s · 账号 · 会话），stdlib、不联网、
+  不读凭证、不读正文（落盘只经 `_whitelist`）。`--json` 给请求页（最近 2 个本地自然日），`--live` 给托盘 / 悬停面板 / 刘海
+  （原子写 `requests-ledger/.live.json`）。增量游标 `(inode, offset, 锚点哈希)`、半行不消费、按 `key` 去重、新值里的 null 不覆盖旧值、
+  读失败保留旧值 + `ok:false/error/stale_since`（§7.0b）。
+  - **t/s 口径**（正本 `.claude/rules/traffic.md`「请求账本 / 实时 t/s」）：Codex = 可见输出 ÷（响应结束 − 首个推理项写盘），
+    推理 token 留在分子会虚高（中位 157 vs 102）；Claude = span `output ÷ (duration − ttft)`，分子含 thinking（thinking > 50% 的 88 条中位 98，
+    无 thinking 的 93 条 131）；生成段 < 0.3 s 退回 `output ÷ duration` 标 `est`（528 条 span 里 118 条 ≤ 300 ms，直除最高 75,875 t/s）；
+    任何分母 < 0.3 s ⇒ `null`（28 ms / 516 token ⇒ 18,429 t/s 那种）；`avg_tps` 取中位数。
+  - **实测分布**（2026-10-19 08:30 一次 `--json --days 2`，n=3985，单次观测）：实测部分（`est=false`）p10 / 中位 / p90 ——
+    Codex 49.0 / 95.1 / 202.4（95 条）· Claude 82.8 / 111.8 / 149.7（1494）· Gemini 7.1 / 29.0 / 143.8（33）· Grok 54.1（1）。
+    Claude 估值 2286/3780（OTel 试运行 10-18 22:40 才开始）。今天 / 昨天 `avg_tps` 99.5 / 53.0 —— 混合比例变了还是真变慢，**这次分不出来**。
+  - **账号对上率**（同一次）：Codex 124/124 按 `response_id` 对上（0 条直连）；Gemini 77/80（3 条 null）；Claude 恒「本机」、Grok 恒「单号」。
+- **`traffic/statusline_quota.py`（A2）· 状态栏额度转写**：用户 2026-10-19 定稿的「Claude / agy 实时额度走状态栏转写落盘」。
+  `--ingest claude|agy` 从 stdin 只取白名单字段、原子合并写 `traffic/statusline-ledger/<platform>.json`，缺字段沿用旧值，任何异常静默退出 0
+  （绝不影响状态栏）；`--read` 给 Rust `read_statusline_quota`（Claude 没有转写时退回 `plan-usage-history.json`，只有已用%）。
+  接线改了两份用户自己的脚本（`~/.claude/statusline-command.sh` · `~/Projects/tools/agy-status/statusline.sh`），原件备份在
+  `~/archive/claude-config/statusline-quota-20261019/`，比对脚本 `scratch/redesign_20261019/a2/compare_statusline.py`（改前改后 stdout 逐字节比）。
+  ⚠️ agy 的转写必须做归属核对才用（同 B55），payload 不带账号身份。
+- **OTel 试运行**：`~/.claude/settings.json` 加 12 个 OTel 变量（备份 `~/archive/claude-config/settings-otel-20261018/`），常驻
+  `com.doushutangmu.claude-otel` → `traffic/otel_receiver.py` → `traffic/otel-ledger/`。**刻意不在** `install-launchd.sh` / `install-windows.ps1` /
+  `connector.py::RUNTIME_FILES` / `bundle.resources`：它改的是用户的 Claude 配置，不是装 app 就该发生的事；`requests.py` 只读它的账本，没有时 Claude 全走估值。
+- 运行时文件（B77）：`traffic/requests.py`、`traffic/statusline_quota.py`，以及 `requests.py` 同目录 import 的 `scan.py` / `rotation.py` / `agy_rotation.py`
+  都在 `RUNTIME_FILES` 与 `bundle.resources` 里；Rust 经 `script_dir()` 找脚本、`spawn_cmd` 带 `CODEX_ROTATE_STORE`，账本落在数据目录不落进 app 包。
+  三个新账本目录 gitignored。
+
+#### 界面
+- **R · Rust 接线**：`activity.rs`（从 `notch.rs` 抽出的 FSEvents 活动检测，刘海与托盘共用）· `tray_pill.rs`（托盘胶囊 NSImage，page1 定稿 D）·
+  `tps_hover.rs` + `codexbar/tps-hover.html`（悬停窗口 `tpshover`，300 宽、不抢焦点）；命令 `read_requests` / `read_live` / `read_statusline_quota` /
+  `set_tps_tray`，事件 `tps-live`；导航 `open-main-page` 由 Rust 转成只发主窗口的 `main-open-page`（发送方全局 emit 时主窗口自己也会收到一份，
+  同名转发 = 跳两回）。
+- **F1 · 「请求」页**（侧栏第 6 项）：最近 2 天逐条请求、详情栏 300、读失败保留旧列表 55% 不透明 + 红条。平台 logo 拷自交接包（MIT，LobeHub），`PlatformLogo.tsx`。
+- **F2 · 悬停面板**（page2）：logo 从胶囊飞进面板、多会话行停 250 ms 展开、离开收起。
+- **F3 · 菜单栏弹窗 4f**：头部 ⚡ · N 在跑 / 空闲 · 隐私 · 设置；在跑条默认折叠；四家芯片；账号行 42 高、悬停最右列 0→46 长出「切换」；
+  点行内容跳工作台总览对应档；探针按住 0.6 s；日夜切换移出。
+- **F4 · 刘海卡片 4e**：光晕回到原版数值；④ 悬浮卡片 + 光桥；Tab 在跑 / 今日 + 额度块；<10% 告警。
+- **F5 · 工作台总览 5b**：四档（Codex / Claude / Gemini / Grok）、卡片定高 148、悬停底栏原位换成操作 + ⋯ 菜单、接力条、三栏头部、排序菜单。
+- **F6 · 设置三开关**：
+  - 「**外观**」（深色 / 浅色）：日夜切换从主窗口标题栏移进设置（交接包 page5 标题栏只留隐私眼睛）。写 `codexbar_theme` + 广播 `theme-changed`，
+    主窗口 / 菜单栏弹窗 / 悬停面板一起变；刘海卡片恒深色。⚠️ 行为变化：主窗口主题此前只活在 state 里、每次启动回深色，`codexbar_theme` 是菜单栏自己那份；
+    现在合成一份 ⇒ 曾在菜单栏选过浅色的用户，升级后主窗口也是浅色。
+  - 「**刘海屏版本**」：取代「刘海额度条」那一行，说明改成新功能；**存储键 `notchHud` 与命令 `set_notch_hud` 沿用**（改名 = 老用户的「开」丢失）；
+    「开着但没显示」的原因改成单独第二行（`notchRowWarn`），因为设置页文字不折行，跟在说明末尾会第一个被省略。
+  - 「**在跑时显示 t/s**」：默认开，调 `set_tps_tray(enabled)`，存 `codexbar_settings.tpsTray`。★ Rust 的 `tray_pill::ENABLED` 默认 **false**，
+    所以默认开只能靠 `App.tsx` 启动重发（同 `set_tray_style`）—— F6 之前**没有任何前端调用 `set_tps_tray`**，即胶囊从未在真机上被打开过。
+  - harness 的 `?theme=light` 改成在 bundle 前写 `codexbar_theme`（原来点标题栏的太阳，那个按钮已不在）。
+  - 闸 `tests/test_settings_toggles.py`（15 条：静态 10 + 真 bundle 端到端 5），`tools/mutate.py` 变异 19 个全部符合预期
+    （`scratch/redesign_20261019/f6/mutate_f6.py`；含「启动不重发」「默认值盖掉存值」「不广播」「改键名」等删除方向）。
+
+#### 偏离交接包（逐条照 PLAN §4，保留数字）
+- **Claude「可切号、可探针」**：本机只有 1 个 Claude 号，仓库**没有** Claude 账号池后端（切号要写 Claude Code 凭证，前一轮已定不碰）。Claude 档 / 芯片 / 行都接了，
+  但「切换」「探针」对 Claude 不出按钮；号数显示真实值（1）。
+- **F2**：① 点击胶囊不「长成」352 弹窗 —— 两个独立窗口没法变形；Rust 收到点击发 `tpshover-close` reason=`click`，前端整块 120 ms 淡出（Rust 160 ms 后藏窗）。
+  ② 停下那一行 logo 不降透明度 —— HoverSpec E 画板把整行降到 .4，与全局规则「logo 任何状态都不变暗」冲突，按全局规则只降名字 / ×N / t/s / Token / 会话行。
+  ③ 名字写「Grok」（画板写 `grok`）。④ Token 照规则格式化（画板示意 `0.6M`，按规则写 600k）。⑤ 浅色行悬停底色取 `rgba(0,0,0,.04)`；停下收起的曲线取折叠那条（300 ms 弹簧、延后 100 ms）。
+  ⑥ 飞回 = 440 ms 弹簧、延后 60 + 25·k，4 家时最后一个落地 ≈575 ms，而 Rust 520 ms 藏窗 ⇒ 最后约 1% 位移（<1 px）被截；托盘 logo 500 ms 画回；Rust `close()` 一开始就
+  `set_hide_logos(false)`，所以前端飞回开始时再设一次 true、飞完设 false。⑦ 外壳高度不显式过渡，由行高与会话区 `grid-template-rows` 带动；长高立刻报、变矮等 400 ms 再报；
+  4 家全折叠实高 224（画板注 ≈222）。⑧ `tpshover-open` payload 为 null ⇒ 不飞，面板放在 (40, 30)，整块淡入。
+- **F4**：① 光晕回到「加强前的原版」—— 维护者 2026-10-18 为「底部 2 个颜色看不清」改的纯色段 + 下沿 12 / blur 5 + 散开 blur 14，被交接包 DECISIONS 定稿推翻并列进否决清单；
+  现为色标在段中点平滑渐变、贴边层下沿 10 / blur 7 / 2.4 s、散开层 blur 20 / .7 / 3.1 s。② 在跑 Tab 底栏「今日 N」取今日快照（`todayView`），不取账本 `live.today.tokens` ——
+  同一张卡里两个「今日」不能是两个数（harness 夹具下 24M vs 415.0M）；⇒ 悬停面板底栏与刘海底栏的 Token 可能不同，**已知未统一**。③ 今日 Tab 最多 `todayRowCap` 家
+  （本机 7 家时 C 场景 + 今日 Tab 会到 617 > 560），会话最多 6 个；号名列按最长号名估宽、上限 64。④ Grok logo 来向取 Codex 的镜像（右翼 `nw + 4, 10`）；数据 opacity 延后 560 + 40i、
+  位移 540 + 40i（README 写 540、DECISIONS 写 560，原型两个都用）。⑤ 告警只染「在跑」的那一段；告警行红点照原型放行首（DECISIONS 写名字后）。⑥ 减弱动态效果：光桥恒 `scaleX(1)`
+  只淡入淡出、其余 150 ms 淡入淡出、面积图不揭开、不飞 logo、告警常亮。⑦ 刘海不复用带定时器的 hook（闸 `PushNotPoll`）；Claude 额度 / 今日快照展开时补读、60 s 节流
+  ⇒ 第一次展开 Claude 那行约百毫秒写 —。涨的环比徽标取 `#3ecf8e` / `rgba(62,207,142,.12)`。⑧ 行与悬停面板共用纯逻辑不共用组件（4e 行 32 高 vs page2 38 高）。
+- **F5**：① 分档按内容区宽（≥1100 四列、≥900 三列、否则两列），原型的 1200 / 1000 / 860 是窗口宽、侧栏 52 ⇒ 内容区 1108 / 908 / 768。② 默认视图里接力条大半是断档：
+  真机配速一窗约 4 分钟（`_eta5h`），4 个号合计 16 分钟画在 4 小时轴上每段 6–8 px，写不下号名；`?relay=long`（每窗 48 分钟）下才写得出。③ Gemini 接力用钟点分钟（含空闲）。
+  ④ Claude 没有接力条 / 切换列 / 切号 / 探针；Grok 5h 槽写 `—` 占位，**推翻 09-15「Grok 只画自己有的窗口」**。⑤ 探针一律按住 0.6 s；codex 卡「刷新」= 刷新全池。
+  ⑥ 失效号单独一条折叠条。⑦ 排序菜单「自动 / 自定义」（`codexbar_ov_sort`），顺带修了只读 `pick_order` 的错（现读 `card_order ?? pick_order`）。⑧ 旧动作条 `CardActionBar` 删除。
+  ⑨ **⚠️ 重置卡的使用入口从底栏角标移到 ⋯「使用重置卡（N 张）」**：用户 2026-10-01 定的是点角标；新底栏悬停时整条换成操作，角标被盖住、点不到（Playwright 真鼠标实测）。**需用户确认。**
+  ⑩ 状态优先级 在用 > 已停用。⑪ ⋯ 菜单空间不够向上开。⑫ 浅色按同一套规则推出；`--ovWarnTx` #8a5a0e、`--ovNum` #0e9f8e → #0a7a6e（原值浅色卡上 3.42 < 4.5）。
+  ⑬ 平台色一律走 `colorOf`。⑭ App 只听 `main-open-page`，`navigate-overview` 删除。⑮ 新鲜度行收进刷新按钮悬浮与 ⋯；「检查 token」同样收进 ⋯。
+  ⑯ 窗口行配色换成 5h 青 / 周绿 / <10% 橙红，**<50% 琥珀那档没了**。⑰ **⚠️ 860×560 只露一排完整卡片**：用户 2026-10-14 要「最小尺寸下卡片缩小、露出两排」，交接包要定高 148；
+  卡片区可见 270 px，两排要 308 px，第二排露 110/148（74%）。按交接包。**需用户确认。** ⑱ **⚠️ 三栏高度在 880 宽是 132 px**：用户 2026-09-21 定「不能比旧 banner 高」（880 宽 128）；
+  1300 宽 101 px。**需用户确认。** ⑲ 保留了交接包没画、用户以前定过的「本周≈2h26m」「5h 一窗≈4m」、平台档悬浮的轮换说明与 ⌘N、「定时探针」悬浮。
+  ⑳ 动作弹层的「5 秒到点收回 + 倒计时细线」随弹层删除；「收回不许一帧就没、收回途中点不中」改守悬停底栏。
+- **F6**：① 设置页三行文字一律不折行、放不下省略号、全文进悬浮（交接包全局规则）；其余旧设置行未动，仍是折行说明（任务限定「其余现有项不动」）。
+  ② 交接包「设置页画板待补」—— 没有设置页设计稿，三行照现有设置行的样式做。③ 托盘空闲标题的额度色（Rust `rem_rgb`，<50 琥珀）没改：交接包 page1 只画了胶囊。
+
+#### 被推翻 / 替换的旧闸
+- `test_quota_windows`：`WindowColourRule` / `NumberAndBarNeverDisagree`（<50 琥珀规则）→ `OverviewCardsShareOneRule`。
+- `test_menubar_follows_proxy`：`TheActionPopoverClosesItselfOnTime` / `TheActionPopoverLeavesTheWayItCame`（读已删的 `CARD_ACTIONS_LIFE_MS`）→ `TheHoverActionsLeaveTheWayTheyCame`（真鼠标 + 真时间，变异 3/3）。
+- `test_card_action_bar`：`TheTranslucentBarStaysReadable`（半透明动作条）随 `CardActionBar` 删除。
+- `test_overview_one_row_header`：`TheDecisionIsStable` 随 `useOneRowHeader` 删除；`test_resize_less_work` 里依赖 compact / RunwayHero 的 3 条删除。
+- `test_one_screen_layout::test_overview_cards_shrink_only_in_small_windows` → `test_overview_cards_stay_148_and_the_box_scrolls`。
+- `test_runway_hero` 4 条（旧续航条）、`test_overview_sections` 5 条（旧三档卡片结构）、`test_card_uniformity` 入场动画 2 条、`test_narrow_window_nowrap::test_header_and_hero_containers_allow_wrapping`、
+  `test_menubar_platform_chips::test_one_mask_image_covers_both_states`、`test_gemini_tab_matches_codex::test_the_card_can_be_selected` 随旧组件删除。
+- `test_notch_hud`：`test_several_platforms_share_the_ring_evenly` / `test_the_bottom_edge_is_thick_enough_to_read` / `test_glow_breathes_faster_while_working` / `test_glow_hides_when_open_or_idle` /
+  `test_panel_width_is_the_same_in_three_places` / `test_runs_only_while_the_window_exists` → `test_glow_is_the_original_values` 等 4e 闸 + `tests/test_notch_card.py`；
+  设置行改名后 `TheSettingsRowTellsTheTruth` 跟着改判 `notchRowWarn`。
+- `test_missing_window_says_so` 改判「Grok 5h 槽写 —」（推翻 09-15）；`test_delete_confirm_one_row` 换载体（⋯ 菜单里原位换一项），判据不变。
+- 新闸：`test_requests_ledger` · `test_statusline_quota` · `test_otel_receiver` · `test_requests_page` · `test_tps_hover` · `test_menubar_4f` · `test_notch_card` · `test_overview_5b` · `test_settings_toggles`。
+
+#### 已知未验
+- **真 WKWebView 一个像素都没看过**：全部界面只在 Chrome headless harness 里量过（TCC 挡截屏）。
+- **托盘胶囊 NSImage 无像素证据**（托盘不在 harness 里）；空闲 ↔ 胶囊的 3 s 过渡、logo 飞出飞回与托盘重画的时序只在代码层对过。
+- **刘海卡片零真机**：带刘海的 Mac 上的位置 / 全屏 Space / 吸附 D / 光桥都没看过（同 B89 PR #1 待作者验的三项）。
+- **后台窗口的 mouseover**：悬停面板与刘海卡片的「停 250 ms 展开会话」用网页 `mouseenter`；CodexBar 是 Accessory 应用，后台窗口里 WKWebView 收不收得到鼠标移动**没验过**。
+- 悬停面板与刘海底栏「今日」Token 来源不同（见 F4 ②），未统一；请求页在 860 宽下横滚（列宽合计超出），未处理。
+- Claude 估值占比高（OTel 试运行前的请求），两天均速对比不可下结论。
+
+**用户真机首看后的细节修改（2026-10-19 上午）**：用户确认三处总览偏离「按交接包做没问题」。
+- **托盘 logo 飞回后不回来**（用户截图：悬停结束胶囊只剩 `125 t/s`）：`tray_pill::draw_now` 按「帧是否相同」去重，而帧里不含
+  「logo 藏没藏」⇒ `set_hide_logos(false)` 请求的那次重画被当成「帧没变」跳过，直到 t/s 变了才画回。去重键加上 `last_hide`。
+  同时 `tps_hover::close` 把「放回 logo」推迟到关闭动画走完（原来一关就放回，飞回途中能看到两个 logo）。⚠️ 托盘像素仍无证据。
+- **Claude 5h 写「—」**：重置点之后状态栏又拍过一份读数、却没再报 5h 窗口（实测：重置后 Claude Code 不带 `five_hour`，下一次请求后才带回 `used 0`）
+  ⇒ 写 `100% · 未启动`，同其他 AI。重置后没有任何新读数 ⇒ 仍是「—」（证不了，不编满额）。`mbLogic.ts::claudeWin`，三处界面（菜单栏 / 刘海 / 总览卡）。
+- **悬停面板左边空**：没有一行是多会话时不留箭头列，logo 与底栏「今日」左对齐（`LOGO_X_NOCHEV = 15`）。刘海卡片「在跑」Tab 同步改（用户：「刘海也要改」）：logo 与下块额度行对齐（`ROW_LOGO_X_NOCHEV = 22`），飞入落点跟着变。菜单栏在跑条本来就没有箭头列。
+- **停手后托盘一直钉着 `92 t/s`，不淡出、不回空闲**（用户截图，Claude 停了几分钟）：实时循环在 FSEvents 判「全停」的那一 tick
+  只补跑**一次** `--live` 就停；而 FSEvents 侧按整秒判（`now − t < 45`）、`requests.py` 按 mtime 小数秒判（`mt ≥ now − 45`），
+  那一次 Python 常常还差零点几秒、仍报 `running: true` ⇒「停了」永远没落盘，40% → 3 s 的淡出也就从没触发。同形的另一条：那一 tick 撞上
+  `LIVE_BUSY` 被跳过。修：`activity.rs::LIVE_ANY` —— 最近一份 live 结果还说在跑就继续每 2 s 跑，结果自己说停了再补最后一次（`loop_step`，
+  变异：去掉这一项即红）。⚠️ 调用点把 `LIVE_ANY` 传进 `loop_step` 那一行没有闸。
+- **托盘 1 家时 logo 贴着数字**：logo 与数字之间 3 → 5（`LOGO_GAP`）；1 家宽 ≈70 → 72、带会话数 ≈94 → 96，2 家起 W=96 不变。
+- **「AI 用量」的 Claude 改按实际 API 调用算**（用户：「都按实际 api 调用算……不做提示和说明」）：`requests.py` 今天 Claude
+  2057 次 / 539.85M，`scan.py` 只有 1513 次 / 398.46M。多出的 547 次不在任何 transcript 里，只在 OTel 账本 ——
+  `agent_summary` 511 次（139.6M）、`web_fetch_apply` 17、`web_search_tool` 14、`compact` 5：Claude Code 的后台调用。
+  `scan.py` 的 Claude 源加 `extra` 钩子 `_claude_otel_rows`：OTel 账本里 `request_id` 不在 transcript 里的 span 并进按天 / 小时 / 模型的桶；
+  两边都有的以 transcript 为准。transcript row 第 10 位带 `requestId`（随缓存走，缓存命中的文件也能对账），`PARSER_V` 12 → 13。
+  账本路径与 `requests.py` 同一个环境变量 / 同一套 `<store>` 规则（含 `.dmg` 复制运行时）。对账（10:5x，n=1）：两边都是 **2138 次**，
+  token 差 −987（3 条 transcript 的 `output_tokens` 停在流式中途值 5 / 8，span 是 511 / 342；按口径以 transcript 为准）。
+  缓存 21.8 → 27.3 MB，热路径 1.01 s。OTel 没有 1h 缓存写拆分，这部分按 5m 价计（偏低）。界面不加任何说明。
+  闸 `tests/test_scan_claude_otel.py`（15 条，`tools/mutate.py` 17 个变异全部如期，含「整段删掉并入」与「只在缓存命中时丢 requestId」）。
+- **「谁在跑」改用各家自己写的轮次结束标记**（用户：停手后「退出得有点慢」；拍板「改用轮次结束标记」）。旧判据「45 s 内写过会话文件」
+  停手后要等 45 s + 3 s 保持 ≈ 48 s 才淡出，而 transcript 一轮之内的静默间隔（n=95684）p50 0.1 s · p90 10 s · **p99 99 s** · p99.9 600 s
+  ⇒ 长工具调用 / 子 agent / 等权限时中途又会误判停。这是 §7.1「先演绎后归纳」那一类：轮次结束这件事 CLI 自己写在盘上，我们一直在用
+  「多久没写」去归纳它。现在 `requests.py` 每个会话判「最后一个轮次事件是开始」且 10 分钟兜底窗口内写过（`FALLBACK_SECS`，只兜崩溃 /
+  被杀 / 没写结束标记），状态随游标保存（`CUR_V` 1 → 2，旧游标重解一次）。各家标记（本机近 7–10 天实测，只看结构字段）：
+  Codex `task_complete` / `turn_aborted`（Esc，44/44 `reason: interrupted`；turn_id 对得上才收）· Claude `system/turn_duration`（2135 轮）、
+  中断行带 `interruptedMessageId` 键（44 次中 39 次有；5 次是旧版，靠兜底）、assistant `end_turn`（子 agent 只有这一条）；
+  `stop_hook_summary` **不收**（2140 次里 32 次后面还跟着工具调用）· agy 最后一步 `(15, 3)` 或 status 5/6（近 150 库 139 个以 (15,3) 收尾）·
+  grok `turn_completed`（end_turn 122 / cancelled 5 / error 4）。刘海光晕改跟 live（`activity.rs::glow`：live 可用就用 live，失败 / 卡住 > 10 s
+  才退回 FSEvents），live 一回来立刻推，与托盘同时熄；FSEvents 只当「叫醒」。订阅那一刻先跑一次 live。
+  真机演练（n=1，回放本会话 transcript）：协调者 10:42:02.477 写 `end_turn` 即判收（旧规则 10:42:47.6 + 3 s）；另一个子 agent 10:55:43 起静默
+  4 分钟以上仍在轮次中，旧规则 10:56:28 就会判停。闸 `tests/test_requests_ledger.py::TurnEndMarkers`（14 条，`tools/mutate.py` 17 个变异全部如期，
+  含「删掉结束标记判断」）· `activity.rs` cargo 单测 3 条新（手工变异 5 个全红）· `test_notch_hud.py` 接线 1 条（变异 4 个全红）。
+  ⚠️ 未部署、未在真 app 里看淡出时刻；agy「模型步完成 → 工具步插入」之间有没有空窗没观测到（有的话是一次 ≤2 s 的误熄）。
+- **「Claude 实测速度」从本机试运行做成别人装上就能用**（v1.12.0 beta 给外部用户，可能是 `.dmg` 装机 = 运行时是复制件）。
+  ① 接收端转正式服务 `com.doushutangmu.codex-rotate.otel`（`install-launchd.sh`，KeepAlive + `ThrottleInterval 30`，
+  `--dir <store>/traffic/otel-ledger`）；进 `RUNTIME_FILES` / `bundle.resources` / `connector.SERVICES` / `read_logs`（`otel.log`）。
+  Windows 版已取消（用户 2026-10-19），`test_installers_agree.py` 加显式名单 `MACOS_ONLY = {"otel"}`，名单外仍两边一致。
+  接收端默认目录改走 `<store>` 规则（原来按 `__file__` 推，`.dmg` 下会写进运行时副本、读的人永远读不到）。
+  端口被占：原因合并写进 `.status.json`（`listening:false` + `last_error`，不抹掉别人的 `last_post_at`）+ stderr，退出 2；
+  `last_post_at` 跨重启沿用。② 改 `~/.claude/settings.json` 那半做成设置开关（默认关，`claude_otel_env.py` + Rust `claude_otel`）：
+  只合并 12 个键、保留其它键与顺序与缩进；已有别的 `OTEL_*` 或值不同 ⇒ 判冲突、一个字节不写、只报键名；先逐字节备份到
+  `<store>/backups/claude-settings/`（留 5 份，0600），同目录临时文件 + `os.replace`，写前再读一次、被改过就放弃；symlink 写到真文件；
+  关 = 只删 `<store>/.claude-otel-env.json` 记着的、值没变的键（没有记录但 12 个全对 = 本机试运行那份，认作我们的）。
+  本机 settings.json 已有这 12 个键 ⇒ 读成「已开」不重写（实测 `status` = `on_receiving`）。三态文案在零 import 的 `claudeOtel.ts`。
+  ③ `docs/INSTALL.md`「Claude 实测速度（OTel，仅 macOS）」+ README 一句。闸 `test_claude_otel_env.py`（27 条）·
+  `test_otel_receiver.py` 端口冲突 2 条 · `test_installers_pass_the_store.py` 读生成的 otel plist · dmg 布局闸加 2 个入口。
+  `tools/mutate.py` 23 个变异全部如期（含「把名单外的服务从一边删掉」「行没渲染」「冲突时打印值」）。
+  ⚠️ 本机那份手写 `com.doushutangmu.claude-otel` 与新服务同占 4318：部署时先 `bootout` 它并删 plist，否则新服务每 30 s 起一次失败、
+  把 `listening:false` 写进同一份 `.status.json`（设置页会来回显示「端口被占」）。外部用户真机未验；Claude Code 冲突判定没覆盖
+  项目级 / managed settings 与 shell 里 export 的 `OTEL_*`。
+
+---------
+
 ## v1.11.0 — 2026-10-18
 
 **新：刘海光晕（四家 AI 谁在跑亮谁的颜色）。修：agy Gemini 周额度不更新；隔离 HOME 下跑测试被钥匙串弹窗卡住。**
