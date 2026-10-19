@@ -70,19 +70,27 @@ export function agySegs(snap: AgySnapshot | null | undefined, off: boolean, noCu
 /** `set_notch_hud` / `notch_status` 的回答（见 `notch.rs::Status`）。 */
 export interface NotchStatus { active: boolean; reason?: string | null }
 
-export const NOTCH_DESC = "有 AI 在跑时，刘海四周亮起它的颜色。鼠标移上去，显示 Codex 和 Antigravity 的剩余额度。没有刘海的 Mac 不用开。";
+export const NOTCH_DESC = "有 AI 在跑时刘海四周亮起它的颜色；鼠标靠近刘海展开卡片：在跑 / 今日 / 额度。只在刘海屏上显示，外接屏、合盖时不显示";
 
 /**
- * 设置页那一行的说明。★ 「开关记住了」与「屏幕上真有东西」是两件事，没对上时必须说出来 ——
+ * 设置页那一行的**第二行**：开关与屏幕对不上时的原因；对得上时 `null`。
+ * ★ 「开关记住了」与「屏幕上真有东西」是两件事，没对上时必须说出来 ——
  * 原来没有刘海屏时开关照样变绿、屏幕上什么都没有、也没有任何原因（四方评审 2026-10-17 一致指出）。
- * `st == null` = 还没问到（或旧版本 Rust 没有这条命令）⇒ 不下结论，只给基础说明。
+ * `st == null` = 还没问到（或旧版本 Rust 没有这条命令）⇒ 不下结论。
+ * ★ 单独一行（设置页文字一律不折行，放不下省略号）：塞进说明行末尾的话，原因会第一个被省略掉。
  */
-export function notchRowDesc(on: boolean, st: NotchStatus | null, err: string | null): string {
-  if (err) return `${NOTCH_DESC} ⚠ 没能打开：${err}`;
+export function notchRowWarn(on: boolean, st: NotchStatus | null, err: string | null): string | null {
+  if (err) return `⚠ 没能打开：${err}`;
   if (st?.reason === "no_notch") {
     return on
-      ? `${NOTCH_DESC} ⚠ 现在没有检测到刘海屏（外接屏 / 合盖），所以没显示；开关已记住，换回带刘海的屏幕后自动出现。`
-      : `${NOTCH_DESC} 这台 Mac 现在没有刘海屏。`;
+      ? "⚠ 现在没有检测到刘海屏（外接屏 / 合盖），所以没显示；开关已记住，换回带刘海的屏幕后自动出现。"
+      : "这台 Mac 现在没有刘海屏。";
   }
-  return NOTCH_DESC;
+  return null;
+}
+
+/** 整段说明（说明行 + 原因行），给悬浮提示与旧调用方。 */
+export function notchRowDesc(on: boolean, st: NotchStatus | null, err: string | null): string {
+  const w = notchRowWarn(on, st, err);
+  return w ? `${NOTCH_DESC} ${w}` : NOTCH_DESC;
 }

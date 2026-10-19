@@ -17,12 +17,3 @@ export const FILL_STEP = 4;
 export function quantizeDown(px: number, step = FILL_STEP): number {
   return Math.floor(px / step) * step;
 }
-
-/** 紧凑态要多出这么多余量才回全名（2026-10-15 三方评审）：没有死区时，宽度停在临界点 ±几 px
- *  拖动，全名/短名会跟着来回换。 */
-export const RESTORE_SLACK = 16;
-
-export function nextCompact(cur: boolean, need: number, avail: number, lastFull: number): boolean {
-  if (!cur) return need > avail;
-  return lastFull + RESTORE_SLACK > avail;
-}

@@ -1,0 +1,74 @@
+/* 托盘胶囊悬停面板（`TpsHover.tsx`，交接包 2026-10-19 page2）。
+   数值照抄 `page2-hover/code/HoverSpec.html` 的内联样式；动态部分（透明度 / 位移 / 时长）在组件里按状态给。
+   窗口比面板大（Rust `tps_hover.rs`：四周留阴影边、顶部盖住菜单栏胶囊），透明区不接鼠标由 Rust 切。 */
+@font-face { font-family: 'Space Grotesk'; src: url('/fonts/space-grotesk-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Space Grotesk'; src: url('/fonts/space-grotesk-latin-500-normal.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'Space Grotesk'; src: url('/fonts/space-grotesk-latin-600-normal.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrains-mono-latin-600-normal.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+
+html, body, #root { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+
+.hv-win[data-theme="dark"] {
+  --hv-bg: #10161d; --hv-border: rgba(255,255,255,.08); --hv-shadow: 0 16px 40px rgba(0,0,0,.45);
+  --hv-tx: #eef2f7; --hv-tx2: #aab3c0; --hv-tx3: #798390;
+  --hv-line: rgba(255,255,255,.06); --hv-hov: rgba(255,255,255,.04);
+  --hv-chip-bg: rgba(255,255,255,.03); --hv-chip-line: rgba(255,255,255,.06);
+  --hv-acc: #2dd4bf;
+}
+/* 浅色：HoverSpec.html F 画板。行悬停底色交接包没给浅色值 —— 取同一透明度的黑（偏离记录 PLAN §4）。 */
+.hv-win[data-theme="light"] {
+  --hv-bg: #ffffff; --hv-border: rgba(0,0,0,.1); --hv-shadow: 0 16px 40px rgba(0,0,0,.18);
+  --hv-tx: #161b22; --hv-tx2: #4d5663; --hv-tx3: #606b77;
+  --hv-line: rgba(0,0,0,.07); --hv-hov: rgba(0,0,0,.04);
+  --hv-chip-bg: rgba(0,0,0,.025); --hv-chip-line: rgba(0,0,0,.07);
+  --hv-acc: #0e9f8e;
+}
+
+.hv-win { position: relative; width: 100vw; height: 100vh; overflow: hidden; white-space: nowrap;
+  font-family: 'Space Grotesk', 'PingFang SC', -apple-system, sans-serif; }
+.hv-win * { white-space: nowrap; }
+
+.hv-shell { position: absolute; width: 300px; box-sizing: border-box; background: var(--hv-bg); color: var(--hv-tx);
+  border: 1px solid var(--hv-border); border-radius: 14px; box-shadow: var(--hv-shadow); overflow: hidden;
+  padding-top: 4px; transform-origin: 85% 0; }
+
+.hv-grid { display: grid; grid-template-columns: 14px 18px minmax(0, 1fr) 70px 46px; column-gap: 8px;
+  align-items: center; padding: 0 14px; box-sizing: border-box; }
+/* 没有多会话行：箭头列宽 0、左内边距 14 − 列间距 8 = 6 ⇒ logo 落在 x=15，与底栏「今日」对齐 */
+.hv-nochev .hv-grid { grid-template-columns: 0 18px minmax(0, 1fr) 70px 46px; padding-left: 6px; }
+.hv-head { height: 26px; font-size: 10.5px; letter-spacing: .04em; color: var(--hv-tx3); }
+.hv-c { text-align: center; }
+.hv-r { text-align: right; }
+
+.hv-fold { display: grid; min-height: 0; }
+.hv-fold > .hv-clip { overflow: hidden; min-height: 0; }
+.hv-div { height: 1px; margin: 0 14px; background: var(--hv-line); }
+
+.hv-row { width: 100%; color: var(--hv-tx); }
+.hv-chev { color: var(--hv-tx3); display: block; }
+.hv-chev svg { display: block; }
+.hv-logo { display: block; width: 18px; height: 18px; }
+.hv-logo > img { display: block; }
+.hv-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.hv-name-t { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hv-chip { flex: none; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 11px;
+  color: var(--hv-tx2); padding: 1px 6px; border-radius: 8px; background: var(--hv-chip-bg); border: 1px solid var(--hv-chip-line); }
+.hv-num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+.hv-tps { font-size: 13.5px; font-weight: 600; text-align: center; }
+.hv-unit { font-size: 10.5px; font-weight: 400; color: var(--hv-tx3); }
+.hv-tok { font-size: 12px; color: var(--hv-tx2); text-align: right; }
+
+.hv-sess { height: 22px; }
+.hv-sess-line { justify-self: center; width: 1px; height: 22px; background: var(--hv-line); }
+.hv-sess-t { font-size: 11.5px; color: var(--hv-tx2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hv-sess-tps { font-size: 11px; color: var(--hv-tx2); text-align: center; }
+.hv-sess-unit { font-size: 9.5px; color: var(--hv-tx3); }
+.hv-sess-tok { font-size: 10.5px; color: var(--hv-tx3); text-align: right; }
+
+.hv-foot { display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 14px;
+  border-top: 1px solid var(--hv-line); font-size: 12px; color: var(--hv-tx2); }
+.hv-foot b { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; color: var(--hv-tx); font-weight: 600; }
+.hv-link { color: var(--hv-acc); text-decoration: none; font-size: 12px; font-weight: 500; cursor: pointer; }
+
+.hv-fly { position: absolute; left: 0; top: 0; z-index: 5; pointer-events: none; transform-origin: 0 0; display: block; }

@@ -154,7 +154,8 @@ class TheExpiredCarrySaysSo(unittest.TestCase):
                 src = re.sub(r"\{/\*.*?\*/\}|/\*.*?\*/|//[^\n]*", "", src, flags=re.S)
                 self.assertIn("row.seen_at ? AGY_EXPIRED_TITLE", src, "★★ %s 把过期的旧读数说成「上游没给数」" % f)
                 if f == "AgyCard.tsx":   # 菜单栏那行只画「—」，没有可见文字
-                    self.assertIn('row.seen_at ? "旧读数已过期" : "上游没给数"', src, "★★ 卡片上看得见的那几个字还在说「上游没给数」")
+                    # 2026-10-19 总览重做：卡上那一格只有 48px，看得见的字缩成「已过期 / 没给数」，全句在 title。
+                    self.assertIn('note: row.seen_at ? "已过期" : "没给数"', src, "★★ 卡片上看得见的那几个字还在说「上游没给数」")
         agy = (ROOT / "codexbar" / "src" / "agy.ts").read_text(encoding="utf-8")
         self.assertRegex(agy, r"export const AGY_EXPIRED_TITLE =\s*\n?\s*\"[^\"]*旧读数")
 

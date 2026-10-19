@@ -1,0 +1,104 @@
+/* 工作台 · 总览（交接包 page5 `code/P5DemoA.html` 的 <style>，逐值照抄）。
+   ★ 全部挂在 `.ov-root` 下：这份 CSS 随总览一起打进同一个 bundle，不能漏到别的页。 */
+
+.ov-root, .ov-root * { white-space: nowrap; }
+.ov-root { font-family: 'Space Grotesk', sans-serif; color: var(--tx); }
+
+@keyframes ovPgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.ov-root .ov-pg { animation: ovPgIn 300ms var(--sp); }
+
+/* ── 卡片（固定 148 高；悬停：底提亮 + 底栏原位换成操作） ───────────── */
+.ov-card {
+  box-sizing: border-box; height: 148px; display: flex; flex-direction: column; justify-content: space-between;
+  padding: 12px 14px 4px; border-radius: 12px; background: var(--ovCard); border: 1px solid var(--line);
+  min-width: 0; position: relative; outline: none;
+  transition: background 160ms, border-color 160ms;
+}
+.ov-card:hover, .ov-card.ov-hov, .ov-card:focus-within, .ov-card.ov-menu-open {
+  background: var(--ovCardH) !important; border-color: var(--ovLineH) !important;
+}
+.ov-card .ov-fdef { transition: opacity 140ms, transform 220ms var(--sp); }
+.ov-card .ov-fact {
+  opacity: 0; transform: translateY(6px); pointer-events: none;
+  transition: opacity 160ms, transform 260ms var(--sp);
+}
+.ov-card:hover .ov-fdef, .ov-card.ov-hov .ov-fdef, .ov-card:focus-within .ov-fdef, .ov-card.ov-menu-open .ov-fdef {
+  opacity: 0; transform: translateY(-6px);
+}
+.ov-card:hover .ov-fact, .ov-card.ov-hov .ov-fact, .ov-card:focus-within .ov-fact, .ov-card.ov-menu-open .ov-fact {
+  opacity: 1; transform: none; pointer-events: auto;
+}
+/* 拖拽手柄：只在悬停时出现（与底栏操作同一个触发），拖动中一直可见。 */
+.ov-card .ov-drag { opacity: 0; transition: opacity 140ms; }
+.ov-card:hover .ov-drag, .ov-card.ov-hov .ov-drag, .ov-card:focus-within .ov-drag, .ov-card.ov-dragging .ov-drag { opacity: 1; }
+
+/* 底栏操作按钮（原型 `.ab` / `.abp` / `.abi`） */
+.ov-ab {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--ovAbLine); color: var(--ovAb); font-size: 11.5px; cursor: pointer; user-select: none;
+  position: relative; overflow: hidden; background: transparent; flex-shrink: 0;
+}
+.ov-ab:hover { border-color: var(--ovLineH); color: var(--tx); }
+.ov-ab.ov-abp { background: var(--acc); border-color: var(--acc); color: var(--ovNextTx); font-weight: 600; }
+.ov-ab.ov-abi { margin-left: auto; padding: 0 5px; }
+.ov-ab.ov-abw { border-color: var(--warnLine); color: var(--ovWarnTx); }
+.ov-ab.ov-abd { border-color: var(--badLine); color: var(--badTx); }
+.ov-ab[aria-disabled="true"] { opacity: .5; cursor: default; }
+
+/* 头部按钮（高 32） */
+.ov-hbtn {
+  display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: 9px;
+  font-size: 12.5px; flex-shrink: 0; border: 1px solid var(--ovBtnLine); color: var(--tx); cursor: pointer;
+  user-select: none; box-sizing: border-box;
+}
+.ov-hbtn:hover { border-color: var(--ovLineH); }
+
+/* 平台档 */
+.ov-tab { position: relative; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 8px;
+  border-radius: 8px; cursor: pointer; user-select: none; color: var(--tx2); transition: background 160ms, box-shadow 160ms; }
+.ov-tab:hover { background: var(--hov); }
+
+/* ⋯ 菜单 */
+.ov-menu {
+  position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 30; min-width: 168px; padding: 4px;
+  background: var(--ovMenu); border: 1px solid var(--line2); border-radius: 9px; box-shadow: var(--ovMenuShadow);
+  display: flex; flex-direction: column; gap: 1px; font-size: 12px;
+}
+.ov-menu.ov-menu-down { bottom: auto; top: calc(100% + 4px); }
+/* 关着的菜单仍在 DOM 里（本仓「折叠用 CSS 不用条件渲染」：行为闸读 --dump-dom）。
+   用 display:none 而不是 visibility —— 绝对定位层隐藏时也会撑大滚动框的 scrollHeight。 */
+.ov-menu:not([data-open]) { display: none; }
+.ov-mi { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: 6px;
+  color: var(--tx); cursor: pointer; user-select: none; }
+.ov-mi:hover { background: var(--hov2); }
+.ov-mi.ov-mi-bad { color: var(--badTx); }
+.ov-mi.ov-mi-info { color: var(--tx3); cursor: default; font-size: 11px; }
+.ov-mi.ov-mi-info:hover { background: transparent; }
+
+/* 已停用：折叠条 + 同一网格里展开（420 ms 临界阻尼） */
+.ov-strip { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 14px; border-radius: 10px;
+  border: 1px dashed var(--ovStripLine); font-size: 12px; color: var(--tx3); cursor: pointer; user-select: none;
+  box-sizing: border-box; flex-shrink: 0; }
+.ov-strip:hover { border-color: var(--ovLineH); }
+.ov-strip .ov-chev { transition: transform 300ms var(--sp); }
+.ov-strip[data-open="1"] .ov-chev { transform: rotate(180deg); }
+.ov-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 420ms var(--sp); }
+.ov-fold[data-open="1"] { grid-template-rows: 1fr; }
+.ov-fold > .ov-fold-in { overflow: hidden; min-height: 0; }
+.ov-fold .ov-fold-grid { opacity: 0; visibility: hidden; transition: opacity 240ms ease-out, visibility 0s linear 240ms; }
+.ov-fold[data-open="1"] .ov-fold-grid { opacity: 1; visibility: visible; transition: opacity 240ms ease-out 120ms, visibility 0s; }
+
+/* 头部开关（28×16） */
+.ov-sw { position: relative; display: block; width: 28px; height: 16px; border-radius: 8px; background: var(--ovSwOff);
+  transition: background 200ms; flex-shrink: 0; }
+.ov-sw > i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 6px; background: #fff;
+  transition: left 260ms var(--sp); }
+.ov-sw[data-on="1"] { background: var(--acc); }
+.ov-sw[data-on="1"] > i { left: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-root .ov-pg { animation: none; }
+  .ov-card, .ov-card .ov-fdef, .ov-card .ov-fact, .ov-fold, .ov-fold .ov-fold-grid, .ov-strip .ov-chev,
+  .ov-sw, .ov-sw > i { transition-duration: 0s !important; transition-delay: 0s !important; }
+  .ov-card .ov-fdef, .ov-card .ov-fact { transform: none !important; }
+}

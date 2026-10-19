@@ -1,12 +1,10 @@
-import { CARD_WARN_DAYS, cardLeftText, type Account } from "../helpers";
-import { CARD_TYPE as Z, type Theme } from "../theme";
+import { CARD_WARN_DAYS, type Account } from "../helpers";
 
-export const IconTicket = ({ size = 10 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
-    <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 1 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 1 0 0-4z" />
-  </svg>
-);
-
+/**
+ * 重置卡的共用判据与颜色。★ 原来这里还有「重置卡 ×N」角标组件本体与它的隐形占位（`CardBadgeGhost`）——
+ * 2026-10-19 总览换成交接包 page5 的卡片之后，角标由 `AccountCard` 的底栏直接画（同一个判据 `isCardExpiring`），
+ * 占位不再需要（等高由外壳的固定槽位保证），两者随之删除（ui.md §5c：删组件连同本体）。
+ */
 export const AMBER = "#E0901C";
 export const AMBER_TEXT = "#f2b45c";
 
@@ -14,129 +12,4 @@ export const AMBER_TEXT = "#f2b45c";
  *  the card border, the row's left rail and the pool banner, so they can never disagree. */
 export function isCardExpiring(a: Account): boolean {
   return a.cards > 0 && a.cardDays != null && a.cardDays <= CARD_WARN_DAYS;
-}
-
-// ★ 非 compact 那档读 `CARD_TYPE`（总览卡的统一字号标尺）；compact 是菜单栏专用，**不跟着放大**。
-const SIZE = (compact?: boolean) => compact
-  ? { font: 8.5, pad: "1px 6px", icon: 9, gap: 4 }
-  : { font: Z.badgeFont, pad: Z.badgePad, icon: Z.badgeIcon, gap: 5 };
-
-/** 三种形态共用的外壳。**只有它决定高度** —— 见 `CardBadgeGhost` 的说明。 */
-const shell = (compact?: boolean) => {
-  const s = SIZE(compact);
-  return {
-    display: "inline-flex", alignItems: "center", gap: s.gap,
-    // ★ 主窗口那档改成**可收缩 + 截断**:页脚已恒为一行(见 AccountCard),放不下时
-    //   必须截断而不是把整行撑破。菜单栏那档保持 `flexShrink: 0` —— 那一行的让位者
-    //   是别的元素,徽章截了就读不出还剩几张。
-    ...(compact ? { flexShrink: 0 } : { flexShrink: 1, minWidth: 0, overflow: "hidden",
-                                        textOverflow: "ellipsis", whiteSpace: "nowrap" }),
-    fontSize: s.font, fontWeight: 700, padding: s.pad, borderRadius: 999,
-    fontVariantNumeric: "tabular-nums",
-    // ★ 行高写死，让盒高与**字形**无关：中文「重置卡」的行盒比拉丁数字高 2px，
-    //   占位里没有中文就会比真徽章矮 2px，而这 2px 会原样变成细条的错位。
-    // ★★ **只给主窗口那档**。占位（CardBadgeGhost）只在主窗口用，菜单栏根本没有占位，
-    //    却会被这条行高连累 —— 实测 compact 徽章 14 → 15.89px（宽度不变）。
-    //    sweep 只查折行/溢出/压扁，量不到 2px 的高度变化，所以它会一路绿着。
-    ...(compact ? null : { lineHeight: 1.4 }),
-    // 描边算进盒高（各 1px）。放进壳里而不是只写在有徽章那支，否则占位比真徽章矮 2px，
-    // 而这 2px 会被弹性留白原样转成细条的错位。有徽章那支在后面覆盖成实色。
-    border: "1px solid transparent",
-  } as const;
-};
-
-/**
- * 与 CardBadge **同壳**的隐形占位。
- *
- * 总览卡片的条形区是从卡片**底边往上推**的（见 AccountCard 的弹性留白），
- * 于是「页脚有多高」直接决定上面那些细条落在哪条线上 —— 而页脚高度本来会随
- * 「这个号有没有重置卡」「这张是不是 grok 卡」变化，同一排卡就会错开半行。
- * 让没有徽章的页脚也占同一个壳，那条水平线就与内容无关了。
- *
- * ★ 复用同一份壳而不是写死一个像素高度：字号或内边距一改，占位自动跟上；
- *   写死的话它会在某次调字号后**静默失准**，而且看不出是这里的问题。
- */
-export function CardBadgeGhost({ compact }: { compact?: boolean }) {
-  return (
-    <span aria-hidden style={{ ...shell(compact), visibility: "hidden" }}>
-      {/* 文案要与真徽章**同字形类**（中文 + 拉丁）。只写 `0` 的话行盒比中文矮 2px ——
-          CJK 与拉丁的行盒不一样高，占位就白占了。内容不可见，这里只借它的高度。 */}
-      <IconTicket size={SIZE(compact).icon} />重置卡 ×0
-    </span>
-  );
-}
-
-/**
- * Reset-card badge. Three states from the handoff §4: expiring (amber + halo), holding (accent),
- * none (grey text, main window only).
- *
- * `compact` is the menubar row variant — same semantics, the handoff just specifies smaller type
- * there, and the expiring label collapses to bare "N天" because the row has no room for the noun.
- */
-export default function CardBadge({ a, t, compact, onUse, using }: {
-  a: Account; t: Theme; compact?: boolean;
-  /** 点角标 = 请求用掉最近到期的那张（用户 2026-10-01 提议）。**不可逆**：调用方必须先弹确认弹窗
-   *  （`UseCreditDialog`），这里**不**自己确认；不传 = 只读角标（菜单栏）。 */
-  onUse?: () => void; using?: boolean;
-}) {
-  if (a.cards <= 0) {
-    // ★ 走同一个壳（透明描边、无底色），否则「无重置卡」的页脚比有徽章的矮 9px，
-    //   把这张卡的细条整体顶下去半行。菜单栏那版不画，也就没有这个问题。
-    return compact ? null : (
-      <span style={{ ...shell(), fontWeight: 400, color: t.muted, fontFamily: "'JetBrains Mono'" }}>
-        <IconTicket size={SIZE().icon} />无重置卡
-      </span>
-    );
-  }
-
-  const expiring = isCardExpiring(a);
-  const size = SIZE(compact);
-
-  // ★ 「还剩多久」只有 `cardLeftText` 一种说法（向下取整，不够一天说小时）。原来这里是
-  //   `Math.ceil` —— 剩 1.3 天写成「剩2天」，点进弹窗却是 1 天（用户 2026-10-03）。
-  const left = cardLeftText(a.cardDays ?? 0);
-  // The COUNT is always shown. The expiring suffix names how many of them actually lapse, because
-  // "2 张" + "2 天后到期" side by side otherwise reads as "both cards die in 2 days" — the common
-  // real case is a stack where only the oldest is about to go.
-  // Kept short on purpose: the card's badge row only has ~200px next to the 到期 date, and a longer
-  // phrasing ("N 张 N 天后到期") pushed the date onto a second line. Full wording is in the tooltip.
-  const some = expiring && a.cardsExpiring > 0 && a.cardsExpiring < a.cards;
-  const nOf = some ? `${a.cardsExpiring}张` : "";
-  const label = compact
-    ? `×${a.cards}${expiring ? `·${nOf}${left}` : ""}`
-    : `重置卡 ×${a.cards}${expiring ? ` · ${nOf}剩${left}` : ""}`;
-  const usable = !!onUse && !compact && !!a.cardExp;
-  // ★ 点击**必须 stopPropagation**：角标在整张可点的卡片里，不拦的话每次点它都会同时切换卡片选中。
-  const click = (e: React.MouseEvent) => {
-    if (!usable) return;
-    e.stopPropagation();
-    if (using) return;
-    onUse!();
-  };
-  return (
-    <span
-      // ★ 「怎么用卡」这句 2026-09-18 从菜单栏横幅搬到这里。
-      //   横幅改成了单行可关（用户：「太过了，喧宾夺主，并且无法取消」），
-      //   而**用法**本来是它唯一独有的内容 —— 不搬过来，关掉横幅就等于丢信息。
-      //   角标是常驻的，所以它才是这句话的正确归宿（§5d：一天看一次的信息折叠进角标）。
-      // ⚠️ 只在**快到期**时才缀用法：平时那句是噪音，而本仓的规矩是
-      //   「披露的寿命跟着它描述的事实走」。
-      title={(a.cardExp
-        ? `共 ${a.cards} 张 · 最早一张到期 ${a.cardExp}${a.cardsExpiring ? ` · ${a.cardsExpiring} 张在 ${CARD_WARN_DAYS} 天内作废` : ""}`
-        : `共 ${a.cards} 张 · 到期未知(运行 codex-rotate credits 取明细)`)
-        + (usable
-          ? `\n点击：弹窗确认后用掉最近到期（${a.cardExp}）的那张。⚠️ 不可逆。额度没见底也能用（用户实测）`
-          : (expiring ? "\n用卡：终端运行 codex → 输入 /usage → Redeem usage limit reset" : ""))}
-      {...(usable ? { onClick: click, "data-card-badge-use": "" } : {})}
-      style={{
-        ...shell(compact),
-        cursor: usable ? (using ? "default" : "pointer") : undefined,
-        color: expiring ? AMBER_TEXT : t.accent,
-        background: expiring ? "rgba(224,144,28,.14)" : t.accentSoft,
-        border: `1px solid ${expiring ? "rgba(224,144,28,.5)" : t.accentBorder}`,
-        animation: expiring ? "cbPulse 2s infinite" : "none",
-      }}>
-      <IconTicket size={size.icon} />{using ? "使用中…" : label}
-    </span>
-  );
 }

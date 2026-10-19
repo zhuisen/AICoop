@@ -122,8 +122,12 @@ class NoOrphanFields(unittest.TestCase):
                       if p.name != "helpers.ts")
         self.assertIn("poolFreshness", src,
                       "poolFreshness 只在 helpers 里算,没有任何 UI 消费 —— 孤儿字段")
-        self.assertIn("freshnessLine(lastRefreshAt, freshness)", src,
+        # 2026-10-19：codex 档的新鲜度行搬进总览头部（刷新按钮的悬浮 + ⋯ 里那一行，`ov/Overview.tsx`）。
+        self.assertIn("freshnessLine(p.lastRefreshAt, p.freshness)", src,
                       "覆盖度算出来了但没画出来")
+        ov = (ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
+        self.assertIn('{ key: "fresh", label: codexFresh, info: true }', ov, "★ ⋯ 里没有新鲜度那一行")
+        self.assertIn("title={`刷新全池（零消耗）· ${codexFresh}`}", ov, "★ 刷新按钮的悬浮没说数据有多新")
 
 
 class CardActuallyShowsIt(unittest.TestCase):

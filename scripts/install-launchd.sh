@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate + (re)load the five codex-rotate launchd agents.
+# Generate + (re)load the six codex-rotate launchd agents.
 #
 # Generated rather than committed as files because every plist embeds absolute paths ($HOME, the repo
 # location, the interpreter) — a committed copy would be wrong on any other machine and would drift
@@ -195,9 +195,20 @@ emit agydawn \
     '  <key>StartInterval</key><integer>60</integer>' \
     "$REPO/agy-rotate" dawn-probe --tick || FAILED="$FAILED agydawn"
 
+# ★ Claude Code OTel 接收端（「Claude 实测速度」开关的另一半，2026-10-19 起正式服务）。
+#    只听 127.0.0.1:4318、只写 `<store>/traffic/otel-ledger/`；不联网、不读凭证。
+#    ★ `--dir` 显式给 store 下的目录：`.dmg` 布局里 `$REPO` 是运行时副本，按 `__file__` 推会写进副本。
+#    ★ 端口被占时它写明原因进 `.status.json` 并退出非 0；`ThrottleInterval` 让 KeepAlive 别每 10s 拉一次。
+#    ⚠️ 2026-10-18 试运行时手写过 `com.doushutangmu.claude-otel`（同一端口）。两份同时在 ⇒ 后起的那份起不来。
+emit otel \
+    '  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>' \
+    "$REPO/traffic/otel_receiver.py" --port 4318 --dir "$STORE/traffic/otel-ledger" || FAILED="$FAILED otel"
+
 echo
 echo "==> loaded:"
-for n in autosync quotad proxy dawnprobe agydawn; do
+for n in autosync quotad proxy dawnprobe agydawn otel; do
     printf '  %-13s %s\n' "$n" \
         "$(launchctl print "gui/$UID_NUM/$PREFIX.$n" 2>/dev/null | awk '/^\tstate = /&&!f{print $3; f=1}' || echo '?')"
 done

@@ -20,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SH = ROOT / "scripts" / "install-launchd.sh"
 PS1 = ROOT / "scripts" / "install-windows.ps1"
 
+#: ★ 只装 macOS 的服务。**Windows 版已取消（用户 2026-10-19「取消 windows 版本的设计与发布」）**，
+#:   所以从那天起新加的服务只进 `install-launchd.sh`。名单只放那之后新加的服务；
+#:   名单外的服务两边仍必须一致（下面 `test_same_service_set` 照旧守着）。
+#:   ⚠️ 别把已有的服务挪进来让闸变绿 —— 那等于静默删掉 Windows 上的一个常驻进程。
+MACOS_ONLY = {"otel"}
+
 
 class InstallersDefineTheSameServices(unittest.TestCase):
     @classmethod
@@ -42,8 +48,10 @@ class InstallersDefineTheSameServices(unittest.TestCase):
         return set(names)
 
     def test_same_service_set(self):
-        """★★ 两边的服务名集合必须完全相同。"""
+        """★★ 两边的服务名集合必须完全相同（`MACOS_ONLY` 名单里的除外）。"""
         a, b = self._sh_services(), self._ps_services()
+        self.assertLessEqual(MACOS_ONLY, a, "MACOS_ONLY 里有 macOS 也不装的服务 —— 名单过期了")
+        a = a - MACOS_ONLY
         self.assertEqual(
             a, b,
             "两个安装器的服务集合不一致 —— 某个平台会静默少一个常驻进程。\n"

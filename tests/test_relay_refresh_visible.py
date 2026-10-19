@@ -95,11 +95,18 @@ class ThereIsARefreshWhereTheEyeLooksFirst(unittest.TestCase):
         """★★ 两处各写一份 SVG 必然漂移且**不报错**（CardIcons 文件头记的就是这条）。"""
         self.assertIn("export const IcRefresh", _code(ICONS),
                       "★★ 刷新图标没搬进共享模块")
-        app = _code(APP)
-        self.assertRegex(app, r'import \{[^}]*\bIcRefresh\b[^}]*\} from "\./components/CardIcons"',
-                         "★★ App.tsx 还在用自己那份 —— 两份 SVG 会漂")
-        self.assertNotIn('const IconRefresh = ({ spin }', app,
-                         "★★ App.tsx 里的那份副本又回来了")
+        # ★ 2026-10-19：总览的刷新（头部 + 四家卡）搬进 `ov/`；`ov/OvCard` 只转出 CardIcons 那一份。
+        ov = _code(ROOT / "codexbar" / "src" / "components" / "ov" / "OvCard.tsx")
+        self.assertIn('import { IcRefresh } from "../CardIcons";', ov, "★★ 总览没用共享那一份")
+        self.assertIn("export { IcRefresh };", ov)
+        src = ROOT / "codexbar" / "src"
+        # 范围 = 总览 + 中转站页（这条闸管的两处）。菜单栏 / 用量页各自另有一份是旧账，不在本闸范围。
+        scope = [*(src / "components" / "ov").glob("*.tsx"), src / "App.tsx", src / "pages" / "RelayPage.tsx",
+                 *(src / "components" / f for f in ("AccountCard.tsx", "AgyCard.tsx", "GrokCard.tsx", "CardIcons.tsx"))]
+        defs = [p.relative_to(src).as_posix() for p in scope
+                if re.search(r"(const|function) Ic(on)?Refresh\b", _code(p))]
+        self.assertEqual(defs, ["components/CardIcons.tsx"], "★★ 刷新图标有第二份 SVG：%s" % defs)
+        self.assertNotIn('const IconRefresh = ({ spin }', _code(APP), "★★ App.tsx 里的那份副本又回来了")
 
     def test_the_busy_state_is_wired(self):
         """★ 没有转圈的话，点下去 2.3s 内没有任何反馈，用户会连点。"""

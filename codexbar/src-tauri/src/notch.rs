@@ -1,5 +1,7 @@
 //! 刘海额度条（macOS 专属，**默认关**，设置页开）。PR #1 作者 2026-10-17 从 demo 里选定
 //! 「收起 = 刘海周围的光晕、悬停 = 额度环面板」（起初是刘海下沿的分段细线，作者嫌不明显换成光晕）。
+//! 2026-10-19 交接包 4e：展开态换成「悬浮卡片 + 光桥」—— 卡片在刘海下沿下方 10 pt、宽 300、最高约 560；
+//! 吸附 = D 果冻下垂（光标距刘海 24 pt 内，网页按 `notch-cursor` 画一滴黑）；碰到刘海 +2 pt 立即展开。
 //!
 //! ★ 为什么能做成 Tauri 窗口而不是另起一个 Swift 进程：2026-10-17 独立验证程序实测 ——
 //!   层级设到 `NSStatusWindowLevel + 1` 后窗口顶边与屏幕顶边间距 0、盖在菜单栏之上；
@@ -12,11 +14,11 @@
 //!    WKWebView 在后台窗口里收不收得到鼠标移动没验过，不赌它。做法分两段（Agent HUD 同理）：
 //!    · 平时：系统鼠标事件监听（全局 + 本进程各一个）。鼠标不动就不触发 ——
 //!      验证程序里纯轮询（80/250ms）空闲主进程 0.30% CPU（不轮询时的底数没量过）；
-//!    · 光标进了刘海区：起一个 60ms 的跟踪线程，直到光标离开且面板收完。
-//!      监听只负责"叫醒"，进出与停留的判定全在跟踪线程里 —— 光标停在我们自己的窗口上时，
-//!      全局监听可能收不到事件，只靠事件会"离不开"。
+//!    · 光标进了刘海所在屏的顶部 `SAMPLE_BAND`（180 pt）：起一个 60 Hz 的跟踪线程（交接包 4e 实装要求），
+//!      直到光标离开那一带且卡片收完。监听只负责"叫醒"，进出与停留的判定全在跟踪线程里 ——
+//!      光标停在我们自己的窗口上时，全局监听可能收不到事件，只靠事件会"离不开"。
+//! ★ 「谁在跑」（光晕）2026-10-19 起在 `activity.rs`：窗口存在时订阅 `activity::NOTCH`，窗口没了就退订。
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl};
@@ -24,13 +26,29 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 pub const LABEL: &str = "notch";
 /// 刘海上沿两侧的内凹圆角，窗口要比刘海各宽这么多。与 `notch.css` 的 `--flare` 同值。
 const FLARE: f64 = 7.0;
-/// 展开面板宽。与 `NotchHud.tsx` 的 `PANEL_W` 同值，闸在 `tests/test_notch_hud.py`。
-pub const PANEL_W: f64 = 312.0;
-const OPEN_DWELL: Duration = Duration::from_millis(90);
-const CLOSE_DWELL: Duration = Duration::from_millis(220);
-/// 前端收起动画时长（`notch.css` 的 clip-path 过渡 .34s）。收完再缩窗口，否则动画被裁掉。
-const COLLAPSE: Duration = Duration::from_millis(340);
-const TRACK_TICK: Duration = Duration::from_millis(60);
+/// 4e 悬浮卡片：宽 300；在刘海下沿下方 `CARD_GAP`；命中区四周各多 `CARD_HIT_PAD`（交接包 page 99 / 4e「实装」）。
+/// ★ 与 `notchCard.ts` 的 `CARD_W` / `CARD_GAP`、`notch.css` 的 `--cw` 同值（闸在 `tests/test_notch_hud.py`）。
+pub const CARD_W: f64 = 300.0;
+pub const CARD_GAP: f64 = 10.0;
+const CARD_HIT_PAD: f64 = 10.0;
+/// 卡片阴影 `0 18 40 rgba(0,0,0,.5)` + 顶部淡蓝外光要的透明边：blur 40 往外 ~40，向下再多偏移 18。
+const CARD_SHADOW_X: f64 = 40.0;
+const CARD_SHADOW_B: f64 = 58.0;
+/// 卡片高度的上限：交接包「最高约 560 pt（C 场景 + 今日 Tab），需能放进 900 pt 高的 Air 屏幕」。留一点余量。
+const CARD_H_MAX: f64 = 600.0;
+/// 碰到刘海（+2 pt）立即展开（交接包 4e：「碰到刘海（+2 pt）立即展开」）。
+const TOUCH: f64 = 2.0;
+/// 光标离开命中区 300 ms 后收起（交接包：「光标离开卡片 10 pt 外 300 ms 收起」）。
+const CLOSE_DWELL: Duration = Duration::from_millis(300);
+/// 前端收起动画时长（4e：数据淡出 → logo 缩回 → 卡片 140 ms 淡出 + 260 ms 上移 → 光桥延后 80 ms 收回 180 ms）。
+/// 收完再缩窗口，否则动画被裁掉。
+const COLLAPSE: Duration = Duration::from_millis(560);
+/// 60 Hz 采样（交接包 4e：「只在光标 y < 180 pt 时以 60 Hz 读光标算吸附」）。
+const TRACK_TICK: Duration = Duration::from_millis(16);
+const SAMPLE_BAND: f64 = 180.0;
+/// 果冻下垂在光标距刘海 24 pt 内出现；多推 16 pt 让网页能把那滴黑收回去（离开范围时再推最后一帧）。
+const DRIP_RANGE: f64 = 24.0;
+const CURSOR_EMIT_RANGE: f64 = DRIP_RANGE + 16.0;
 /// 收起态窗口在刘海两侧 / 下方多留的透明边，给光晕用。blur(σ) 要往外 ~2σ 才淡到看不见，
 /// 外层光晕半宽 = 刘海半宽 + 圆角 + 14、blur 20 ⇒ 要 ≥ 54；下沿到刘海下 12 + 40 ⇒ 要 ≥ 52。
 /// 不够的话 blur 的边缘会被窗口裁出一圈直边（第一版只留了 1σ，作者一眼看出「限制了范围」）。
@@ -38,9 +56,6 @@ const TRACK_TICK: Duration = Duration::from_millis(60);
 /// 窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
 const GLOW_X: f64 = 60.0;
 const GLOW_Y: f64 = 60.0;
-/// 活动检测的周期，以及「最近这么多秒内写过 = 正在跑」。
-const ACTIVITY_TICK: Duration = Duration::from_secs(2);
-const ACTIVE_SECS: u64 = 45;
 /// 几何（刘海位置）最多多久重读一次。合盖/开盖/改分辨率后靠它自愈（下一次鼠标移动时）。
 const GEOM_TTL: Duration = Duration::from_secs(3);
 
@@ -55,6 +70,11 @@ pub struct Notch {
     /// 主屏高度：AppKit 坐标（左下原点）换算成桌面坐标要用
     #[serde(skip)]
     primary_h: f64,
+    /// 刘海所在屏的左右边界（桌面 x）：60 Hz 采样只在这块屏的顶部那一带开
+    #[serde(skip)]
+    screen_x: f64,
+    #[serde(skip)]
+    screen_w: f64,
 }
 
 /// `set_notch_hud` 的回答。★ 「开关记住了」与「屏幕上真有东西」是两件事 ——
@@ -66,6 +86,11 @@ pub struct Status {
     pub reason: Option<&'static str>,
 }
 
+/// 推给刘海网页的光标（果冻下垂用）。坐标是**刘海窗口内**的逻辑 pt；`dx` 相对刘海中线；
+/// `distance` = 光标到刘海矩形的距离（在刘海里为 0）。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Cursor { pub x: f64, pub y: f64, pub dx: f64, pub distance: f64 }
+
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static OPEN: AtomicBool = AtomicBool::new(false);
 /// ★ 代次（四方评审 2026-10-17）：每次开/关 +1，每次展开/收起 +1。后台线程与排进主线程的闭包
@@ -76,20 +101,8 @@ static OPEN_GEN: AtomicU64 = AtomicU64::new(0);
 /// 否则旧线程退出会把新线程的标记抹掉，于是又起一条。
 static TRACKER: AtomicU64 = AtomicU64::new(0);
 static TRACKER_SEQ: AtomicU64 = AtomicU64::new(0);
-/// 正在跑的活动检测线程领到的号；0 = 没有。★ 新起的一条**直接接管**（store），旧的看到不是自己就退 ——
-/// 原来用一个 `WATCHING` 布尔：快速关了再开时它还是 true，新线程起不来，旧线程随后退出，就一条都没有了（评审 2026-10-17）。
-static WATCHER: AtomicU64 = AtomicU64::new(0);
-static WATCHER_SEQ: AtomicU64 = AtomicU64::new(0);
-static ACTIVITY: Mutex<Activity> = Mutex::new(IDLE);
-/// 四家各自最近一次写入的时刻（秒，0 = 没见过），下标见 `Roots::classify`。FSEvents 回调写，检测线程读。
-static LAST_WRITE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
-
-/// 谁正在跑。PR #1 作者 2026-10-17 起头（Codex / agy）；维护者 2026-10-18 扩到四家（四方评审时 Claude / Codex / agy / grok 同时跑）。
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
-pub struct Activity { pub codex: bool, pub claude: bool, pub agy: bool, pub grok: bool }
-const IDLE: Activity = Activity { codex: false, claude: false, agy: false, grok: false };
 static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
-static PANEL_H: Mutex<f64> = Mutex::new(180.0);
+static PANEL_H: Mutex<f64> = Mutex::new(420.0);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
 static MONITORS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -116,7 +129,8 @@ fn notch_from(frame: (f64, f64, f64, f64), primary_h: f64, inset_top: f64,
     let left = fx + left_w;
     let right = fx + fw - right_w;
     if right <= left { return None; }
-    Some(Notch { left, width: right - left, height: inset_top, top: primary_h - (fy + fh), primary_h })
+    Some(Notch { left, width: right - left, height: inset_top, top: primary_h - (fy + fh), primary_h,
+                 screen_x: fx, screen_w: fw })
 }
 
 /// 带刘海的那块屏幕上，刘海的位置。没有刘海的屏幕 ⇒ `None`（PR #1 作者 2026-10-17 定：
@@ -166,11 +180,20 @@ fn cached() -> Option<Notch> {
     GEOM.lock().unwrap().and_then(|(v, _)| v)
 }
 
+fn card_h() -> f64 { *PANEL_H.lock().unwrap() }
+
 /// 收起/展开时窗口在桌面坐标里的矩形。
+/// 展开：宽 = 卡片 + 两侧阴影边 与 收起态光晕宽 取大（展开时光晕降到 60% 仍在）；
+/// 高 = 刘海 + 10 pt 空隙 + 卡片 + 下方阴影边。水平居中在刘海上。
 fn rect(g: &Notch, open: bool) -> (f64, f64, f64, f64) {
+    rect_h(g, open, card_h())
+}
+
+fn rect_h(g: &Notch, open: bool, ch: f64) -> (f64, f64, f64, f64) {
     if open {
-        let h = *PANEL_H.lock().unwrap();
-        let w = PANEL_W + FLARE * 2.0;
+        let glow_w = g.width + (FLARE + GLOW_X) * 2.0;
+        let w = (CARD_W + CARD_SHADOW_X * 2.0).max(glow_w);
+        let h = (g.height + CARD_GAP + ch + CARD_SHADOW_B).max(g.height + GLOW_Y);
         (g.left + g.width / 2.0 - w / 2.0, g.top, w, h)
     } else {
         let m = FLARE + GLOW_X;
@@ -178,10 +201,39 @@ fn rect(g: &Notch, open: bool) -> (f64, f64, f64, f64) {
     }
 }
 
-/// 光标是否在触发区内。收起时只认刘海本身 —— 两侧圆角与光晕那圈都是菜单栏，不算。
+/// 卡片在桌面坐标里的矩形（不含命中边）。
+fn card_rect(g: &Notch, ch: f64) -> (f64, f64, f64, f64) {
+    (g.left + g.width / 2.0 - CARD_W / 2.0, g.top + g.height + CARD_GAP, CARD_W, ch)
+}
+
+/// 光标到刘海矩形的距离（在里面为 0）。
+fn notch_distance(g: &Notch, x: f64, y: f64) -> f64 {
+    let dx = (g.left - x).max(0.0).max(x - (g.left + g.width));
+    let dy = (g.top - y).max(0.0).max(y - (g.top + g.height));
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// 光标是否在触发区内。
+/// 收起：只认刘海本身 + 2 pt —— 两侧圆角与光晕那圈都是菜单栏，不算。
+/// 展开：刘海 + 10 pt 空隙 + 卡片，四周各 +10 pt（空隙算卡片内，穿过不收起）。
 fn hit(g: &Notch, open: bool, x: f64, y: f64) -> bool {
-    let (rx, ry, rw, rh) = if open { rect(g, true) } else { (g.left, g.top, g.width, g.height) };
-    x >= rx && x <= rx + rw && y >= ry - 2.0 && y <= ry + rh
+    hit_h(g, open, x, y, card_h())
+}
+
+fn hit_h(g: &Notch, open: bool, x: f64, y: f64, ch: f64) -> bool {
+    if !open {
+        return x >= g.left - TOUCH && x <= g.left + g.width + TOUCH
+            && y >= g.top - TOUCH && y <= g.top + g.height + TOUCH;
+    }
+    let (cx, cy, cw, chh) = card_rect(g, ch);
+    let left = cx.min(g.left) - CARD_HIT_PAD;
+    let right = (cx + cw).max(g.left + g.width) + CARD_HIT_PAD;
+    x >= left && x <= right && y >= g.top - TOUCH && y <= cy + chh + CARD_HIT_PAD
+}
+
+/// 光标在不在刘海那块屏的顶部采样带里（60 Hz 采样只在这里开）。
+fn in_band(g: &Notch, x: f64, y: f64) -> bool {
+    x >= g.screen_x && x < g.screen_x + g.screen_w && y >= g.top && y < g.top + SAMPLE_BAND
 }
 
 /// 把窗口摆到收起/展开的位置。★ **只在主线程调**：`set_size` 本身会派发，但派发前读缩放
@@ -202,6 +254,8 @@ fn place_soon(app: &AppHandle, open: bool) {
 /// ★ 收起态**不接鼠标**（四方评审 2026-10-17）：收起窗口比刘海左右各宽 7pt、向下多 7pt，
 ///   盖着菜单栏两侧和下面应用的顶边，接鼠标就会吞掉那里的点击、还会把自己变成 key window。
 ///   悬停判定本来就不靠窗口收事件（靠 NSEvent 监听 + 光标位置），所以收起时整个穿透没有代价。
+/// ★ 展开态也只在光标落进命中区（刘海 + 空隙 + 卡片 +10）时接鼠标：展开窗口为了装阴影与光晕比卡片宽一圈，
+///   那一圈盖着菜单栏图标（交接包 4e「展开时 overlay 命中区 = 刘海 + 10 pt 空隙 + 卡片（四周各 +10 pt）」）。
 fn pass_clicks(win: &tauri::WebviewWindow, through: bool) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
@@ -211,6 +265,15 @@ fn pass_clicks(win: &tauri::WebviewWindow, through: bool) {
     unsafe {
         let _: () = msg_send![ptr as *mut AnyObject, setIgnoresMouseEvents: through];
     }
+}
+
+fn pass_clicks_soon(app: &AppHandle, through: bool) {
+    let a = app.clone();
+    let gen = OPEN_GEN.load(Ordering::SeqCst);
+    let _ = app.run_on_main_thread(move || {
+        if OPEN_GEN.load(Ordering::SeqCst) != gen { return; }
+        if let Some(w) = a.get_webview_window(LABEL) { pass_clicks(&w, through); }
+    });
 }
 
 /// Tauri 不给窗口层级与 Spaces 行为的接口，直接设到 NSWindow 上。必须在主线程。
@@ -257,6 +320,7 @@ fn set_open(app: &AppHandle, open: bool) {
         let _ = app.emit_to(LABEL, "notch-open", true);
     } else {
         let _ = app.emit_to(LABEL, "notch-open", false);
+        pass_clicks_soon(app, true);
         let app = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(COLLAPSE);
@@ -268,28 +332,62 @@ fn set_open(app: &AppHandle, open: bool) {
     }
 }
 
-/// 跟踪线程：光标进刘海区之后才存在，离开并收完就退出。
+/// 光标 → 刘海窗口内坐标（收起态窗口原点）。网页画果冻下垂用。
+fn cursor_payload(g: &Notch, open: bool, x: f64, y: f64) -> Cursor {
+    let (wx, wy, _, _) = rect(g, open);
+    Cursor { x: x - wx, y: y - wy, dx: x - (g.left + g.width / 2.0), distance: notch_distance(g, x, y) }
+}
+
+/// 跟踪线程：光标进了刘海屏顶部那一带之后才存在，离开那一带并收完就退出。60 Hz。
 fn track(app: AppHandle) {
     let me = TRACKER_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
     if TRACKER.compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst).is_err() { return; }
     let gen = ENABLE_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
-        let mut inside = true;
-        let mut since = Instant::now();
+        let mut since_out: Option<Instant> = None;
+        let mut last_cursor: Option<(f64, f64)> = None;
+        let mut emitting = false;
+        let mut accepting = false;
         loop {
             std::thread::sleep(TRACK_TICK);
             if ENABLE_GEN.load(Ordering::SeqCst) != gen || !ENABLED.load(Ordering::SeqCst) { break; }
             let Some(g) = cached() else { break };
             let (x, y) = mouse_desktop(&g);
             let open = OPEN.load(Ordering::SeqCst);
-            let now_in = hit(&g, open, x, y);
-            if now_in != inside { inside = now_in; since = Instant::now(); }
-            if inside && !open && since.elapsed() >= OPEN_DWELL {
-                set_open(&app, true);
-            } else if !inside && open && since.elapsed() >= CLOSE_DWELL {
-                set_open(&app, false);
-            } else if !inside && !open && since.elapsed() >= CLOSE_DWELL {
-                break;   // 擦过没停够，或已经收完
+
+            // 果冻下垂：只在收起态、光标在刘海附近时推；离开范围时补一帧让网页收回那滴黑
+            let d = notch_distance(&g, x, y);
+            let near = !open && d <= CURSOR_EMIT_RANGE;
+            if (near || emitting) && last_cursor != Some((x, y)) {
+                let _ = app.emit_to(LABEL, "notch-cursor", cursor_payload(&g, open, x, y));
+                last_cursor = Some((x, y));
+            }
+            emitting = near;
+
+            if !open {
+                if hit(&g, false, x, y) {
+                    set_open(&app, true);
+                    accepting = true;
+                    since_out = None;
+                    continue;
+                }
+                if !in_band(&g, x, y) { break; }
+                continue;
+            }
+            let inside = hit(&g, true, x, y);
+            if inside != accepting {
+                accepting = inside;
+                pass_clicks_soon(&app, !inside);
+            }
+            if inside {
+                since_out = None;
+            } else {
+                let t = *since_out.get_or_insert_with(Instant::now);
+                if t.elapsed() >= CLOSE_DWELL {
+                    set_open(&app, false);
+                    accepting = false;
+                    since_out = None;
+                }
             }
         }
         let _ = TRACKER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst);
@@ -301,8 +399,7 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(LABEL) {
         raise(&w);
         place(app, OPEN.load(Ordering::SeqCst));
-        // ★ `set_enabled` 每次都换代，旧的检测线程会因代次不符退出 —— 窗口还在就得接上一条新的
-        watch_activity(app);
+        crate::activity::subscribe(app, crate::activity::NOTCH);
         return Ok(());
     }
     let (x, y, w, h) = rect(g, false);
@@ -322,12 +419,13 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     raise(&win);
-    watch_activity(app);
+    crate::activity::subscribe(app, crate::activity::NOTCH);
     Ok(())
 }
 
 fn drop_window(app: &AppHandle) {
     OPEN.store(false, Ordering::SeqCst);
+    crate::activity::unsubscribe(crate::activity::NOTCH);
     if let Some(w) = app.get_webview_window(LABEL) { let _ = w.destroy(); }
 }
 
@@ -350,13 +448,13 @@ fn reconcile(app: &AppHandle) {
     }
 }
 
-/// 鼠标事件监听的回调（主线程）。先对齐几何，再看光标进没进刘海区，命中就叫醒跟踪线程。
+/// 鼠标事件监听的回调（主线程）。先对齐几何，再看光标进没进刘海屏顶部那一带，进了就叫醒跟踪线程。
 fn on_mouse(app: &AppHandle) {
     if !ENABLED.load(Ordering::Relaxed) || TRACKER.load(Ordering::Relaxed) != 0 { return; }
     reconcile(app);
     let Some(g) = cached() else { return };
     let (x, y) = mouse_desktop(&g);
-    if hit(&g, false, x, y) { track(app.clone()); }
+    if in_band(&g, x, y) { track(app.clone()); }
 }
 
 fn install_monitors(app: &AppHandle) {
@@ -431,132 +529,37 @@ pub fn status() -> Status {
     }
 }
 
-/// 四家「在生成」时会写的目录。
-/// ★ 判据都是「这家自己的会话文件刚被写过」：
-///   - Codex：`sessions/**/rollout-*.jsonl`。★ 不用 `state.json` 的 `last_proxy_ts`：codex 会定时
-///     `GET /models`，代理照样刷新它，停手后仍显示「在跑」（2026-10-17 实测）。
-///   - Claude Code：`projects/**/*.jsonl`，含子 agent 的 `subagents/agent-*.jsonl`（四方评审的 Opus 就写在那里）。
-///   - agy：对话库是 WAL 模式，生成时写的是 `-wal`（主库 mtime 不动，见 scan.py `_agy_db_sig`）。
-///   - grok：`**/updates.jsonl`（traffic/scan.py 读的同一份）。
-struct Roots { codex: PathBuf, claude: PathBuf, agy: PathBuf, grok: PathBuf }
-
-impl Roots {
-    fn from_env() -> Roots {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let env_or = |k: &str, d: PathBuf| std::env::var(k).map(PathBuf::from).unwrap_or(d);
-        Roots {
-            codex: env_or("CODEX_HOME", home.join(".codex")).join("sessions"),
-            claude: home.join(".claude").join("projects"),
-            agy: env_or("AGY_DB_DIR", home.join(".gemini").join("antigravity-cli").join("conversations")),
-            grok: home.join(".grok"),
-        }
-        .canonical()
-    }
-    /// FSEvents 报的是真实路径（`/private/var/...`、解开软链之后）；根也换成真实路径才比得上。不存在就原样留着。
-    fn canonical(self) -> Roots {
-        let c = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
-        Roots { codex: c(self.codex), claude: c(self.claude), agy: c(self.agy), grok: c(self.grok) }
-    }
-    fn all(&self) -> [&Path; 4] { [&self.codex, &self.claude, &self.agy, &self.grok] }
-    /// 一条写入事件属于哪家（`LAST_WRITE` 的下标）；不是「在生成」的信号返回 None。
-    fn classify(&self, p: &Path) -> Option<usize> {
-        let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if p.starts_with(&self.codex) && n.starts_with("rollout-") && n.ends_with(".jsonl") { return Some(0); }
-        if p.starts_with(&self.claude) && n.ends_with(".jsonl") { return Some(1); }
-        if p.starts_with(&self.agy) && (n.ends_with(".db-wal") || n.ends_with(".db")) { return Some(2); }
-        if p.starts_with(&self.grok) && n == "updates.jsonl" { return Some(3); }
-        None
-    }
-}
-
-/// 只认「内容变了」：新建、写数据。改元数据 / 改名 / 读都不算（扫描器读这些文件，不能把自己读成「在跑」）。
-fn is_write(kind: &notify::EventKind) -> bool {
-    use notify::event::{EventKind, ModifyKind};
-    matches!(kind, EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Any))
-}
-
-fn active(newest: Option<u64>, now: u64) -> bool {
-    newest.is_some_and(|t| now.saturating_sub(t) < ACTIVE_SECS)
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
-fn snapshot(now: u64) -> Activity {
-    let at = |i: usize| { let t = LAST_WRITE[i].load(Ordering::Relaxed); (t > 0).then_some(t) };
-    Activity { codex: active(at(0), now), claude: active(at(1), now), agy: active(at(2), now), grok: active(at(3), now) }
-}
-
-/// 活动检测线程。只在状态**变了**才推 `notch-activity`。
-/// ★★ 写入靠 **FSEvents 推送**，不轮询文件（维护者 2026-10-18）：PR #1 原来每 2s 挨个 stat，Codex + agy 约 3 ms；
-///   加上 Claude Code（含子 agent 约 8000 个会话文件）全扫一遍约 50 ms，每 2s 一次就是常驻 2–3% CPU。
-///   现在这条线程每 2s 只读 4 个原子量；监听器随线程建、随线程退出时 drop。
-/// ★ 只在**窗口存在**时跑（评审 2026-10-17）：由 `ensure_window` 起，窗口没了（合盖 / 外接屏 / 关掉）就退出，
-///   刘海屏回来时 `reconcile` 建窗会再起一条。
-/// ★ 三条任一不满足就退：没被新的一条接管（`WATCHER`）、这一代没被开关过（`ENABLE_GEN`，同 `track`）、窗口还在。
-fn watch_activity(app: &AppHandle) {
-    let gen = ENABLE_GEN.load(Ordering::SeqCst);
-    let me = WATCHER_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-    WATCHER.store(me, Ordering::SeqCst);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        use notify::Watcher;
-        let roots = std::sync::Arc::new(Roots::from_env());
-        let r2 = roots.clone();
-        let fs = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let Ok(ev) = res else { return };
-            if !is_write(&ev.kind) { return; }
-            let now = now_secs();
-            for p in &ev.paths {
-                if let Some(i) = r2.classify(p) { LAST_WRITE[i].store(now, Ordering::Relaxed); }
-            }
-        });
-        // 建不起监听器（极少见）：光晕一直不亮，记一条日志，不影响刘海面板本身
-        let _fs = match fs {
-            Ok(mut w) => {
-                for root in roots.all() {
-                    if root.is_dir() {
-                        if let Err(e) = w.watch(root, notify::RecursiveMode::Recursive) {
-                            log::warn!("notch: watch {} failed: {}", root.display(), e);
-                        }
-                    }
-                }
-                Some(w)
-            }
-            Err(e) => { log::warn!("notch: activity watcher unavailable: {}", e); None }
-        };
-        while WATCHER.load(Ordering::SeqCst) == me && ENABLE_GEN.load(Ordering::SeqCst) == gen
-            && ENABLED.load(Ordering::SeqCst) && app.get_webview_window(LABEL).is_some()
-        {
-            let a = snapshot(now_secs());
-            let changed = { let mut cur = ACTIVITY.lock().unwrap(); let c = *cur != a; *cur = a; c };
-            if changed { let _ = app.emit_to(LABEL, "notch-activity", a); }
-            std::thread::sleep(ACTIVITY_TICK);
-        }
-        // 被接管时状态归新的那条管，不清
-        if WATCHER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            *ACTIVITY.lock().unwrap() = IDLE;
-        }
-    });
-}
-
-pub fn activity() -> Activity { *ACTIVITY.lock().unwrap() }
+pub fn activity() -> crate::activity::Activity { crate::activity::activity() }
 
 pub fn notch_geometry() -> Option<Notch> { cached() }
 
 pub fn is_open() -> bool { OPEN.load(Ordering::SeqCst) }
 
-/// 前端量出展开面板的自然高度后告诉这里（随额度窗口个数变）。
+/// 展开态的版面（**刘海窗口内**坐标，逻辑 pt）：刘海在哪、卡片在哪。网页画光桥 / 卡片 / logo 来向用。
+pub fn open_layout() -> Option<serde_json::Value> {
+    let g = cached()?;
+    let ch = card_h();
+    let (wx, wy, ww, wh) = rect_h(&g, true, ch);
+    let (cx, cy, cw, chh) = card_rect(&g, ch);
+    Some(serde_json::json!({
+        "window": { "w": ww, "h": wh },
+        "notch": { "x": g.left - wx, "y": g.top - wy, "w": g.width, "h": g.height },
+        "card": { "x": cx - wx, "y": cy - wy, "w": cw, "h": chh },
+    }))
+}
+
+/// 前端量出展开卡片的自然高度后告诉这里（随 Tab / 会话展开 / 告警行变）。
 pub fn set_panel_height(app: &AppHandle, h: f64) {
-    *PANEL_H.lock().unwrap() = h.clamp(80.0, 400.0);
+    *PANEL_H.lock().unwrap() = h.clamp(80.0, CARD_H_MAX);
     if OPEN.load(Ordering::SeqCst) { place_soon(app, true); }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn air13() -> Notch { Notch { left: 646.0, width: 179.0, height: 32.0, top: 0.0, primary_h: 956.0 } }
+    fn air13() -> Notch {
+        Notch { left: 646.0, width: 179.0, height: 32.0, top: 0.0, primary_h: 956.0, screen_x: 0.0, screen_w: 1470.0 }
+    }
 
     #[test]
     fn collapsed_window_covers_notch_flares_and_glow_room() {
@@ -568,48 +571,6 @@ mod tests {
         assert!(!hit(&g, false, 620.0, 10.0), "光晕那圈是菜单栏");
         assert!(!hit(&g, false, 735.0, 40.0), "光晕下沿不算");
         assert!(hit(&g, false, 735.0, 30.0), "刘海本身算");
-    }
-    #[test]
-    fn activity_is_recent_writes_only() {
-        assert!(active(Some(1000), 1030));
-        assert!(!active(Some(1000), 1000 + ACTIVE_SECS));
-        assert!(!active(None, 1000));
-    }
-    fn roots() -> Roots {
-        Roots { codex: "/h/.codex/sessions".into(), claude: "/h/.claude/projects".into(),
-                agy: "/h/.gemini/antigravity-cli/conversations".into(), grok: "/h/.grok".into() }
-    }
-    #[test]
-    fn each_platform_is_told_apart_by_its_own_session_files() {
-        let r = roots();
-        let c = |p: &str| r.classify(Path::new(p));
-        assert_eq!(c("/h/.codex/sessions/2026/10/18/rollout-x.jsonl"), Some(0));
-        assert_eq!(c("/h/.codex/sessions/2026/10/18/rollout-x.jsonl.zst"), None, "压缩归档不是在写");
-        assert_eq!(c("/h/.claude/projects/-Users-x/abc.jsonl"), Some(1));
-        assert_eq!(c("/h/.claude/projects/-Users-x/abc/subagents/agent-1.jsonl"), Some(1), "四方评审的子 agent 也算");
-        assert_eq!(c("/h/.gemini/antigravity-cli/conversations/x.db-wal"), Some(2));
-        assert_eq!(c("/h/.gemini/antigravity-cli/conversations/x.db-shm"), None);
-        assert_eq!(c("/h/.grok/sessions/a/b/updates.jsonl"), Some(3));
-        assert_eq!(c("/h/.grok/auth.json"), None, "grok 刷 token 不是在跑");
-        assert_eq!(c("/h/.claude/settings.json"), None);
-        assert_eq!(c("/h/elsewhere/rollout-x.jsonl"), None, "目录不对就不认");
-    }
-    #[test]
-    fn only_content_writes_count() {
-        use notify::event::{AccessKind, CreateKind, DataChange, EventKind, MetadataKind, ModifyKind, RenameMode};
-        assert!(is_write(&EventKind::Modify(ModifyKind::Data(DataChange::Content))));
-        assert!(is_write(&EventKind::Create(CreateKind::File)));
-        assert!(!is_write(&EventKind::Access(AccessKind::Read)), "扫描器读文件不能读成在跑");
-        assert!(!is_write(&EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))));
-        assert!(!is_write(&EventKind::Modify(ModifyKind::Name(RenameMode::Any))));
-    }
-    #[test]
-    fn a_recent_write_lights_only_that_platform() {
-        for i in 0..4 { LAST_WRITE[i].store(0, Ordering::Relaxed); }
-        LAST_WRITE[1].store(1000, Ordering::Relaxed);
-        assert_eq!(snapshot(1010), Activity { claude: true, ..IDLE });
-        assert_eq!(snapshot(1000 + ACTIVE_SECS), IDLE, "45s 没写就算停了");
-        for i in 0..4 { LAST_WRITE[i].store(0, Ordering::Relaxed); }
     }
     #[test]
     fn open_panel_is_centred_on_the_notch() {
@@ -624,6 +585,53 @@ mod tests {
         assert!(!hit(&g, false, 735.0, 60.0));
     }
     #[test]
+    fn touching_the_notch_plus_two_points_opens() {
+        let g = air13();
+        assert!(hit(&g, false, 644.0, 10.0), "刘海左沿外 2 pt 算碰到");
+        assert!(!hit(&g, false, 643.5, 10.0));
+        assert!(hit(&g, false, 735.0, 34.0), "刘海下沿外 2 pt 算碰到");
+        assert!(!hit(&g, false, 735.0, 34.5));
+    }
+    #[test]
+    fn open_window_fits_the_tallest_card_with_its_shadow() {
+        let g = air13();
+        let (_, y, w, h) = rect_h(&g, true, 560.0);
+        assert_eq!(y, 0.0);
+        assert!(w >= CARD_W + 2.0 * 40.0, "卡片阴影 blur 40 要装得下");
+        assert_eq!(h, 32.0 + 10.0 + 560.0 + 58.0);
+        assert!(h <= 956.0 - 200.0, "最高的卡片也要放进 Air 的屏幕");
+        let (cx, cy, cw, _) = card_rect(&g, 560.0);
+        assert_eq!((cx, cy, cw), (735.5 - 150.0, 42.0, 300.0), "卡片在刘海下沿下方 10 pt、居中");
+    }
+    #[test]
+    fn open_hit_area_is_notch_gap_and_card_plus_ten() {
+        let g = air13();
+        let ch = 400.0;
+        assert!(hit_h(&g, true, 735.0, 37.0, ch), "刘海与卡片之间的 10 pt 空隙算面板内，穿过不收起");
+        assert!(hit_h(&g, true, 585.5 - 10.0, 200.0, ch), "卡片左沿外 10 pt 仍在");
+        assert!(!hit_h(&g, true, 585.5 - 10.5, 200.0, ch));
+        assert!(hit_h(&g, true, 735.0, 42.0 + 400.0 + 10.0, ch), "卡片下沿外 10 pt 仍在");
+        assert!(!hit_h(&g, true, 735.0, 42.0 + 400.0 + 10.5, ch));
+        let (wx, _, _, _) = rect_h(&g, true, ch);
+        assert!(!hit_h(&g, true, wx + 5.0, 100.0, ch), "阴影那圈透明边不接鼠标");
+    }
+    #[test]
+    fn cursor_sampling_is_limited_to_the_top_band_of_the_notch_screen() {
+        let g = air13();
+        assert!(in_band(&g, 100.0, 179.0));
+        assert!(!in_band(&g, 100.0, 180.0), "y ≥ 180 pt 不采样");
+        assert!(!in_band(&g, 1500.0, 10.0), "别的屏不采样");
+    }
+    #[test]
+    fn distance_to_the_notch_is_zero_inside_and_euclidean_outside() {
+        let g = air13();
+        assert_eq!(notch_distance(&g, 700.0, 10.0), 0.0);
+        assert_eq!(notch_distance(&g, 700.0, 56.0), 24.0, "下沿正下方 24 pt");
+        assert!((notch_distance(&g, 646.0 - 3.0, 32.0 + 4.0) - 5.0).abs() < 1e-9);
+        let c = cursor_payload(&g, false, 735.5, 50.0);
+        assert_eq!((c.x, c.y, c.dx, c.distance), (735.5 - 579.0, 50.0, 0.0, 18.0));
+    }
+    #[test]
     fn notch_screen_as_primary_matches_the_measured_air() {
         // 13 寸 Air：屏 1470×956，左右 auxiliary 各 646 / 645 宽，safeArea.top 32
         let g = notch_from((0.0, 0.0, 1470.0, 956.0), 956.0, 32.0, 646.0, 645.0).unwrap();
@@ -635,6 +643,7 @@ mod tests {
         let g = notch_from((1920.0, 0.0, 1470.0, 956.0), 1080.0, 32.0, 646.0, 645.0).unwrap();
         assert_eq!(g.left, 1920.0 + 646.0, "刘海 x 必须带上那块屏自己的 origin");
         assert_eq!(g.top, 1080.0 - 956.0, "那块屏顶边在桌面坐标里比主屏低 124pt");
+        assert_eq!((g.screen_x, g.screen_w), (1920.0, 1470.0));
     }
     #[test]
     fn a_screen_without_a_notch_has_none() {

@@ -1,5 +1,5 @@
 import { fullVersion, isWindowsUI } from "../helpers";
-import { notchRowDesc, type NotchStatus } from "../notchSegs";
+import { NOTCH_DESC, notchRowDesc, notchRowWarn, type NotchStatus } from "../notchSegs";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
@@ -14,12 +14,14 @@ import logo from "../../src-tauri/icons/128x128@2x.png";
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import type { Theme } from "../theme";
 import Seg from "../components/Seg";
+import { AMBER_TEXT } from "../components/CardBadge";
 import { platformColor } from "../theme";
 import { useCacheMode } from "../hooks/useCacheMode";
 import { usePlatformPrefs } from "../hooks/usePlatformPrefs";
 import type { TrafficData, PlatformPrefs } from "../traffic";
 import { CACHE_MODES, cacheModeLabel, cacheModeDesc, orderedKeys, fmtTok } from "../traffic";
 import { sourceNotes } from "../scanHealth";
+import { CLAUDE_OTEL_DESC, claudeOtelLocked, claudeOtelOn, claudeOtelWarn, type ClaudeOtelStatus } from "../claudeOtel";
 
 /** 菜单栏标题样式(用户 2026-08-12 从 demo 里三选一)。索引与 Rust 的 TRAY_STYLE 一一对应。 */
 export const TRAY_STYLES = ["full", "mid", "min", "today"] as const;
@@ -46,6 +48,7 @@ interface Settings {
   tokenExpiryWarnHours: number;
   dockVisible: boolean;
   notchHud: boolean;
+  tpsTray: boolean;
   trayStyle: TrayStyle;
   intro: boolean;
   navOpen: boolean;
@@ -58,7 +61,9 @@ const DEFAULTS: Settings = {
   subExpiryWarnDays: 7,
   tokenExpiryWarnHours: 48,
   dockVisible: false,        // 默认保持纯菜单栏形态(现有行为)
-  notchHud: false,           // 刘海额度条默认**关**(PR #1 作者 2026-10-17 定),只在带刘海的 Mac 上有效
+  notchHud: false,           // 刘海屏版本默认**关**(PR #1 作者 2026-10-17 定;交接包 2026-10-19 DECISIONS「刘海屏版本」沿用),
+                             // 只在带刘海的屏幕上有效。★ 键名沿用旧「刘海额度条」的 `notchHud` —— 改名 = 老用户的偏好丢失
+  tpsTray: true,             // 「在跑时显示 t/s」默认**开**(交接包 page 1)。关 = 托盘始终是额度标题
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
   navOpen: false,            // 侧栏默认**折叠**(用户 2026-08-16 指定),展开后带中文名
@@ -74,6 +79,34 @@ function load(): Settings {
 function save(s: Settings) { localStorage.setItem(KEY, JSON.stringify(s)); }
 
 export function getSettings(): Settings { return load(); }
+
+/**
+ * ★ 日夜主题（交接包 2026-10-19「日夜切换移到设置」）。**一个键、所有 webview 共用**：
+ *   主窗口、菜单栏弹窗、悬停面板都读 `codexbar_theme`；设置页改完发 `theme-changed`，各 webview 收到后重读。
+ *   刘海卡片不跟：刘海本身是黑的，卡片恒深色（交接包 4e 只给了深色）。
+ *   ⚠️ 此前主窗口的主题只活在 App 的 state 里、每次启动回深色；`codexbar_theme` 是菜单栏自己那份。
+ *   现在合成一份 ⇒ 曾在菜单栏选过浅色的用户，升级后主窗口也是浅色（同一个选择，不是新偏好）。
+ */
+export const THEME_KEY = "codexbar_theme";
+export type ThemeName = "dark" | "light";
+export function loadTheme(): ThemeName {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark") return v;
+  } catch { /* 读不到 localStorage ⇒ 默认深色 */ }
+  return "dark";
+}
+export function saveTheme(v: ThemeName): void {
+  try { localStorage.setItem(THEME_KEY, v); } catch { /* 写不了也照样广播，本次会话内各窗口仍一致 */ }
+  void emit("theme-changed", v).catch(() => {});
+}
+
+const IconSun = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9 17.7 6.3M6.3 17.7 4.9 19.1"/></svg>;
+const IconMoon = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>;
+/** 一行只写一件事、不折行；放不下就省略号，全文在悬浮里。 */
+/** 浅色底上的琥珀字：`AMBER` 在白底只有 ~2.4:1，取总览 `--ovWarnTx` 同一个值（F5 量过）。 */
+const WARN_TX_LIGHT = "#8a5a0e";
+const ONE_LINE: React.CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 
 /**
  * 从设置页之外改一两项。**别在别处再写一遍 `localStorage.setItem("codexbar_settings", …)`** ——
@@ -144,7 +177,71 @@ function NumInput({ value, onChange, min, max, suffix, t }: {
   );
 }
 
-export default function SettingsPage({ t }: { t: Theme }) {
+/**
+ * 设置行的**不折行**版（交接包全局规则：文字一律 nowrap，放不下先省略号、全文在悬浮里）。
+ * `warn` = 第二行原因（刘海屏「开着但没显示」），单独一行，不跟在说明末尾被省略掉。
+ * ★ 模块作用域（同 `NumInput`）：写在 render 里每次都是新组件类型，开关的 transition 会变成死代码。
+ */
+function OneLineRow({ t, label, desc, warn, title, children }: {
+  t: Theme; label: string; desc: string; warn?: string | null; title?: string; children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderBottom: `1px solid ${t.divider}` }}>
+      <div title={title ?? desc} style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: t.text, ...ONE_LINE }}>{label}</div>
+        <div style={{ fontSize: 10.5, color: t.muted, marginTop: 2, ...ONE_LINE }}>{desc}</div>
+        {warn && <div data-row-warn style={{ fontSize: 10.5, marginTop: 2, ...ONE_LINE,
+                                              color: !warn.startsWith("⚠") ? t.muted : t.isDark ? AMBER_TEXT : WARN_TX_LIGHT }}>{warn}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 「Claude 实测速度」开关（默认关）。开 = `claude_otel_env.py enable`：把 12 个 OTel 变量合并进
+ * `~/.claude/settings.json` 的 `env`（只碰这 12 个键、已有别的 OTel 配置就不写、先备份、原子写）。
+ * ★ 真源是 settings.json 本身，不在 localStorage —— 用户手改过、或另一台 app 改过，进页面现读就对。
+ * ★ 模块作用域（同 `OneLineRow`）：写在 render 里每次都是新组件类型，开关的 transition 会变成死代码。
+ */
+function ClaudeOtelRow({ t }: { t: Theme }): React.ReactElement {
+  const [st, setSt] = useState<ClaudeOtelStatus | null>(null);
+  const [readErr, setReadErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = useCallback(async (action: "status" | "enable" | "disable") => {
+    try {
+      const raw = await invoke<string>("claude_otel", { action });
+      setSt(JSON.parse(raw) as ClaudeOtelStatus);
+      setReadErr(null);
+    } catch (e: unknown) {
+      setReadErr(String(e));               // ★ 读不到 ≠ 已关闭：开关画成半透明，原因写在下面一行
+    }
+  }, []);
+  useEffect(() => { void run("status"); }, [run]);
+  const on = claudeOtelOn(st);
+  const locked = claudeOtelLocked(st);
+  const toggle = async (): Promise<void> => {
+    if (busy || locked || on == null) return;
+    setBusy(true);
+    try { await run(on ? "disable" : "enable"); } finally { setBusy(false); }
+  };
+  return (
+    <OneLineRow t={t} label="Claude 实测速度" desc={CLAUDE_OTEL_DESC}
+                warn={claudeOtelWarn(st, readErr)}
+                title={st ? `${CLAUDE_OTEL_DESC}（写入 ${st.settings}）` : CLAUDE_OTEL_DESC}>
+      <div data-claude-otel-toggle={on == null ? "unknown" : on ? "on" : "off"} onClick={() => void toggle()} style={{
+        width: 38, height: 22, borderRadius: 11, padding: 2, flexShrink: 0, marginLeft: 12,
+        cursor: busy || locked || on == null ? "default" : "pointer",
+        opacity: busy || locked || on == null ? 0.5 : 1,
+        background: on ? t.accent : t.barTrack, transition: "background .2s",
+      }}>
+        <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: on ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
+      </div>
+    </OneLineRow>
+  );
+}
+
+export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: ThemeName; onTheme: (v: ThemeName) => void }) {
   /** 池子空时允不允许借用已停用的号。★ **读**直接走 `read_state`（值就在 `state.json` 里，
    *  不必再加一条只读 IPC）；**写**才走 `run_rotate` —— 那是真的改状态，该广播。
    *  ⚠️ 存反向（`borrow_off`），所以「开」= 键不存在。 */
@@ -252,11 +349,32 @@ export default function SettingsPage({ t }: { t: Theme }) {
         </div>
       </Row>
 
-      {/* ★ 刘海额度条（PR #1 作者 2026-10-17 从 demo 选定，默认关）。开 = Rust 建窗口 + 装鼠标监听，
-          关 = 销毁窗口（不是隐藏，默认关的功能不常驻任何进程）。启动时由 App.tsx 再应用一次。
-          Windows 没有刘海，整行不画。 */}
+      {/* ★ 日夜切换（交接包 2026-10-19：从标题栏 / 菜单栏弹窗移到设置）。写 `codexbar_theme` + 广播
+          `theme-changed`（`saveTheme`），主窗口、菜单栏弹窗、悬停面板都跟着变。 */}
+      <OneLineRow t={t} label="外观" desc="深色 / 浅色。主窗口、菜单栏弹窗、悬停面板一起切换；刘海卡片始终深色">
+        <div data-theme-row style={{ display: "flex", alignItems: "center", gap: 2, padding: 2, flexShrink: 0, marginLeft: 12,
+                                     border: `1px solid ${t.ghostBorder}`, borderRadius: 9 }}>
+          {(["light", "dark"] as const).map((v) => {
+            const on = theme === v;
+            return (
+              <span key={v} data-theme-pick={v} data-on={on ? 1 : 0} onClick={() => onTheme(v)}
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 11px", borderRadius: 7,
+                             fontSize: 11, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none",
+                             fontWeight: on ? 700 : 400, color: on ? t.accentText : t.muted,
+                             background: on ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
+                {v === "light" ? <IconSun /> : <IconMoon />}{v === "light" ? "浅色" : "深色"}
+              </span>
+            );
+          })}
+        </div>
+      </OneLineRow>
+
+      {/* ★ 刘海屏版本（交接包 2026-10-19 DECISIONS「刘海屏版本」；取代 PR #1 的「刘海额度条」，开关与存储键沿用）。
+          开 = Rust 建窗口 + 装鼠标监听，关 = 销毁窗口（不是隐藏，默认关的功能不常驻任何进程）。启动时由 App.tsx 再应用一次。
+          Windows 没有刘海，整行不画。★ 开着但没显示 ⇒ 第二行说出原因（`notchRowWarn`）。 */}
       {!isWindowsUI() && (
-      <Row label="刘海额度条" desc={notchRowDesc(s.notchHud, notchSt, notchErr)}>
+      <OneLineRow t={t} label="刘海屏版本" desc={NOTCH_DESC} warn={notchRowWarn(s.notchHud, notchSt, notchErr)}
+                  title={notchRowDesc(s.notchHud, notchSt, notchErr)}>
         <div data-notch-toggle onClick={() => {
           const next = !s.notchHud;
           update({ notchHud: next });
@@ -269,12 +387,12 @@ export default function SettingsPage({ t }: { t: Theme }) {
               setNotchErr(String(e).slice(0, 120));
             });
         }} style={{
-          width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer",
+          width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer", flexShrink: 0, marginLeft: 12,
           background: s.notchHud ? t.accent : t.barTrack, transition: "background .2s",
         }}>
           <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: s.notchHud ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
         </div>
-      </Row>
+      </OneLineRow>
       )}
 
       {/* ★ 菜单栏标题样式。Rust 侧存在 `TRAY_STYLE`(atomic),这里改完立刻调命令刷标题;
@@ -293,6 +411,26 @@ export default function SettingsPage({ t }: { t: Theme }) {
                }} />
         </div>
       </Row>
+
+      {/* ★ 在跑时显示 t/s（交接包 page 1 托盘胶囊，默认开）。Rust 的开关是进程内 atomic、默认关，
+          所以 App.tsx 每次启动重发一次（同 `set_tray_style`）。关 ⇒ Rust 立刻画回额度标题（`tray_pill::set_enabled`），
+          悬停面板也随之不再弹（`is_running` 先看开关）。Windows 托盘没有文字，整行不画。 */}
+      {!isWindowsUI() && (
+      <OneLineRow t={t} label="在跑时显示 t/s" desc="有 AI 在跑时，菜单栏标题换成各家 logo + 实时 t/s；鼠标移上去看各会话速度。关掉 = 始终显示额度标题">
+        <div data-tps-toggle onClick={() => {
+          const next = !s.tpsTray;
+          update({ tpsTray: next });
+          invoke("set_tps_tray", { enabled: next }).catch(() => {});
+        }} style={{
+          width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer", flexShrink: 0, marginLeft: 12,
+          background: s.tpsTray ? t.accent : t.barTrack, transition: "background .2s",
+        }}>
+          <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: s.tpsTray ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
+        </div>
+      </OneLineRow>
+      )}
+
+      <ClaudeOtelRow t={t} />
 
       {/* ★ 动效开关（用户 2026-08-16）。关掉＝**完全不播**，不是播快一点 —— 与
           `prefers-reduced-motion` 同语义，两者任一为「关」就不动画。

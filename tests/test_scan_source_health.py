@@ -47,15 +47,16 @@ class _Fixture(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
         self.root = self.d / "sessions"
         self.t0 = int(time.time()) - 86400
-        self._orig = (scan.SOURCES, scan.CACHE, scan.LOCAL_CFG, scan._ZSTD)
+        self._orig = (scan.SOURCES, scan.CACHE, scan.LOCAL_CFG, scan._ZSTD, scan.OTEL_ROOT)
         self.codex = next(x for x in scan.SOURCES if x["key"] == "codex")
         scan.SOURCES = (dict(self.codex, root=self.root),)
         scan.CACHE = self.d / "cache.json"
         scan.LOCAL_CFG = self.d / "sources.local.json"
+        scan.OTEL_ROOT = self.d / "otel-ledger"       # ★ Claude 源会读 OTel 账本：指到夹具（不存在 = 没开）
         self.addCleanup(self._restore)
 
     def _restore(self):
-        scan.SOURCES, scan.CACHE, scan.LOCAL_CFG, scan._ZSTD = self._orig
+        scan.SOURCES, scan.CACHE, scan.LOCAL_CFG, scan._ZSTD, scan.OTEL_ROOT = self._orig
 
     def put(self, name, text=None):
         p = self.root / name

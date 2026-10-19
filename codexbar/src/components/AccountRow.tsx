@@ -1,123 +1,75 @@
-import { STATUS_COLORS, STATUS_TEXT, type Theme } from "../theme";
-import { type Account, maskId, winBarColor, winNumColor } from "../helpers";
-import Ring from "./Ring";
-import PlanBadge from "./PlanBadge";
-import CardBadge, { isCardExpiring, AMBER } from "./CardBadge";
+import { type Account } from "../helpers";
+import { isLow, tightestOf } from "../mbLogic";
+import QuotaRow, { type WinCell } from "./mb/QuotaRow";
 
-export default function AccountRow({ a, isCurrent, isBest, bestPct, privacy, t, onSelect,
+/**
+ * 菜单栏里的 Codex 账号行（交接包 2026-10-19 · 4f「账号行」）。外形在 `mb/QuotaRow`，这里只翻译数据。
+ *
+ * ★ 号名下一行的小字，优先级固定：在用 > 下一个 > 冷却 > 失效 / 未探测 > PRO > 与最优号的差值。
+ *   「在用」= 代理最近一次真的用了它（`last_aid`），「下一个」= 真挑号器的下一个（与总览同源）。
+ * ★ 邮箱 / 到期日 / 重置卡数**不再常显**（交接包 DECISIONS 4f「已定」）；重置卡与到期仍进通知条。
+ * ★ 两个固定槽位 5h / 周：Pro 号只有周窗口，5h 那格画 —（不留空，留空会被读成「这一格坏了」）。
+ * ★ 颜色只有一条规则：任一窗口 < 10% 整行橙红（`mbLogic.isLow`，四家共用）。最紧窗口仍取 `a.tightest`，
+ *   不拿 `windows` 的第一个 —— 那会在两个窗口时显示较宽松的那个。
+ */
+export default function AccountRow({ a, isCurrent, isBest, bestPct, isDark, onSelect,
                                      onSwitch, switching }: {
-  a: Account; isCurrent: boolean; isBest: boolean; bestPct: number; privacy: boolean; t: Theme;
-  /** 点行本身 = 弹出主界面(既有行为,不变) */
+  a: Account; isCurrent: boolean; isBest: boolean; bestPct: number; isDark: boolean;
+  /** 点行内容 = 跳工作台总览的 Codex 档。 */
   onSelect: () => void;
-  /**
-   * 尾部「切换」按钮(用户 2026-08-11 要求)。**只在传了它时才渲染** —— 调用方负责判断
-   * 当前号/失效号不该给(切到自己没意义,切到死号会立刻 failover 回来)。
-   *
-   * 它与 `onSelect` 是两个动作叠在同一行上,所以按钮**必须 stopPropagation**:
-   * 否则点「切换」会同时把主窗口弹出来,而这个按钮存在的意义正是"不用开主窗口就能换号"。
-   */
+  /** 「切换」按钮。**只在传了它时才渲染**，调用方负责判断在用 / 当前 / 失效号不给。 */
   onSwitch?: () => void;
-  /** 该号正在切换中。切号要跑一次 CLI,没有这个状态按钮会看起来没反应、诱发连点。 */
+  /** 该号正在切换中。切号要跑一次 CLI，没有这个状态按钮会看起来没反应、诱发连点。 */
   switching?: boolean;
 }) {
   const isDead = a.status === "dead";
   const isCool = a.status === "cool";
-  const sc = STATUS_COLORS[a.status] ?? STATUS_COLORS.live;
-  // ★ 菜单栏只有一行的位置,所以必须画**最紧**的那个窗口 —— 画第一个会在
-  //   plus 号上显示 5h、藏掉更紧的周,而那正是用户要看的约束。
-  const tw = a.tightestWin;
-  const pct = a.tightest;
-  const known = pct >= 0 && !isDead;
-  // ★★ 环取**最紧窗口的识别色**,不再是额度水位色(用户 2026-08-26 从四版 demo 选的 C:
-  //    「两行 + 双色相,5h 青 / 周 绿」)。**这是知情的取舍**:条与环不再报警,
-  //    仅剩两个报警口 ——「百分数按阈值变色」和「低额度 glow」,别顺手删。
-  //    死号/冷却仍走状态色:那两个不是额度,是账号状态。
-  const qc = isDead || isCool ? sc : winBarColor(tw, pct, t);
-  const glow = known && pct <= 20 ? (pct <= 10 ? "#E0524D" : "#E0901C") : undefined;
-  const expiring = isCardExpiring(a);
-  const delta = known && bestPct >= 0 ? pct - bestPct : null;
+  const known = a.tightest >= 0 && !isDead && a.windows.length > 0;
+  const delta = known && bestPct >= 0 ? a.tightest - bestPct : null;
 
-  // Left rail encodes ONE thing, in priority order: an expiring card outranks "is current", which
-  // outranks the quota level. Same order as the card border so the two surfaces agree.
-  const rail = expiring ? AMBER : isCurrent ? t.accent : qc;
+  const slot = (mins: (m: number) => boolean, label: string): WinCell | null => {
+    const w = a.windows.find((x) => mins(x.mins));
+    return w ? { label, pct: w.pct, refill: w.reset, refillTitle: w.resetAt } : null;
+  };
+  const wins: [WinCell | null, WinCell | null] = [
+    slot((m) => m > 0 && m < 1440, "5h"),
+    slot((m) => m >= 1440, "周"),
+  ];
+  // 一个窗口都对不上时长档（上游多出来一种窗口）：照原样按顺序放，不丢数。
+  if (!wins[0] && !wins[1] && a.windows.length) {
+    const [w0, w1] = a.windows;
+    wins[0] = { label: "5h", pct: w0.pct, refill: w0.reset, refillTitle: w0.resetAt };
+    if (w1) wins[1] = { label: "周", pct: w1.pct, refill: w1.reset, refillTitle: w1.resetAt };
+  }
+  const low = known && isLow(tightestOf(a.windows.map((w) => w.pct)));
+
+  const sub = isCurrent
+    ? <span style={{ display: "flex", alignItems: "center", gap: 2, color: "var(--acc)" }}
+            title="代理最近一次请求用的就是这个号"><Check />在用</span>
+    : isBest ? <span style={{ color: "var(--acc)" }} title="代理下一个请求会挑这个号">下一个</span>
+    : isCool ? <span style={{ color: "var(--warn)" }}>冷却</span>
+    : isDead ? <span style={{ color: "var(--bad)" }}>失效</span>
+    : !known ? <span style={{ color: "var(--bad)" }}>未探测</span>
+    : a.plan === "pro" ? <span style={{ color: "var(--gr)", fontWeight: 700 }}>PRO</span>
+    : delta != null ? <span style={{ fontFamily: "'JetBrains Mono', monospace", color: low ? "var(--bad)" : "var(--tx3)" }}>
+        {delta === 0 ? "最优" : `${delta}%`}</span>
+    : null;
 
   return (
-    <div className="mb-row" onClick={onSelect} style={{
-      background: t.cardBg,
-      border: `1px solid ${expiring ? "rgba(224,144,28,.35)" : t.cardBorder}`,
-      borderLeft: `3px solid ${rail}`,
-      opacity: isDead ? 0.6 : 1,
-    }}>
-      <Ring pct={known ? pct : 0} r={18} sw={4.5} color={qc} track={t.ringTrack} size={46} glow={glow}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.text, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{known ? pct : "—"}</span>
-      </Ring>
+    <QuotaRow platform="codex" isDark={isDark} name={a.node} sub={sub}
+              wins={known ? wins : undefined}
+              note={isDead ? "token 失效 · 需重登" : "未探测 · 刷新一次后显示额度"}
+              readOnly={!onSwitch} onSwitch={onSwitch} switching={switching}
+              switchTitle={`切到 ${a.node}（不打开主界面）`}
+              onOpen={onSelect} opacity={isDead ? 0.6 : 1}
+              data={{ "data-mb-acct": a.aid }} />
+  );
+}
 
-      <div className="mb-row-info">
-        <div className="mb-row-name-line">
-          <span className="mb-row-name" style={{ color: t.text }}>{a.node}</span>
-            <PlanBadge plan={a.plan} t={t} />
-          <span className="mb-row-status" style={{ color: sc }}>{STATUS_TEXT[a.status]}</span>
-          {/* ★ 文案与总览同一套：「在用」= 代理最近一次真的用了它，「下一个」= 真挑号器的下一个。
-              旧的「当前 / USE」分别是 `active` 与「剩余最多」，逐请求轮换下两者都在说别的事。 */}
-          {isBest && <span className="mb-row-badge-use" title="代理下一个请求会挑这个号" style={{ color: t.accentText, background: t.accent, whiteSpace: "nowrap" }}>下一个</span>}
-          {isCurrent ? (
-            <span className="mb-row-delta" title="代理最近一次请求用的就是这个号" style={{ color: t.accent, background: t.accentSoft, whiteSpace: "nowrap" }}>✓ 在用</span>
-          ) : delta != null && (
-            <span className="mb-row-delta" style={{
-              color: delta === 0 ? t.accent : delta <= -50 ? AMBER : t.text2,
-              background: delta === 0 ? t.accentSoft : delta <= -50 ? "rgba(224,144,28,.12)" : t.ghostBg,
-            }}>{delta === 0 ? "最优" : `${delta}%`}</span>
-          )}
-        </div>
-
-        <div className="mb-row-sub">
-          <span className="mb-row-email" style={{ color: t.text2 }}>{maskId(a.email, privacy)}</span>
-          <span className="mb-row-exp-text" title={a.expStale ? "OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。刷新 token 也拉不到新状态,要等 OpenAI 自己复核。" : undefined} style={{ color: t.muted }}>到期 {a.exp}{a.expStale && <span style={{ color: "#E0901C" }}>*</span>}</span>
-        </div>
-
-        <div className="mb-row-meta">
-          {known && a.windows.length > 0 ? (
-            /* ★ 每个窗口一行（Plus = 5h + 周；Pro 只有周，所以天然一行，不需要特例）。
-               条与标签走**窗口识别色**（`winColor`）；百分数仍按阈值变色 —— 那是仅剩的报警口。 */
-            <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
-              {a.windows.map((w) => {
-                const wc = isDead || isCool ? sc : winBarColor(w, w.pct, t);
-                return (
-                  <div key={w.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 9, color: wc, fontFamily: "'JetBrains Mono'", width: 15, flexShrink: 0 }}>{w.label}</span>
-                    <div className="mb-row-bar" style={{ background: t.barTrack, flex: 1 }}>
-                      <div style={{ height: "100%", width: `${w.pct}%`, background: wc, borderRadius: 2, transition: "width .55s cubic-bezier(.4,0,.2,1)" }} />
-                    </div>
-                    <span style={{ fontSize: 9.5, fontWeight: 600, color: winNumColor(w.pct, t), fontVariantNumeric: "tabular-nums", width: 30, textAlign: "right" }}>{w.pct}%</span>
-                    <span title={w.resetAt} style={{ fontSize: 9, color: t.muted, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap" }}>↻{w.reset}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <span className="mb-row-dead">{isDead ? "token 失效 · 需重登" : "未探测"}</span>
-          )}
-          <CardBadge a={a} t={t} compact />
-        </div>
-      </div>
-
-      {/* 尾部悬浮「切换」。绝对定位 ⇒ 不占布局,显隐时整行不跳;渐变遮罩避免与「↻重置」叠字。 */}
-      {onSwitch && (
-        <div className="mb-row-switch-wrap"
-             style={{ background: `linear-gradient(to right, transparent, ${t.cardBg} 30px)` }}>
-          <span className="mb-row-switch"
-                title={`切到 ${a.node}(不打开主界面)`}
-                onClick={(e) => { e.stopPropagation(); if (!switching) onSwitch(); }}
-                style={{
-                  color: switching ? t.muted : t.accent,
-                  border: `1px solid ${switching ? t.ghostBorder : t.accentBorder}`,
-                  background: switching ? t.ghostBg : t.accentSoft,
-                  cursor: switching ? "default" : "pointer",
-                }}>
-            {switching ? "切换中…" : "切换"}
-          </span>
-        </div>
-      )}
-    </div>
+function Check() {
+  return (
+    <svg width="9" height="9" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

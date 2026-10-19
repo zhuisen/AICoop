@@ -65,7 +65,7 @@ export default function RelayPage({ t }: { t: Theme }): React.ReactElement {
           <span data-act="relay-refresh-header">
             <GhostButton t={t} onClick={() => void refreshUsage()} loading={usageBusy}
                          loadingText="取余额中…">
-              <IcRefresh spin={usageBusy} />刷新余额
+              <IcRefresh size={13} spin={usageBusy} />刷新余额
             </GhostButton>
           </span>
           <span data-relay-tabs>

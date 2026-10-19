@@ -1,4 +1,3 @@
-import type { Theme } from "./theme";
 // shared helpers — data transforms & formatters
 
 export interface Win { used_percent?: number; resets_at?: number; window_minutes?: number }
@@ -69,7 +68,7 @@ export interface TokenInfo { exp?: number }
 
 export interface QuotaWindow {
   label: string;
-  /** 窗口时长（分钟）。★ 供 `winColor()` 按**时长档**取色 —— 不用 label 字符串，
+  /** 窗口时长（分钟）。★ 判「5h / 周」按**时长档**，不用 label 字符串 ——
    *  那是 `winLabel()` 现算的展示文本，上游多一个窗口就会全落进兜底。 */
   mins: number;
   pct: number;
@@ -152,16 +151,6 @@ export function cardLeftText(days: number): string {
 
 /** ≤ this many days left ⇒ amber + pulse (design handoff §4). */
 export const CARD_WARN_DAYS = 3;
-
-/**
- * 卡片动作条打开后多久自动收回（用户 2026-09-23：30 秒 → 10 秒 → **5 秒**，同日三次调整；不论是否在操作）。
- * ★★ **唯一真源**：App 的收回计时器与动作条底边的倒计时细线都读它。两处各写一个数的话，
- *   迟早出现「细线走完了弹层还在」或「细线才走一半弹层就没了」—— 那条细线存在的意义
- *   就是**预告**收回时刻，预告不准比没有更糟。
- */
-export const CARD_ACTIONS_LIFE_MS = 5_000;
-/** 收回动画时长（用户 2026-09-23 从 demo 里选的 A · 原路退回）。比入场 160ms 略快：收比出应更利落。 */
-export const CARD_ACTIONS_EXIT_MS = 140;
 
 export const now = () => Date.now() / 1000;
 export const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
@@ -254,91 +243,6 @@ export function fmtResetDate(ts?: number | null): string {
   const d = new Date(ts * 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-/**
- * 额度**窗口**的识别色（用户 2026-08-26 从四版 demo 里选的 C：「两行 + 双色相，5h 青 / 周 绿」）。
- *
- * ★★ **这是一个知情的取舍，不是疏漏 —— 改之前先读完。**
- * 它把条与环的颜色从「额度水位」改成了「哪个窗口」，代价是**低额度不再靠条色报警**：
- * 剩 41% 和剩 95% 的周，条都是同一个绿。用户在 demo 里看过这两个数的实际渲染后仍选了 C。
- *
- * 仅剩的两个报警口，**别再顺手删**：
- *   ① 百分数仍按阈值变色（<50% 琥珀）—— 用户指定的是「曲线颜色」，数字不在其中；
- *   ② 环外 `glow` 在低额度时点亮（不改环的描边色）。
- *
- * ★ 单一真源：菜单栏行与总览卡若都要用，必须都调这里。两边各写一份迟早分叉
- *   （本项目已经在 grok 那边栽过一次：同一状态两个 surface 两种画法）。
- * ★ 按**时长档**取色，不是按 label 字符串 —— label 是 `winLabel()` 现算的，
- *   上游哪天多一个窗口，这里不至于全落进兜底。
- */
-export function winColor(w: { mins?: number } | null | undefined, t: Theme): string {
-  const m = w?.mins ?? 0;
-  if (m > 0 && m < 1440) return t.accent;   // 5h 这一档：品牌青
-  return "#27B26B";                          // 周 / 月：绿
-}
-
-/**
- * 条与环最终用的颜色 —— **窗口识别色 + 低额度夺色**（用户 2026-08-26 定稿的 C′）。
- *
- * ★★ 两个诉求本来是打架的，这条规则是它们的和解：
- *   · 「5h 和周的颜色不一样」→ 平时按**窗口**取色（青 / 绿）；
- *   · 「低额度靠条色报警」  → **跌破阈值时警告色夺回条色**，识别色让位。
- * 换句话说：**识别是常态，报警是例外，而例外优先**。额度快没了的时候，
- * 「这是哪个窗口」远不如「这个要没了」重要 —— 而后者正是这个 app 存在的理由。
- *
- * 阈值与 `quotaColor()` 保持同一套（<50% 琥珀），另加 ≤10% 红：
- * 那是 `quotaColor` 没有、但托盘的 `rem_rgb` 有的一档，这里对齐到更严的那个。
- *
- * ★ **单一真源**：菜单栏行与总览卡都调这里。两边各写一份迟早分叉 ——
- *   本项目已经在 grok 那边栽过一次（同一状态两个 surface 两种画法，靠截图才发现）。
- */
-/** 额度水位分档。**只有这一处判据** —— 见 `winNumColor` 的说明。 */
-export type QuotaLevel = "danger" | "warn" | "ok";
-export function quotaLevel(pct: number): QuotaLevel {
-  if (pct <= 10) return "danger";
-  if (pct < 50) return "warn";
-  return "ok";
-}
-
-export function winBarColor(
-  w: { mins?: number } | null | undefined,
-  pct: number,
-  t: Theme,
-): string {
-  const lv = quotaLevel(pct);
-  if (lv === "danger") return "#E0524D";   // 危险：红
-  if (lv === "warn") return "#E0901C";     // 警告：琥珀
-  return winColor(w, t);                   // 正常：窗口识别色
-}
-
-/**
- * 百分比**数字**的颜色（用户 2026-08-26 定稿：**策略③ 正常中性、告警夺色**）。
- *
- * 与 `winBarColor` **共用 `quotaLevel` 这一个判据**，只是正常态不上色：
- *   · 危险/警告 → 与条同色（红 / 琥珀），条和数字必然一致；
- *   · 正常     → 中性次级灰，**不跟着染窗口识别色** —— 一屏三张卡就是六个数字，
- *                正常态全上色的话满屏彩色，真正的报警反而不显眼。
- *
- * ★★ 为什么必须抽出来：改动前**三个 surface 各写一份**，而且写的还不一样 ——
- *    账号卡与菜单栏行是 `<50 琥珀` 两档（**没有红档**），grok 卡是三档。
- *    结果剩 7% 时：条是红的、账号卡的数字却是琥珀，**同一个状态两种说法**。
- *    这正是本仓库反复栽的那一类（grok 那次也是同一状态两个 surface 两种画法，靠截图才发现）。
- *    闸在 `tests/test_quota_windows.py::WindowColourRule`。
- *
- * ★ 环外的 `glow`（≤20 亮起）是**有意的第三条更窄的带**，不是漏改：它表达"快没了，看这里"，
- *   比 `warn` 更紧；跟着 `<50` 亮的话几乎天天亮，等于没有。
- */
-export function winNumColor(pct: number, t: Theme): string {
-  const lv = quotaLevel(pct);
-  if (lv === "danger") return "#E0524D";
-  if (lv === "warn") return "#E0901C";
-  return t.text2;
-}
-
-export function ringDash(pct: number, r: number): string {
-  const C = 2 * Math.PI * r;
-  return `${(clamp(pct) / 100 * C).toFixed(1)} ${C.toFixed(1)}`;
 }
 
 /** Ring / bar / percent colour. The handoff (§5.1.5) states the rule as a single threshold —

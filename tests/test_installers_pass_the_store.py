@@ -81,8 +81,23 @@ class TheLaunchdPlistsCarryTheStore(unittest.TestCase):
         self.assertEqual(self.proc.returncode, 0,
                          f"安装脚本失败:\n{self.proc.stdout[-2000:]}\n{self.proc.stderr[-2000:]}")
         names = {p.name.rsplit(".", 2)[-2] for p in self.plists}
-        self.assertEqual(names, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn"},
+        self.assertEqual(names, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"},
                          f"生成出来的服务不对: {names}")
+
+    def test_the_otel_receiver_writes_into_the_store_on_the_toggles_port(self):
+        """★★ 接收端的账本必须落在**数据目录**（`.dmg` 布局里 `$REPO` 是运行时副本，按 `__file__` 推会写进副本，
+        `requests.py` / `scan.py` 永远读不到），端口必须等于设置开关写进 settings.json 的那个。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("claude_otel_env_gate", ROOT / "claude_otel_env.py")
+        cfg = importlib.util.module_from_spec(spec); spec.loader.exec_module(cfg)
+        otel = next(p for p in self.plists if p.name.endswith(".otel.plist"))
+        d = plistlib.loads(otel.read_bytes())
+        args = d["ProgramArguments"]
+        self.assertTrue(args[1].endswith("traffic/otel_receiver.py"), args)
+        self.assertEqual(args[args.index("--dir") + 1], str(self.tmp / "store" / "traffic" / "otel-ledger"))
+        self.assertEqual(int(args[args.index("--port") + 1]), cfg.PORT)
+        self.assertIn(":%d/" % cfg.PORT, cfg.OURS["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"])
+        self.assertTrue(d.get("KeepAlive"), "接收端不是常驻")
 
     def test_every_plist_carries_the_store_variable(self):
         for p in self.plists:
@@ -166,14 +181,14 @@ esac
                     "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
         r = subprocess.run(["/bin/bash", str(LAUNCHD)], capture_output=True, env=env,
                            cwd=str(ROOT), timeout=180)
-        loaded = {n for n in ("autosync", "quotad", "proxy", "dawnprobe", "agydawn") if (tmp / "st" / f"loaded_{n}").exists()}
+        loaded = {n for n in ("autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel") if (tmp / "st" / f"loaded_{n}").exists()}
         plists = {p.name.rsplit(".", 2)[-2] for p in (tmp / "home" / "Library" / "LaunchAgents").glob("*.plist")}
         return r, loaded, plists
 
     def test_a_disabled_service_is_enabled_before_bootstrap(self):
-        r, loaded, _ = self._run(disabled=("autosync", "quotad", "proxy", "dawnprobe", "agydawn"))
+        r, loaded, _ = self._run(disabled=("autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"))
         self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace")[-800:])
-        self.assertEqual(loaded, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn"},
+        self.assertEqual(loaded, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"},
                          "★★ disabled 的服务没装上 —— bootstrap 前必须先 `launchctl enable`")
 
     def test_one_failing_service_does_not_block_the_rest_and_says_why(self):
@@ -182,9 +197,9 @@ esac
         self.assertNotEqual(r.returncode, 0, "★★ 有服务没装上却退出 0 —— 会被当成成功")
         self.assertNotIn("unbound variable", err, "★★ 真错误被 `$rc，` 换成了一句乱码报错")
         self.assertIn("bootstrap rc=", err, "★ 没说清是哪一步、什么退出码")
-        self.assertEqual(plists, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn"},
+        self.assertEqual(plists, {"autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"},
                          "★★ 后面的服务连 plist 都没写 —— `set -e` 让一个失败挡住了其余")
-        self.assertEqual(loaded, {"autosync", "proxy", "dawnprobe", "agydawn"},
+        self.assertEqual(loaded, {"autosync", "proxy", "dawnprobe", "agydawn", "otel"},
                          f"★★ 一个失败挡住了其余服务的加载: {loaded}")
 
 

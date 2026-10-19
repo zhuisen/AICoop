@@ -27,7 +27,10 @@ AGYROW = SRC / "components" / "AgyRow.tsx"
 AGYCARD = SRC / "components" / "AgyCard.tsx"
 AGY_TS = SRC / "agy.ts"
 
-POOL_ARRAYS = ("accounts", "alive", "aliveByLabel", "dead")
+POOL_ARRAYS = ("accounts", "alive", "aliveByLabel", "dead", "cMain", "cOff", "cDead")
+# ★ 2026-10-19 总览重做：池数组从 App.tsx 搬进 `components/ov/Overview.tsx`（`cMain/cOff/cDead`），
+#   App 只把 `accounts` 交下去。⌘1~⌘4 自 2026-10-16 起只切平台档、不再切号。
+OVERVIEW = SRC / "components" / "ov" / "Overview.tsx"
 
 
 def strip_comments(src: str) -> str:
@@ -41,12 +44,16 @@ class AgyNeverEntersPoolArrays(unittest.TestCase):
     def setUpClass(cls):
         cls.mb = strip_comments(MENUBAR.read_text(encoding="utf-8"))
         cls.app = strip_comments(APP.read_text(encoding="utf-8"))
+        cls.ov = strip_comments(OVERVIEW.read_text(encoding="utf-8"))
 
     def test_anchors_exist(self):
         """★ 先证明被测目标还在。改名之后断言会静默打空 —— 那是最坏的假绿。"""
-        self.assertIn("aliveByLabel", self.app, "App.tsx 的 aliveByLabel 不见了,断言已失效")
+        self.assertRegex(self.ov, r"const cMain = p\.accounts\.filter\(", "Overview.tsx 的 codex 池数组 cMain 不见了,断言已失效")
         self.assertIn("<AgyRow", self.mb, "菜单栏没有渲染 AgyRow,这条闸在守一个不存在的东西")
-        self.assertIn("<AgyCard", self.app, "总览没有渲染 AgyCard")
+        self.assertIn("<AgyCard", self.ov, "总览没有渲染 AgyCard")
+        # agy 的号来自池自己的数组（`p.agyPool.accounts`），不是 codex 的 `p.accounts`。
+        self.assertRegex(self.ov, r"const gMain = p\.agyPool\.accounts\.filter\(", "Gemini 档的号不是从 agy 池取的")
+        self.assertNotRegex(self.ov, r"const gMain = p\.accounts", "★★ Gemini 档的号从 codex 的 accounts 里取")
         self.assertIn("useAgyQuota", self.mb)
 
     def test_agy_snapshot_is_a_separate_binding(self):
@@ -102,7 +109,9 @@ class AgyNeverEntersPoolArrays(unittest.TestCase):
         # ⚠️ 2026-09-14 起目的地是**总览的 Gemini 档**，不再是 AI 用量的平台详情页
         #    （用户实报「点账号怎么跳到 ai 用量去了」）。判据还是"必须指明去哪"，
         #    只是那个"哪"变了 —— 所以认这两种之一，而不是锁死其中一种。
-        self.assertTrue("navigate-platform" in m.group(1) or "navigate-overview" in m.group(1),
+        #    ★ 2026-10-19（交接包 4f）：行点击统一走 `openOverview("agy")`（→ `open-main-page`
+        #      `{page:"overview", platform:"agy"}`）；它的定义由 test_grok_not_in_pool_ui 核对。
+        self.assertTrue(any(k in m.group(1) for k in ("navigate-platform", "navigate-overview", 'openOverview("agy")')),
                         "AgyRow 的 onOpen 没指定目的地")
 
 

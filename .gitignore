@@ -93,3 +93,9 @@ relay/.relays.lock
 
 # agy 运行日志（探针/刷新/切号的逐号结果）。含账号 label，与其它 *.log 同级。
 agy.log
+# Claude Code OTel 追踪账本（traffic/otel_receiver.py 写）。不含凭证，但含本机使用节奏。
+traffic/otel-ledger/
+# 状态栏额度转写账本（traffic/statusline_quota.py 写）。只有额度白名单字段，不含凭证，但含本机使用节奏。
+traffic/statusline-ledger/
+# 逐请求账本（traffic/requests.py 写）。白名单字段，不含正文与凭证，但含账号 label 与本机使用节奏。
+traffic/requests-ledger/

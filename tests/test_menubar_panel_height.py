@@ -232,15 +232,25 @@ class ShortTodayLeavesNoDeadSpace(unittest.TestCase):
                              "窗口 %spx 而今日页内容只有 %spx ⇒ 底部死白 %spx"
                              % (h, g["h"], h - g["h"]))
 
+    # ★ 2026-10-19（交接包 4f）：今日页改成**只列今天有用量的平台**，`plat=few` 停掉的 kimi/mimo/deepseek
+    #   在本机快照里今天往往本来就是 0 ⇒ 两边一样高（实测 445 vs 445），这条前提断言红的是夹具不是代码。
+    #   对照组改成「在跑条展开 3 家」（`run=3&mbstrip=1`）：它在两个 Tab 顶上都占高度、且与当天流量分布无关，
+    #   于是「窗口跟着今日页走」在高、矮两种内容下都要成立 —— 判别力不再押在今天哪几家用过。
+    #   `notrans=1` 不能省：headless 的 virtual time 不推进 CSS transition，展开动画会停在 0fr（实测不加时 445 vs 445）。
+    TALL = BASE + "&run=3&mbstrip=1&notrans=1&tab=today"
+
     def test_the_fixture_really_is_shorter(self):
         """★ 先证明夹具确实制造了「今日页变矮」这个前提,否则上面那条在
-        「plat=few 根本没生效」时也会绿 —— 空守卫。"""
-        full = probe(BASE + "&tab=today")
+        「矮夹具根本没生效」时也会绿 —— 空守卫。"""
+        full = probe(self.TALL)
         a = ((full.get("geom") or {}).get("mb-root") or {}).get("h")
         b = ((self.today.get("geom") or {}).get("mb-root") or {}).get("h")
         self.assertTrue(a and b, "geom 探针不可用")
         self.assertLess(b, a - 40,
-                        "plat=few 没让今日页变矮(%s vs %s) —— 这条闸在空转" % (b, a))
+                        "矮夹具没让今日页变矮(%s vs %s) —— 这条闸在空转" % (b, a))
+        h = final_height(full)
+        self.assertIsNotNone(h, "高夹具下今日页一次 setSize 都没发")
+        self.assertLessEqual(abs(h - a), 4, "高夹具下窗口 %spx ≠ 内容 %spx" % (h, a))
 
     def test_account_tab_matches_the_remembered_height(self):
         """★ 切回账号页不许跳:它用的是记住的那个数,而不是自己的 656px 内容。"""

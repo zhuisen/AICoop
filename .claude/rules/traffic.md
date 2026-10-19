@@ -6,6 +6,8 @@ paths:
   - "**/useTraffic.ts"
   - "**/TrafficPage.tsx"
   - "**/PlatformPage.tsx"
+  - "**/RequestsPage.tsx"
+  - "**/src/requests.ts"
 ---
 
 # 流量总览 / 多 AI 用量口径（path-scoped）
@@ -18,7 +20,7 @@ paths:
 >
 > ★ **这里是正本**。`CLAUDE.md` §5 只留一行路由。
 
-- **流量总览（v0.7.0 起唯一的消耗视图）**：`traffic/scan.py [--days N] [--json] [--no-cache]` + 主界面「AI用量信息」页（`TrafficPage`）→ 点平台进「详情」（`PlatformPage`）。走独立 tauri 命令 `run_traffic`（**刻意不挂进 `run_rotate` 的白名单**：那条通道守的是账号池命令，两套语义混一个白名单迟早加错）。**八个数据源**全是本机 CLI 自己落的盘，零额度消耗、不联网、不碰凭证（后三个是宿主源，见下）。⚠️ **这句话的范围是 `traffic/`，不是整个仓库**（2026-08-24 起）：`grok-quota` 会读 `~/.grok/auth.json` 并打 xAI 的账单接口，它**刻意不在 `traffic/` 里**、也不挂进 `run_traffic` 的白名单，正是为了让这条安全线仍然可以按目录一眼判定。别把它挪进来。数据源本身仍是：Claude `~/.claude/projects/**/*.jsonl` · Codex `~/.codex/sessions/**/rollout-*.jsonl` 与 `rollout-*.jsonl.zst`（2026-10-16 起，见下面 codex `.zst` 那条）· Grok `~/.grok/**/updates.jsonl` · Kimi `~/.kimi-code/sessions/**/wire.jsonl`。
+- **流量总览（v0.7.0 起唯一的消耗视图）**：`traffic/scan.py [--days N] [--json] [--no-cache]` + 主界面「AI用量信息」页（`TrafficPage`）→ 点平台进「详情」（`PlatformPage`）。走独立 tauri 命令 `run_traffic`（**刻意不挂进 `run_rotate` 的白名单**：那条通道守的是账号池命令，两套语义混一个白名单迟早加错）。**八个数据源**全是本机 CLI 自己落的盘，零额度消耗、不联网、不碰凭证（后三个是宿主源，见下）。⚠️ **这句话的范围是 `traffic/`，不是整个仓库**（2026-08-24 起）：`grok-quota` 会读 `~/.grok/auth.json` 并打 xAI 的账单接口，它**刻意不在 `traffic/` 里**、也不挂进 `run_traffic` 的白名单，正是为了让这条安全线仍然可以按目录一眼判定。别把它挪进来。数据源本身仍是：Claude `~/.claude/projects/**/*.jsonl`（并入 OTel 账本 `traffic/otel-ledger/` 里 transcript 没有的调用，2026-10-19）· Codex `~/.codex/sessions/**/rollout-*.jsonl` 与 `rollout-*.jsonl.zst`（2026-10-16 起，见下面 codex `.zst` 那条）· Grok `~/.grok/**/updates.jsonl` · Kimi `~/.kimi-code/sessions/**/wire.jsonl`。
   - 2026-08-09 取代了原来的「Token 消耗」+「Claude 消耗」两页（`TokensPage.tsx` / `ClaudeTokensPage.tsx` / `AreaChart.tsx` 已删）。**别再按平台各写一份扫描器**——四家的 token 语义不同（下条），分头实现必然在边界上互相矛盾。
   - ★ **四家的 `total` 口径不一样，必须先归一化再比**（2026-08-09 实测）：codex `total = input + output` 且 `cached_input ⊆ input`；Grok `totalTokens = input + output` 且 `cachedRead ⊆ input`；**Claude 与 Kimi 的输入各字段互不相交**（Claude `input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`；Kimi 见下面 kimi 口径那条）。`scan.py` 统一折成四个**互不相交**的类：`uncached_in | cache_read | cache_write | output`，相加才是 total。直接把四家的 `total` 摞在一张图上就是拿四把不同的尺量同一根线。
   - ★ **去重口径按家写死，不是一条通则**：Claude 按 `message.id` **全局**去重（虚高 2.23x）；**codex 按累计值 `total_token_usage.total_tokens`**（同一 `token_count` 事件会成对重复写入——旧注释「codex 实测均无重复」已作废）；OpenClaw 按 `responseId`（虚高 4.08x）。**不按内容哈希**，两轮恰好用掉一样多 token 是常事；取不到累计值时**保留该条**（fail-open）。`SOURCES` 里 codex 的 `dedup: False` 只指**跨文件**不合并，不代表文件内没重复——两个概念共用一个词，旧注释就是这么写偏的。时区口径见下面几条，`PARSER_V` 是它们的版本闸。
@@ -65,6 +67,15 @@ paths:
     - 账本（`bin/agy` wrapper，print-only）降级为**并集兜底**，只补 db 已消失的会话；共有会话一律以 db 为准，**绝不双计**。
     - 实测接入前后：覆盖率 `37/101 (36.6%) → 277/303 (91.4%)`，90 天合计 `9M → 317M`。
       闸：`tests/test_agy_sqlite.py`（14 条，4 个变异全红）。
+    - ★★ **字段表已由 agy 自己的 protobuf descriptor 实证（2026-10-19，agy 1.4.2），不再是盲解**。
+      做法：在二进制里找 `\x0a<len><消息名>`，回读长度前缀，解析 `DescriptorProto` → 精确字段号（脚本思路见 kb「agy 会话库 protobuf 完整字段表」）。
+      · `gen_metadata.data → f1` = `ChatModelMetadata`：`4` usage · `11` time_to_first_token · `12` streaming_duration（都是 `Duration`）· `13` credit_cost · `14` retries · `17` retry_infos · `19` response_model。
+      · usage = `ModelUsageStats`：`2` input · `3` output（**含 thinking**）· `4` cache_write · `5` cache_read · `9` thinking · `10` response_output（可见输出）· `11` response_id。
+        实测 `f10 == f3 − f9` **1802/1802**；`cache_write` 本机恒 0（没漏算）；`credit_cost` 本机 0。
+      · `steps.metadata` **本身**就是 `CortexStepMetadata`：`1` created_at · `6` viewable_at · `7` finished_generating_at · `8` completed_at · `22` last_completed_chunk_at · `32` started_at · `4` tool_call（`2` = 工具名；`3` = 参数 = **正文，别读**）· `9` model_usage · `23` tool_call_output_tokens。
+      · `step_type`：15 模型回复 · 132 工具调用 · 14 用户输入 · 101 系统消息 · 23 checkpoint · 17 错误。`steps.status`：3 完成 · 5 清除 · 6 取消 · 7 出错 · 8 **生成中** · 2 运行中 · 9 等待。
+      · ★ **模型时间不含工具时间**：模型回复步的 `finished_generating_at − created_at` 与 gen 的 `ttft + streaming` 差值 <1s **1804/1804**（最近 120 库）。所以 agy 的 t/s 是**实测**，「含工具时间所以只能估」那个说法作废。工具耗时 = 工具步 `completed_at − started_at`（`run_command` 中位 3.0s / p90 17.7s，`view_file` 0.16s）。
+      · 本机 agy 没有子 agent 会话（`trajectory_metadata_blob` 无 parent id）；`cli.log` 里没有模型计时（`latency_breakdown` 只是本地发送几毫秒）。
     - ⚠️ 下面这段是 2026-08-19 的旧结论，**只保留仍然成立的部分**（口径、模型名、云端 API、弃案）；
       凡涉及"拿不到 / 零落盘 / 只覆盖 print 模式"的表述都已被上面推翻：
     - **「本地零落盘」这半仍然成立**，且已用更大样本复验：123 个会话 SQLite + `transcript.jsonl` + `transcript_full.jsonl` + `cli.log`，结构化 token 字段**零命中**；CLI 无 usage 子命令。⚠️ **朴素 grep `usageMetadata` 会假阳性** —— 唯一命中的是「我问 agy 这个问题、它自己答案里那段 JSON 示例」，自指。与 Claude 额度那次同款，**别被 grep 的命中数骗到**。
@@ -82,6 +93,59 @@ paths:
     - `stats-cache.json` 只有 token 统计(`dailyModelTokens`/`modelUsage`);`~/.claude.json` 的 `remaining_passes` 是别的东西;`claude --help` 无任何可脚本化的 usage/quota 子命令。
     - **第三方是走钥匙串**:`security find-generic-password -s "Claude Code-credentials"` 存在,它们拿订阅凭证调服务端(`/usage` 的额度条本来就是实时拉的),不是读日志。**Anthropic Consumer Terms §3 禁止「非 API key 的自动化访问」**,codex 那边没有等价禁令,所以只有 codex 有油表 —— 两边没有对等物。
     - **用户 2026-08-10 决定:不走这条路。** 也**不做本地估算** —— `total` 里 96% 是缓存重读,而 Anthropic 按不按缓存折价计量至今未定,估出来可能差几倍;**给一个看起来精确、实际可能错 3 倍的百分比,比坦白拿不到更糟**(同「不用 `+N` 藏数据」一条原则)。
+  - ★★★ **定稿 2026-10-19（用户）：Claude 与 agy 的实时额度走「状态栏转写落盘」**。上面 08-10「Claude 没有油表」那条的**结论被补上了**（那时 statusline 还没有 `rate_limits`，v2.1.80 才加），它否掉的两条路（读钥匙串 / 本地估算）**仍然否**。
+    - **做法**：CLI 每次刷新状态栏，把一段 JSON 交给用户配置的命令（两家官方文档写明的功能）。在用户**自己的**脚本里加一步，把额度字段原子写盘：
+      Claude = `~/.claude/settings.json` 的 `statusLine` 命令，取 `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}`；
+      agy = `~/Projects/tools/agy-status/statusline.sh`，取 `quota.<桶>.{remaining_fraction,reset_time}`（桶名 `gemini-5h`/`gemini-weekly`/`3p-5h`/`3p-weekly` **只有 `gemini-weekly` 见于官方文档，其余待真实 payload 核**）。
+    - **为什么选它**：不读 token/cookie/钥匙串、不多发一个请求（不会撞 `/api/oauth/usage` 那种 429，anthropics/claude-code #30930）。Codex 有「CLI 自己把 `rate_limits` 写进 rollout」，这三家都没有，这是最接近的替代。
+    - **只写白名单字段**：payload 里还有 cwd、transcript 路径、模型名，一律不落盘。脚本失败必须静默跳过，**不能影响状态栏本身**。
+    - **四个已知局限**（社区踩过）：① CLI 不在跑就没有新数（Claude 退回 Claude.app 的 `plan-usage-history.json`，只有已用%、无重置时间）；② 会滞后（agy-hud 实测 agy 一轮内不动、闲置 5h 值滞后 25 分钟）⇒ 每条带时间戳，UI 写「截至 HH:MM」；③ Claude 没有按模型的周额度；④ ★★ **payload 不带账号身份**（CodexBar PR #2769 当天回滚的理由之一）—— Claude 单号无碍，**agy 多号池必须做归属核对**（同 B55：对不上当值号就丢，不记到别的号头上）。
+    - 社区同法：stablyai/orca（叠在 OAuth 上）、franksde/agy-hud（首选 statusline quota）、用户自己的 clawd。调研全文在 kb「Claude / agy / grok 实时额度抓取方法、社区评价与风控」。
+    - ⚠️ **agy 风控另案**：Google FAQ 把「第三方软件访问 Antigravity」写成违反 ToS，问题标题点名「automate account switching」，答案是包装 agy「not supported under consumer plans」。转写本身不在其列，但本仓的 `agy-rotate` 自动切号 / 云端读额度在 —— **要不要收紧，未拍板**。
+  - ★★★ **请求账本 / 实时 t/s**（2026-10-19 重构，`traffic/requests.py`；契约 `scratch/redesign_20261019/PLAN.md` §2.1，公式正本在模块 docstring）。
+    与 `scan.py` 同一条安全线：stdlib、不联网、不读凭证、**不读正文**（落盘只经 `_whitelist`，会话标题只取 cwd 的 basename）。`--json` 给请求页（最近 2 个本地自然日），`--live` 给托盘胶囊 / 悬停面板 / 刘海（同时原子写 `requests-ledger/.live.json`）。
+    - **每条 t/s 的分子分母**（`MIN_GEN_S = 0.3`）：
+      · Codex = 可见输出（`output − reasoning`）÷（响应结束 − 首个输出项写盘时刻）。首字取**第一个推理项**的写盘时刻；第一个输出项不是推理项（工具调用整项写盘）就没有首字。推理 token 产生在首字之前，留在分子里会虚高（实测中位 157 vs 102 t/s）。
+      · Claude = OTel span 的 `output ÷ (duration_ms − ttft_ms)`；分子**含 thinking**（实测 thinking 在首字之后流式产出：thinking > 50% 的 88 条中位 98 t/s，与无 thinking 的 93 条 131 同量级，扣掉只剩 28）。没有 span 的退回 transcript `output ÷ (末行 − 触发行)`。
+      · Gemini（agy）= usage `f10`（可见输出）÷ `f1.f12` streaming；Grok = `outputTokens ÷ apiDurationMs`。
+      · **退估值**：生成段 < 0.3 s（或可见输出为 0）⇒ 退回 `output ÷ 整条时长`，`est=true`。实测 528 条 Claude span 里 118 条 `duration − ttft` ≤ 300 ms，直接除最高 75,875 t/s。
+      · **给 null**：任何分母 < 0.3 s 或分子 ≤ 0 ⇒ `tps = null`，**不写 0**（0 会把均速拉低，而那条请求根本没生成）。下限对所有分母生效（实测 28 ms / 516 token ⇒ 18,429 t/s）。
+      · `est` 只在数据里；界面上 t/s **不加「≈」「估」**（交接包全局规则）。
+    - **`avg_tps` 取逐条 t/s 的中位数**（null 不计），不是算术平均、也不按 token 加权：重尾分布下一条短响应就能把均值拉偏几倍；按 token 加权要四家同一个分母，而四家口径本来就不同。
+    - **`--live` 的合计**：`tps` = 在跑会话「最近一条已完成响应」t/s 之和，**只在同一 AI 内相加**；全部为 null 时为 null；在跑但还没完成第一条的会话 `tps: null`。**任何界面不出现跨 AI 合计**。
+    - 实测分布（2026-10-19 08:30 一次 `--json --days 2`，n=3985，**单次观测**；「实测」= `est=false` 的那部分）：
+
+      | 平台 | 条数 | 全部 p10 / 中位 / p90 | 实测条数 | 实测 p10 / 中位 / p90 | 估值条数 |
+      |---|---|---|---|---|---|
+      | Codex | 124 | 15.0 / 78.8 / 197.2 | 95 | 49.0 / 95.1 / 202.4 | 29 |
+      | Claude | 3780 | 7.3 / 70.0 / 131.4 | 1494 | 82.8 / 111.8 / 149.7 | 2286 |
+      | Gemini | 80 | 5.9 / 33.7 / 147.9 | 33 | 7.1 / 29.0 / 143.8 | 47 |
+      | Grok | 1 | 54.1 | 1 | 54.1 | 0 |
+
+      今天 / 昨天 `avg_tps` 99.5 / 53.0，首字中位 3.11 s / 4.95 s。⚠️ Claude 估值占 60%（OTel 试运行 10-18 22:40 才开始，之前的请求只有 transcript）；两天的均速差是混合比例变了还是真变慢，**这次分不出来** —— 等 OTel 覆盖满两天再比。
+    - **账号对上率**（同一次）：Codex 124/124 按 `response_id` 对上号（`rotation.py::scan_proxy_log` + `make_resolver`），0 条「直连」；Gemini 77/80（经 `agy_rotation` 的 conv id 对上，3 条 null）；Claude 恒「本机」、Grok 恒「单号」。⚠️ 直连为 0 只说明这两天没有绕开代理的请求，**不说明对不上的路径不存在**（泳道那条 77~93% 是另一个窗口、另一个口径）。
+    - **OTel 已产品化（2026-10-19，v1.12.0 beta，待外部用户验证）**：接收端 `traffic/otel_receiver.py` 是正式服务 `com.doushutangmu.codex-rotate.otel`（**只在 `install-launchd.sh`**；Windows 版已取消，`test_installers_agree.py::MACOS_ONLY`），进了 `RUNTIME_FILES` 与 `bundle.resources`，账本 `--dir <store>/traffic/otel-ledger`。改 `~/.claude/settings.json` 那半拆成设置页开关「Claude 实测速度」（默认关，`claude_otel_env.py`：只碰 12 个键、冲突不写、先备份、关只删自己写的）—— 装服务 ≠ 改用户配置这条分界保留。端口被占时接收端把原因写进 `.status.json`（`listening:false`）并退出非 0。`requests.py` 与 `scan.py` 只**读** `traffic/otel-ledger/`，没有它时 Claude 全走 transcript。
+      ✗ 已被取代：「试运行，常驻 `com.doushutangmu.claude-otel`，刻意不在安装脚本 / `RUNTIME_FILES`，转正未拍板」（10-18）。
+    - 闸 `tests/test_requests_ledger.py`（四家夹具、增量游标、去重、失败保留旧值、白名单、`--live` 合计规则）。
+    - ★★★ **判停 = 各家自己写的轮次结束标记，不是「N 秒没写」**（用户 2026-10-19 拍板「改用轮次结束标记」；表在 `requests.py` 模块 docstring「判停」）。
+      · **为什么**：旧判据「45 s 内写过会话文件」停手后要等 45 s + 托盘 3 s ≈ 48 s 才熄；而 Claude transcript 一轮之内相邻两次写入的静默间隔
+        （2026-10-19 实测，n=95684）**p50 0.1 s · p90 10 s · p99 99 s · p99.9 600 s**（长工具调用 / 子 agent / 等权限）⇒ 同一个 45 s 既慢、又会在
+        长工具调用中途误判停。轮次结束是 CLI 自己落盘的事实，拿「多久没写」去归纳它就是 `CLAUDE.md` §7.1「先演绎后归纳」那一类。
+      · **口径**：在跑 = 这个文件最后一个轮次事件是「开始」（`state.open`，随游标保存，缓存命中不重读也知道）**且** `FALLBACK_SECS`（600 s）内写过。
+        兜底窗口只管「没写结束标记」：崩溃 / 被杀 / 旧版本不写标记。写了结束标记 ⇒ 立刻停，文件刚写过也停。
+      · **各家标记**（只看 type / subtype / 键是否存在 / 状态码，不读正文；本机近 7–10 天实测）：
+        Codex 开 `task_started`、收 `task_complete` · `turn_aborted`（Esc，44/44 `reason: interrupted`，紧跟自己那一轮的 `task_started`），turn_id 对不上不收。
+        Claude 开 = 提示行（user、非 meta、有 `promptSource` 键，子 agent 的提示行没有这个键、靠 `isSidechain: true`）· 工具结果行 · 非终止 assistant；
+        收 = `system/turn_duration`（2135 轮）· 中断行（Esc 写一行带 `interruptedMessageId` 键的 user，**不写** turn_duration；44 次里 39 次有这个键，
+        另 5 次是旧版、靠兜底）· assistant `stop_reason ∈ {end_turn, stop_sequence, max_tokens}`（子 agent 不写 system 行，只有这一条；61/71 个子 agent 文件以 end_turn 收尾）。
+        agy 看会话库最后一步：`(step_type 15, status 3)` 或 status 5 / 6 = 收，其余（生成中 8、工具 132、错误 17 后面跟重试的 15）= 开；近 150 库 139 个以 (15,3) 收尾。
+        grok 开 `user_message_chunk`、收 `turn_completed`（end_turn 122 / cancelled 5 / error 4，都收）。
+      · ⚠️ **不收的三样，别「补」回来**：`stop_hook_summary`（2140 次里 32 次后面还跟着工具调用 —— 子 agent 的 Stop 钩子也写它）·
+        `refusal`（实测拒答后 `model_refusal_fallback` 换模型接着答）· 压缩摘要行 `isCompactSummary`（手动 /compact 之后没有回复；自动压缩时轮次本来就开着）。
+        本地命令回显行（没有 `promptSource`）也不开新一轮，否则 `/model` 一下就亮 10 分钟。
+      · 提示行一写下就算开（不等第一条回复）：实测提示 → 第一条 assistant 行 n=2254，p50 12 s · p90 49 s · max 431 s。
+      · Rust 侧（`activity.rs`）：FSEvents 只当「叫醒」；光晕跟 live（`glow`），live 失败 / 卡住 > 10 s 才退回 FSEvents。见 `.claude/rules/ui.md` 刘海「在跑的判据」。
+      · 闸 `tests/test_requests_ledger.py::TurnEndMarkers`（四家：进行中 / 结束标记立刻停 / 兜底窗口 / 增量与缓存命中 / 旧游标重解）。
   - ★★ **grok 与 agy 都有额度油表，都已接入**（grok 2026-08-24 / agy 2026-09-04）。⚠️ 这条曾写作「agy 没有且拿不到」，**2026-09-04 被实测推翻**，详见本节末尾那条。
     - **grok 端点 = `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`**。它**压在 HPACK 里**，grok TUI 走 HTTP/2，所以 `strings` 抓包和裸看抓包文件都找不到路径——四个凭直觉猜的 URL 全 404。**解 HPACK 才拿到**（`scratch/grok-probe/decode_h2.py`，`pip install hpack` 即可）。同批解出的完整面貌：`/v1/settings` `/v1/user` `/v1/models` `/v1/responses` `/v1/sessions/{id}/signals` `/v1/traces` `/oauth2/token`。**不是官方公开 API**，升级可能改。
     - 鉴权取 `~/.grok/auth.json` 顶层条目的 **`key`** 字段（不是 `access_token`），配 `x-xai-token-auth: xai-grok-cli` + `x-userid`。返回周期/已用百分比/按产品拆分。**只有周窗口（实测正好 10080 分钟），没有 5 小时窗口** —— 别照账号池那套画两个环。
@@ -206,6 +270,14 @@ paths:
     - 判定单一真源 = `countsCacheRead` / `countsCacheWrite` / `countedClasses` / `mixParts`（都在 `traffic.ts`）。**页面别各写一份 `mode === "full"`**，那是迟早在某个边界上互相矛盾的写法。开关状态走 `useCacheMode`（localStorage + Tauri 广播，同 `usePrivacy`），所以菜单栏「今日」即时同步。
     - ⚠️ **删列会静默染错色**：`FragRow` 原来按下标染色（`i===1` 青＝缓存读、`i===3` 琥珀＝费用），缓存读整列消失后下标左移，青色会跑到「输出」头上。已改成单元格自带颜色——**任何"某一列可能消失"的表格都不许按下标做样式**。
     - 回归脚本 `scratch/verify_cache_mode_20260811.ts`（`jiti` 直接跑**前端真代码**，非 Python 重写——重写过一次，正则漏了 `FALLBACK` 未加引号的键，把费用算低了 7%）。
+  - ★★★ **Claude 按「实际 API 调用」算 = transcript ∪ OTel 账本**（用户 2026-10-19 定稿：「都按实际 api 调用算……这个口径在 codexbar 上不做提示和说明」）。
+    - 起因（2026-10-19 当天实测，n=1）：`requests.py` Claude 2057 次 / 539.85M，`scan.py` 1513 次 / 398.46M。多出的 547 次**不在任何 transcript 里**，只在 `traffic/otel-ledger/`：`query_source_safe` = `agent_summary` 511 次（139.6M）· `web_fetch_apply` 17 · `web_search_tool` 14 · `compact` 5（2.4M）—— Claude Code 的后台调用，真花额度、不写对话记录。两边都有的 1510 条 token 逐条相等。
+    - 做法：Claude 源的 `extra` 钩子 `_claude_otel_rows`，在全局 `message.id` 去重**之后**跑；`request_id` 不在 transcript 里的 span 进桶（`uncached_in/cache_read/cache_write/output` = `input/cache_read/cache_creation/output_tokens`，时刻 `t_end`）。**两边都有的以 transcript 为准**（它带 1h 拆分）。
+    - ★ 去重键是 **`requestId`**，不是 `message.id`：OTel 的 `gen_ai.response.id` 也是 `req_…`，与 message.id 零交集（实测 0/1591）。transcript row 第 10 位带 `requestId`、**随缓存走** —— 缓存命中的文件不重读，集合只能从缓存里拿（`PARSER_V` 13）。
+    - 账本走同一套缓存规矩（`sig` / 增量 / 读失败保留旧值连旧签名）。目录不存在 = 没开 OTel，静默等于旧口径。路径与 `requests.py::roots()["otel"]` 同一个环境变量 `REQUESTS_OTEL_DIR`、同一个 `<store>`（scan.py 不能 `import requests`：它反过来 import scan）。
+    - 不按 `success` 筛：当天账本 2164 行 `success` 全 true、`attempt` 全 1；失败而带 token 的照计，四项全 0 的跳过。重试各有 request_id，各算一次。
+    - ⚠️ 已知偏差：OTel 无 1h 缓存写拆分 ⇒ 这部分按 5m 价（偏低）；OTel 试运行 10-18 22:40 起，之前的历史就是少这部分（不补、不写说明）。3 条 transcript 的 `output_tokens` 停在流式中途值（5 vs span 511），按口径仍以 transcript 为准，对账差 −987 token。
+    - 对账 `python3 -I scratch/claude_api_parity_20261019.py`（当天两边都是 2138 次）。闸 `tests/test_scan_claude_otel.py`（17 个变异如期）；**跑 Claude 源的测试必须把 `scan.OTEL_ROOT` 指到夹具**，同 AGY_ROOT 那次，有 AST 闸。
   - ★ **去重键是 `message.id`，且必须全局去重**。朴素求和虚高 **2.23x**（实测 2026-08-09，5090 文件 / 1.97GB / 94,807 唯一响应）。两种重复成因不同：一次响应按 content block 拆成多行、每行带同一份 usage（文件内 115,413 条）；会话 resume/fork 复制历史（跨文件 1,497 条 / 1.6%）。**per-file 去重挡不住第二种**——这也是缓存里存 `{msg_id: 明细}` 而不是聚合值的原因：聚合值算出来就没法再减掉跨文件那份。
   - ★ 跨文件重复里有 **16 条两边 usage 不一致**，形态全是「一份四项全 0 / 一份真实值」。合并时**显式取 token 总量大者**，不靠字典序覆盖——零值过滤本是为 `<synthetic>` 写的，靠它挡属于碰巧对。
   - ★ transcript 时间戳是 **UTC**，本机 +0800，必须转本地日期再分桶，否则 00:00–08:00 的活记到前一天。**缓存里只存 epoch，日期一律在聚合层现算**——缓存键只有 `(mtime,size)` 不含时区，存派生日期的话，以别的 TZ 跑过一次（launchd 默认环境 / CI / `export TZ`）就会让 5000+ 个此生不再变 mtime 的文件永久保留旧时区日期，两种口径混进同一张图且不自愈。同理**日期不能按 UTC 小时记忆化**：+05:30 这类半小时偏移的本地午夜落在整点小时的中间（Kolkata=18:30Z），会把两天折叠成一天，且结果依赖遍历顺序。缓存带 `v`+`pv` 双版本号，**改任何 `_scan_*` 的解析逻辑（含去重键、口径归一）必须 +1 `PARSER_V`**（`_parse_file` 这个名字早已不存在，别照旧文去找）。

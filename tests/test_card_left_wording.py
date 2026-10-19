@@ -48,7 +48,8 @@ class TheWordingIsFloorNotCeil(unittest.TestCase):
 
 
 class EverySiteUsesTheOneImplementation(unittest.TestCase):
-    SITES = ["components/CardBadge.tsx", "components/UseCreditDialog.tsx", "MenuBar.tsx"]
+    # 2026-10-19：卡上的「重置卡 ×N · 剩 X」从 CardBadge 组件搬进 AccountCard 的页脚（交接包 page5）。
+    SITES = ["components/AccountCard.tsx", "components/UseCreditDialog.tsx", "MenuBar.tsx"]
 
     def test_each_site_calls_it(self):
         for p in self.SITES:
@@ -64,7 +65,9 @@ class EverySiteUsesTheOneImplementation(unittest.TestCase):
         self.assertEqual(len(re.findall(r"export function cardLeftText", h)), 1)
 
 
-BASE = "http://127.0.0.1:3304/harness.html?nav=home"
+# `ovoff=1`：harness 把那张快到期的卡补在**末尾**的活号上，而末尾三个号被夹具设成了停用 ——
+#   2026-10-19 起停用号收进折叠条，不展开就点不到。
+BASE = "http://127.0.0.1:3304/harness.html?nav=home&ovoff=1"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
@@ -83,13 +86,18 @@ def _render_pairs():
         br = p.chromium.launch(executable_path=CHROME, headless=True)
         pg = br.new_page(viewport={"width": 1300, "height": 900})
         pg.goto(BASE, timeout=30000); pg.wait_for_timeout(3000)
-        n = pg.locator("[data-card-badge-use]").count()
+        # 2026-10-19：角标只显示；弹窗从同一张卡的 ⋯「使用重置卡」打开（悬停时底栏整条换成操作，角标够不着）。
+        n = pg.locator("[data-card-badge]").count()
         for i in range(n):
-            b = pg.locator("[data-card-badge-use]").nth(i)
-            m = re.search(r"剩(\d+)(天|小时)", b.inner_text())
+            b = pg.locator("[data-card-badge]").nth(i)
+            m = re.search(r"剩\s*(\d+)\s*(天|小时)", b.inner_text())
             if not m:
                 continue                       # 没到「快到期」档的角标不带「剩 N 天」
-            b.click(); pg.wait_for_timeout(250)
+            if not pg.evaluate("""(i) => { const c = document.querySelectorAll('[data-card-badge]')[i].closest('[data-ov-card]');
+                  const it = c && c.querySelector('[data-ov-mi="credit"]'); if (it) it.click(); return !!it; }""", i):
+                pairs.append((m.group(1) + m.group(2), "（这张卡没有「使用重置卡」入口）"))
+                continue
+            pg.wait_for_timeout(250)
             row = pg.locator("[data-use-credit-row]").first.inner_text()
             d = re.search(r"还剩 (\d+)(天|小时)", row)
             pairs.append((m.group(1) + m.group(2), d.group(1) + d.group(2) if d else None))

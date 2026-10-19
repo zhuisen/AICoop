@@ -57,6 +57,11 @@ RUNTIME_FILES = [
     "scripts/install-launchd.sh", "scripts/codex-wrapper-with-logout-guard.sh",
     "relay/__init__.py", "relay/store.py", "relay/monitor.py", "relay-ctl",
     "traffic/quota_anchors.py", "traffic/rotation.py",
+    "traffic/statusline_quota.py",
+    # ★ 常驻服务 `otel` 的入口（Claude 实测速度）。漏了它 = 服务装上了但起不来，launchd 只会安静地反复重启。
+    "traffic/otel_receiver.py",
+    # 逐请求账本；它 `import scan` / `import agy_rotation`（同目录），两个都得跟着拷，否则 runtime 里 ImportError。
+    "traffic/requests.py", "traffic/scan.py", "traffic/agy_rotation.py",
     # ★ agy 账号池那一套。**漏了它 `~/.local/bin/agy-rotate` 会是个悬空 symlink** ——
     #   点一下报「No such file」，而用户完全看不出与 Connector 有关。
     #   2026-09-19 实测漏过一次，现在有 `EveryEntryTargetIsInTheRuntime` 守着。
@@ -75,7 +80,7 @@ ENTRIES = {
 STEP_WRAPPER = "wrapper"
 
 #: `install-launchd.sh` 装的全部常驻服务（闸从安装器现解析核对，别只改一边）。
-SERVICES = ["autosync", "quotad", "proxy", "dawnprobe", "agydawn"]
+SERVICES = ["autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"]
 
 
 # ── 小工具 ────────────────────────────────────────────────────────────────────
@@ -492,7 +497,8 @@ def plan(src, store):
         "轮换代理要一直在；额度要自动刷新。**全部用户级，不需要 sudo**",
         st, det,
         preview="com.doushutangmu.codex-rotate.{" + ",".join(names) + "}\n"
-                "⚠️ dawnprobe / agydawn 是仅有的会自动花钱的定时器，**默认关闭**，装了也不会自己跑")
+                "⚠️ dawnprobe / agydawn 是仅有的会自动花钱的定时器，**默认关闭**，装了也不会自己跑\n"
+                "otel 只在本机 127.0.0.1:4318 收 Claude Code 的耗时与 token（设置里开「Claude 实测速度」才有数据）")
 
     # ⑥ 让裸 `codex` 也走轮换（**单独一步，默认不选**）
     wrapper = bin_ / "codex"

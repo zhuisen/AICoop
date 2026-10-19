@@ -188,7 +188,8 @@ class TheUiSaysWhatToDo(unittest.TestCase):
         self.assertIsNone(run_agy_ts('m.agyAction("SOMETHING_ELSE", null)'))
 
     def test_both_surfaces_are_wired(self):
-        for f in ("App.tsx", "MenuBar.tsx"):
+        # 总览的 Gemini 卡 2026-10-19 起由 `components/ov/Overview.tsx` 渲染（App.tsx 只挂 <Overview>）。
+        for f in ("components/ov/Overview.tsx", "MenuBar.tsx"):
             with self.subTest(f=f):
                 self.assertIn("action={agyAction(a.quota_err_reason, a.quota_err_url)}", ts_code(f))
         for f in ("components/AgyCard.tsx", "components/AgyRow.tsx"):

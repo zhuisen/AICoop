@@ -52,20 +52,6 @@ export const CARD_TYPE = {
 export type CardType = { [K in keyof typeof CARD_TYPE]: (typeof CARD_TYPE)[K] extends number ? number : string };
 
 /**
- * 小窗口下的卡片标尺（用户 2026-10-14：「最小尺寸下，总览页面里面的账号卡片要缩小」）。
- * 由 `useCardType()` 按窗口尺寸切换，大窗口仍是上面那档（D 档「整体 +3」不动）。
- * 正文字号最低 11 —— 再小就回到「字太小」那次投诉之前了；省下的高度主要来自环与留白。
- * 徽章三项与上面一致（它已为「与到期同行」缩过一档）。
- */
-export const CARD_TYPE_COMPACT: CardType = {
-  name: 14, status: 11, planBadge: 9, useBadge: 9, curBadge: 9.5, delta: 10,
-  email: 11.5, winLabel: 11, pct: 12, eta: 11, note: 11, exp: 11.5,
-  ring: 44, ringR: 18, ringSw: 4, ringNum: 12.5, bar: 4, shortcut: 10,
-  badgeFont: CARD_TYPE.badgeFont, badgeIcon: CARD_TYPE.badgeIcon, badgePad: CARD_TYPE.badgePad,
-  pad: "10px 12px 8px", footTop: 2, footPad: 4, colGap: 2,
-};
-
-/**
  * 平台详情页「模型消耗」宽表的**字号与列宽标尺**（用户 2026-08-26：「模型数字放大，现在太小了」）。
  *
  * 与 `CARD_TYPE` 同一口径：卡片那批用户选了 D 档「整体 +3」，这张表原本比它还小一档

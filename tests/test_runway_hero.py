@@ -26,6 +26,16 @@
 旧 Hero 实测 **1300 宽下 112px、880 下 128px**。新的实测 **98px（两档都是）**。
 闸量的是**渲染后的真实高度** —— 它由内边距 / 环尺寸 / 行高 / 换行四者合成，
 断言源码里那几个常量会漏掉任何一种撑高的方式。
+
+## 2026-10-19 换了载体（交接包 page5 · 5b），守的东西逐条照搬
+
+续航条（`RunwayHero`）整个换成顶部三栏的「还能连续用」那栏（`ov/OvHero::PoolHero`，接力条 + 说明行）。
+下面每一类都改成量新结构；**作废 / 改口径的只有三处**，理由写在各自的类里，PLAN §4 F5 有总表：
+- 高度上限：1300 宽仍 ≤112；880 宽从 ≤128 放宽到 ≤132（交接包窄档把「今天的切换」收成三栏下方一行，
+  原型同尺寸，实测 132）。⚠️ 这条与用户 2026-09-21「可以降低但不能增加」相冲，需用户确认。
+- 「不可用的号合成一段灰」作废：接力条上不可用的号要么在冷却后作为淡色段回来，要么不画；
+  空档画红色斜纹（交接包：「不要留灰色空白」）。改守「每一段都是一个具体的号」。
+- 数字的单位从单独的「分钟」节点改成数字本身的格式（`3h20m`，交接包），「跟着数字」的判据改成同一行。
 """
 try:
     from . import _isolation  # noqa: F401  ★ 见 tests/_isolation.py —— 必须在任何被测模块之前
@@ -43,49 +53,61 @@ HARNESS = "http://127.0.0.1:3304"
 APP_DIR = ROOT / "codexbar" / "uishot" / "app"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-#: 旧 Hero 的实测高度（2026-09-21，替换前量的）。**这是上限，不是目标。**
-OLD_HEIGHT = {1300: 112, 880: 128}
+#: 高度上限。**这是上限，不是目标。** 1300 = 旧 Hero 实测（2026-09-21）；880 = 交接包窄档（见模块说明）。
+HEIGHT_CAP = {1300: 112, 880: 132}
 
 _PROBE = r"""
 const out = {};
-const el = document.querySelector('[data-runway-hero]');
+const el = document.querySelector('[data-ov-hero]');
 if (el) {
+  const q = s => (el.querySelector(s) || {}).textContent || '';
   const r = el.getBoundingClientRect();
   out.h = Math.round(r.height);
   out.ov = Math.round(el.scrollWidth - el.clientWidth);
-  out.segs = el.querySelectorAll('[data-runway-seg]').length;
-  out.rest = el.querySelectorAll('[data-runway-rest]').length;
-  out.hours = (el.querySelector('[data-runway-hours]') || {}).textContent || '';
-  out.note = (el.querySelector('[data-runway-note]') || {}).textContent || '';
+  out.segs = el.querySelectorAll('[data-relay-seg]').length;
+  out.gaps = el.querySelectorAll('[data-relay-gap]').length;
+  out.hours = q('[data-runway-hours]');
+  out.until = q('[data-runway-until]');
+  out.note = q('[data-runway-note]');
+  out.gapNote = q('[data-relay-gap-note]');
+  out.week = q('[data-burst-week]');
   out.pin = el.querySelectorAll('[data-runway-pin]').length;
-  out.stranded = (el.querySelector('[data-runway-stranded]') || {}).textContent || '';
-  out.borrowed = (el.querySelector('[data-runway-borrowed]') || {}).textContent || '';
+  out.stranded = q('[data-runway-stranded]');
+  out.borrowed = q('[data-runway-borrowed]');
   out.hoursEl = !!el.querySelector('[data-runway-hours]');
-  // ★ 每段的**真实像素宽** + 它该写的名字 + 实际写了什么 + 有没有被裁。
-  //   「装不装得下」是像素问题，判据就得拿像素来判 —— 拿占比当代理量已经错过一次。
-  out.segw = [].slice.call(el.querySelectorAll('[data-runway-seg]')).map(function (n) {
-    return { w: Math.round(n.clientWidth),
-             name: (n.getAttribute('title') || '').split(' ')[0],
-             shown: (n.textContent || '').trim(),
-             over: n.scrollWidth > n.clientWidth + 1 };
+  const hEl = el.querySelector('[data-runway-hours]'), uEl = el.querySelector('[data-runway-until]');
+  out.untilWithNumber = !!(hEl && uEl && hEl.parentNode === uEl.parentNode);
+  // ★ 每段的**真实像素宽** + 它该写的名字 + 实际写了什么 + 有没有被裁 ——「装不装得下」是像素问题。
+  out.segw = [].slice.call(el.querySelectorAll('[data-relay-seg]')).map(function (n) {
+    return { w: Math.round(n.clientWidth), name: (n.getAttribute('title') || '').split(' ')[0],
+             shown: (n.textContent || '').trim(), over: n.scrollWidth > n.clientWidth + 1 };
   });
-  const hEl = el.querySelector('[data-runway-hours]');
-  const uEl = el.querySelector('[data-runway-unit]');
-  out.unit = (uEl || {}).textContent || '';
-  // ★ 「跟着数字一起显示」是字面要求：同一个父节点才算跟着。
-  out.unitWithNumber = !!(hEl && uEl && hEl.parentNode === uEl.parentNode);
-  out.text = (el.textContent || '').replace(/\s+/g, ' ');
+  out.text = (el.innerText || '').replace(/\s+/g, ' ');
 }
 // ⚠️ **必须 `innerText` 不能 `textContent`**：harness 把探针脚本**内联进 body**，
-// 而 `textContent` 连 `<script>` 里的源码一起算 —— 第一版因此命中了探针自己注释里的
-// 「当前使用中」四个字，两档全假红。`innerText` 只取渲染出来的文字。
-out.oldHero = /当前使用中|建议切到/.test(document.body.innerText || '');
+// 而 `textContent` 连 `<script>` 里的源码一起算。
+out.oldHero = /当前使用中|建议切到|全池续航/.test(document.body.innerText || '');
 document.title = '__RH__' + JSON.stringify(out);
 """
 
 
+_rebuilt = []
+
+
+def _rebuild_once():
+    """`OV_REBUILD=1`：先重编 bundle（`tools/mutate.py` 变异源码后必须重编，否则测的是旧 bundle）。"""
+    import os
+    if os.environ.get("OV_REBUILD") != "1" or _rebuilt:
+        return
+    cb = ROOT / "codexbar"
+    subprocess.run(["npx", "vite", "build", "--outDir", "uishot/app"], cwd=cb, check=True, capture_output=True, timeout=300)
+    subprocess.run(["python3", "uishot/make_harness.py"], cwd=cb, check=True, capture_output=True, timeout=300)
+    _rebuilt.append(1)
+
+
 def _probe(width=1300, query="nav=home"):
     import urllib.request
+    _rebuild_once()
     src = APP_DIR / "harness.html"
     if not Path(CHROME).exists() or not src.exists():
         return None
@@ -110,19 +132,15 @@ def _probe(width=1300, query="nav=home"):
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class ItNeverGetsTallerThanTheBannerItReplaced(unittest.TestCase):
-    """★★★ 用户给的硬约束：「可以降低但不能增加」。"""
+    """★★★ 用户给的硬约束：「可以降低但不能增加」（880 那档的放宽见模块说明）。"""
 
-    #: ★★★ **每个会改变版面的分支都要量，不能只量默认那一档。**
-    #
-    #   2026-09-21 实测：见底态在 880 下右列被挤到第二行，hero 从 94px 撑到 **167px**
-    #   —— 而当时这条闸只跑默认夹具，**全绿**。根因是 flex 按 `flex-basis` 分行而
-    #   左列写的是 `auto`（取 max-content）；收缩只发生在行内，救不回换行的那一下。
-    #   ★ 一条只覆盖了默认分支的尺寸闸，在其余分支上**等于不存在**。
-    CASES = [("正常", "nav=home"), ("见底", "nav=home&pool=stranded")]
+    #: ★★★ **每个会改变版面的分支都要量，不能只量默认那一档**（2026-09-21：见底态在 880 下
+    #   从 94px 撑到 167px，而当时这条闸只跑默认夹具，全绿）。
+    CASES = [("正常", "nav=home"), ("见底", "nav=home&pool=stranded"), ("长配速", "nav=home&relay=long")]
 
     @classmethod
     def setUpClass(cls):
-        cls.r = {(w, name): _probe(w, q) for w in OLD_HEIGHT for name, q in cls.CASES}
+        cls.r = {(w, name): _probe(w, q) for w in HEIGHT_CAP for name, q in cls.CASES}
         if any(v is None for v in cls.r.values()):
             raise unittest.SkipTest("harness 静态服务（3304）没在跑")
 
@@ -130,42 +148,38 @@ class ItNeverGetsTallerThanTheBannerItReplaced(unittest.TestCase):
         """★★ 先正面证明它在 —— 没渲染时「高度 ≤ 上限」会因为 `h` 缺失而假绿。"""
         for (w, name), d in self.r.items():
             with self.subTest(width=w, case=name):
-                self.assertIn("h", d, f"{w} 宽 · {name} 下续航条没渲染：{d}")
-                self.assertGreater(d["h"], 40, f"{w} 宽 · {name} 下高度异常：{d['h']}")
+                self.assertIn("h", d, f"{w} 宽 · {name} 下三栏没渲染：{d}")
+                self.assertGreater(d["h"], 60, f"{w} 宽 · {name} 下高度异常：{d['h']}")
+                self.assertGreaterEqual(d["segs"], 1, f"{w} 宽 · {name} 下接力条一段都没有")
 
-    def test_height_never_exceeds_the_old_hero(self):
+    def test_height_never_exceeds_the_cap(self):
         for (w, name), d in self.r.items():
             with self.subTest(width=w, case=name):
-                self.assertLessEqual(d["h"], OLD_HEIGHT[w],
-                                     f"★★★ {w} 宽 · {name} 下高 {d['h']}px，"
-                                     f"超过旧 banner 的 {OLD_HEIGHT[w]}px")
+                self.assertLessEqual(d["h"], HEIGHT_CAP[w], f"★★★ {w} 宽 · {name} 下高 {d['h']}px，超过上限 {HEIGHT_CAP[w]}px")
+
+    def test_every_branch_has_the_same_height(self):
+        """★ 三栏定高：切分支（见底 / 正常）不许让下面的卡片区跳。"""
+        for w in HEIGHT_CAP:
+            with self.subTest(width=w):
+                self.assertEqual(len({self.r[(w, n)]["h"] for n, _ in self.CASES}), 1,
+                                 {n: self.r[(w, n)]["h"] for n, _ in self.CASES})
 
     def test_it_never_overflows_sideways(self):
-        """★ 横向溢出与撑高是同一族缺陷的两个出口：装不下时要么换行(撑高)要么溢出。
-        只守一侧时，另一侧的退化**完全看不见**。"""
         for (w, name), d in self.r.items():
             with self.subTest(width=w, case=name):
-                self.assertLessEqual(d.get("ov", 0), 1,
-                                     f"★ {w} 宽 · {name} 下横向溢出 {d.get('ov')}px")
+                self.assertLessEqual(d.get("ov", 0), 1, f"★ {w} 宽 · {name} 下横向溢出 {d.get('ov')}px")
 
     def test_the_old_banner_is_really_gone(self):
-        """★ 「当前使用中」与「建议切到」两句都必须从 **codex 档**消失。
-
-        ⚠️ 范围是 codex 档 —— **Gemini 档那条 hero 没有过时，别顺手删**：
-          agy 是**启动前**换凭证、没有逐请求挑号器，所以在那一档「当前使用中」是真话，
-          「建议切到」也确实是你要手动做的动作。两档的机制本来就不同。
-        """
+        """★ 「当前使用中」「建议切到」「全池续航」都必须从 codex 档消失（Gemini 档另说，见旧版说明）。"""
         for (w, name), d in self.r.items():
             with self.subTest(width=w, case=name):
-                self.assertFalse(d["oldHero"],
-                                 f"★ {w} 宽 · {name} 下旧 banner 的文案还在")
+                self.assertFalse(d["oldHero"], f"★ {w} 宽 · {name} 下旧 banner 的文案还在")
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class TheHonestyLineTravelsWithTheNumber(unittest.TestCase):
     """★★★ codex 续航按**连续使用时间**（2026-10-15 用户：「全池续航≈98.6 小时，为什么还是那么多？
-    实际使用下来会出现不到半小时几张账号额度都没了」）。旧口径（钟点小时、含空闲）对连续干活没有意义：
-    一个 Plus 号 5h 连续 ~4 分钟就见底。数字离开「连续使用」这句口径就是假话。"""
+    实际使用下来会出现不到半小时几张账号额度都没了」）。数字离开「连续使用」这句口径就是假话。"""
 
     @classmethod
     def setUpClass(cls):
@@ -174,49 +188,35 @@ class TheHonestyLineTravelsWithTheNumber(unittest.TestCase):
         if cls.ok is None or cls.none is None:
             raise unittest.SkipTest("harness 静态服务（3304）没在跑")
 
-    def test_the_unit_is_stated_next_to_the_number(self):
-        """★ 判据打在**单位自己的节点**上，不是整条 hero 的文本（空守卫形态③）。"""
-        self.assertTrue(self.ok["unit"].startswith("分钟"), "★★★ 数字旁边没写单位：%r" % self.ok["unit"])
-        self.assertTrue(self.ok["unitWithNumber"],
-                        "★★ 单位没和数字在同一行 —— 离开那个数它就不是披露了")
-        self.assertIn("连续使用", self.ok["note"], "★★★ 没说是连续使用时间 —— 会被读成钟点")
-        self.assertIn("3 次", self.ok["note"], "★★ 没写依据几次用完 —— 无从判断靠不靠谱")
-        self.assertIn("闲置", self.ok["note"], "★ 没说闲置不计")
-        self.assertNotIn("含空闲", self.ok["note"], "★★★ 旧的钟点口径回来了")
-        self.assertNotIn("全池续航", self.ok["text"], "★★★ 旧标题回来了")
+    def test_the_unit_is_part_of_the_number(self):
+        self.assertRegex(self.ok["hours"], r"^(≥ )?(<1m|\d+m|\d+h\d{2}m|\d+d\d+h)$", "★★★ 数字没带单位：%r" % self.ok["hours"])
+        self.assertRegex(self.ok["until"], r"^到 \d{2}:\d{2}$")
+        self.assertTrue(self.ok["untilWithNumber"], "★★ 「到 HH:MM」没和数字在同一行")
 
-    def test_it_says_when_the_pool_refills_and_how_much_is_left_this_week(self):
-        self.assertIn("2.5h 后有号回满", self.ok["unit"], "★★ 见底之后要等多久，用户最需要的那句")
-        self.assertIn("本周 ≈ 2.4 小时", self.ok["text"], "★ 本周还能连续用多久")
+    def test_the_caliber_is_stated(self):
+        note = self.ok["note"]
+        self.assertIn("连续使用", note, "★★★ 没说是连续使用时间 —— 会被读成钟点")
+        self.assertIn("3 次", note, "★★ 没写依据几次用完 —— 无从判断靠不靠谱")
+        self.assertIn("闲置", note, "★ 没说闲置不计")
+        self.assertNotIn("含空闲", note, "★★★ 旧的钟点口径回来了")
+
+    def test_it_says_how_much_is_left_this_week_and_when_one_comes_back(self):
+        self.assertEqual(self.ok["week"].strip(" ·"), "本周≈2h26m", "★ 本周还能连续用多久")
+        self.assertIn("回满后接上", self.ok["gapNote"], "★★ 断档之后谁、什么时候接上 —— 用户最需要的那句")
 
     def test_when_it_cannot_be_computed_it_says_so_instead_of_zero(self):
         """★★★ 「算不出来」与「撑不了多久」是相反的两件事，而 0 会被读成后者。"""
-        self.assertIn("—", self.none["hours"],
-                      f"★★★ 算不出来时没显示「—」：{self.none['hours']!r}")
-        self.assertNotIn("0", self.none["hours"], "★★★ 算不出来时写了 0")
-        self.assertIn("算不出来", self.none["note"],
-                      f"★★ 显示「—」却没说为什么：{self.none['note']!r}")
+        self.assertEqual("—", self.none["hours"], f"★★★ 算不出来时没显示「—」：{self.none['hours']!r}")
+        self.assertEqual("", self.none["until"], "★★ 算不出来却给了「到 HH:MM」")
+        self.assertIn("算不出来", self.none["note"], f"★★ 显示「—」却没说为什么：{self.none['note']!r}")
         self.assertIn("5h 用完的历史", self.none["note"], "★ 没说缺的是什么")
-        # ★★ 反向：算得出来的时候**不许**挂着这句借口，否则它退化成常驻噪音。
-        self.assertNotIn("算不出来", self.ok["note"],
-                         "★★ 续航算得出来却还挂着「算不出来」")
+        self.assertNotIn("算不出来", self.ok["note"], "★★ 续航算得出来却还挂着「算不出来」")
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class ItSaysSoWhenThePoolRunsDry(unittest.TestCase):
-    """★★★ 「系统推翻了你的设置」必须当面说，不能只写进 proxy.log。
-
-    2026-09-21 真实事故：九个号里 5 个冷却 / 3 个被手动停用 / 1 个凭证失效 ⇒ 一个可用的
-    都没有，代理走最后一层兜底**借用了一个已停用的号**（这是设计：在「codex 整个不能用」
-    与「多用一个你不想用的号」之间选后者）。它把 `⚠️ 所有号都被停用了自动轮换` 写进了
-    `proxy.log` —— **而用户不读 proxy.log**。他看到的是卡片上冒出一个不该出现的号，
-    报过来的原话是「轮换失效了，禁用轮换的账号也被使用了」。
-
-    ★ 缺的从来不是那条判断，是**披露**。本仓规矩：告警放在眼睛已经在的地方，
-      且文本要说「做什么」。
-    ⚠️ 这一档**必须有夹具**（`?pool=stranded`）—— 本机绝大多数时候池子是好的，
-      没有开关的话这条分支一个像素都验不到，而截图会正常渲染、探针报干净。
-    """
+    """★★★ 「系统推翻了你的设置」必须当面说，不能只写进 proxy.log（2026-09-21 真实事故，见旧版说明）。
+    ⚠️ 这一档**必须有夹具**（`?pool=stranded`）—— 本机绝大多数时候池子是好的。"""
 
     @classmethod
     def setUpClass(cls):
@@ -226,59 +226,33 @@ class ItSaysSoWhenThePoolRunsDry(unittest.TestCase):
             raise unittest.SkipTest("harness 静态服务（3304）没在跑")
 
     def test_it_says_the_pool_is_dry(self):
-        self.assertIn("不可用", self.dry["stranded"],
-                      f"★★★ 池子见底却没说：{self.dry['stranded']!r}")
+        self.assertEqual("池子见底", self.dry["stranded"], f"★★★ 池子见底却没说：{self.dry['stranded']!r}")
+        self.assertIn("全不可用", self.dry["text"])
 
     def test_it_says_which_account_it_had_to_borrow(self):
-        """★★ 「这个号本来不该被用」要写在**号名旁边** —— 那是眼睛第一个落点。"""
-        self.assertIn("临时借用", self.dry["borrowed"],
-                      "★★ 借用了一个不可用的号却没标出来 —— 用户只会看到设置被无视")
+        self.assertIn("临时借用", self.dry["borrowed"], "★★ 借用了一个不可用的号却没标出来")
 
     def test_it_breaks_down_why_and_says_what_to_do(self):
-        """★ 只说「坏了」没用：要说**各是什么原因**，以及此刻能动的那个旋钮。"""
         note = self.dry["note"]
         for word in ("冷却", "停用", "失效"):
             with self.subTest(word=word):
                 self.assertIn(word, note, f"★ 没说清有几个是「{word}」：{note!r}")
-        self.assertIn("打开轮换", note,
-                      "★★ 没告诉用户怎么办 —— 停用的号是他此刻唯一能动的旋钮")
+        self.assertIn("恢复轮换", note, "★★ 没告诉用户怎么办 —— 停用的号是他此刻唯一能动的旋钮")
 
     def test_it_never_prints_a_zero_hour_runway_when_dry(self):
-        """★★★ 见底时可用池的余量恰好是 0，算出来就是「续航 ≈ 0 小时」——**那是假话**。
-
-        冷却的号一小时内就回来。「撑不了多久」与「暂时被锁在外面」是相反的两件事，
-        而这块版面上 0 会被读成前者。所以这一支**根本不画那个数字**，改说多久回来。
-        """
-        self.assertFalse(self.dry["hoursEl"],
-                         "★★★ 池子见底时仍在画续航数字 —— 它此刻恒为 0，是假话")
-        self.assertIn("分钟后回来", self.dry["text"],
-                      "★★ 没说多久能恢复 —— 那是用户唯一想知道的数")
+        self.assertFalse(self.dry["hoursEl"], "★★★ 池子见底时仍在画续航数字 —— 它此刻恒为 0，是假话")
+        self.assertRegex(self.dry["text"], r"最快 \S+ 后回来", "★★ 没说多久能恢复")
 
     def test_the_borrow_tag_dies_with_the_borrow(self):
-        """★★★ 「临时借用」只在**借用仍在发生**时亮，不许描述几小时前那一次。
-
-        用户 2026-09-21 截图：池子早已恢复（4 个号可用、下一个是 wing），顶部却还挂着
-        红色的「临时借用 qq55」—— 那说的是 **3 小时前**的事。`cur` 是 `last_aid`
-        （代理最近一次用了谁），它天然会落后于现在。
-        ★ **一盏描述过去、却长得像现在的红灯**，本仓判过死刑：它训练用户忽略所有告警。
-          披露的寿命跟着它描述的那个事实走，事实结束它就该灭。
-
-        ⚠️ 这一条**必须用 `?pool=recovered`**：默认夹具里 `cur` 本来就可用，
-          改不改判据它都是绿的（形态⑩：判据档位要挑只有被测那条能挡住的输入）。
-        """
+        """★★★ 「临时借用」只在**借用仍在发生**时亮（`?pool=recovered`，形态⑩）。"""
         r = _probe(1300, "nav=home&pool=recovered")
         if r is None:
             self.skipTest("harness 静态服务（3304）没在跑")
-        self.assertGreaterEqual(r["segs"], 1, "★ 夹具没让池子恢复 —— 前提不成立，这条验不到")
-        self.assertEqual("", r["borrowed"],
-                         "★★★ 池子已恢复，却还挂着「临时借用」—— 那是几小时前的事")
+        self.assertTrue(r["hoursEl"], "★ 夹具没让池子恢复 —— 前提不成立，这条验不到")
+        self.assertEqual("", r["borrowed"], "★★★ 池子已恢复，却还挂着「临时借用」")
         self.assertEqual("", r["stranded"], "★★ 池子已恢复却还报见底")
 
     def test_the_alarm_is_absent_when_the_pool_is_fine(self):
-        """★★ 反向：池子正常时**不许**挂着这条告警。
-
-        一盏长亮又无从消除的灯，本仓判过死刑 —— 它训练用户忽略所有指示器。
-        """
         self.assertEqual("", self.ok["stranded"], "★★ 池子正常却报见底")
         self.assertEqual("", self.ok["borrowed"], "★★ 池子正常却说在临时借用")
         self.assertTrue(self.ok["hoursEl"], "★ 池子正常时反而不画续航数字了")
@@ -286,52 +260,50 @@ class ItSaysSoWhenThePoolRunsDry(unittest.TestCase):
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class TheBarSaysWhoIsInAndWhoIsOut(unittest.TestCase):
+    """★ 用 `?relay=long`（每窗 48 分钟）：默认夹具是真机配速 4 分钟一窗，四个号合计 16 分钟，
+    在 4 小时的轴上每段只有 6–8px，**一个名字都写不下** —— 那一档验不到「写得下就写」。"""
+
     @classmethod
     def setUpClass(cls):
         cls.r = _probe(1300)
-        # ★ 两档都要量：「装得下」在不同窗宽下是**不同的**结论，
-        #   只量一档就是把那一档当成了全部（这正是上面那条缺陷的成因）。
-        cls.by_width = {w: _probe(w) for w in (1300, 880)}
+        cls.by_width = {w: _probe(w, "nav=home&relay=long") for w in (1300, 880)}
         if cls.r is None or any(v is None for v in cls.by_width.values()):
             raise unittest.SkipTest("harness 静态服务（3304）没在跑")
 
     def test_every_usable_account_gets_a_segment(self):
-        self.assertGreaterEqual(self.r["segs"], 3, f"色带里段数太少：{self.r['segs']}")
+        for w, d in self.by_width.items():
+            with self.subTest(width=w):
+                self.assertGreaterEqual(d["segs"], 3, f"接力条段数太少：{d['segs']}")
 
-    def test_the_unusable_ones_are_one_merged_segment(self):
-        """★★ 合成一段，不是每号一段。实测：三个灰段各 11px 宽而名字要 22px ⇒
-        **每一个都横向溢出**，且 11px 上的名字本来就读不出内容。"""
-        self.assertEqual(self.r["rest"], 1,
-                         f"★★ 不可用的号不是合成一段：{self.r['rest']}")
+    def test_every_segment_is_a_named_account(self):
+        """★ 2026-10-19 取代「不可用的号合成一段灰」：接力条上**没有无主的灰段**（交接包：空档画红色斜纹）。"""
+        for w, d in self.by_width.items():
+            for seg in d["segw"]:
+                with self.subTest(width=w, seg=seg):
+                    self.assertRegex(seg["name"], r"^\S+$", "★★ 有一段不知道是谁")
 
     def test_a_name_is_either_written_in_full_or_not_at_all(self):
         """★★ 截断的名字比没有名字**更糟** —— `Ase…` 会被读成另一个号。"""
-        for w, d in self.by_width.items():
+        for w, d in [*self.by_width.items(), (0, self.r)]:
             for seg in d["segw"]:
                 with self.subTest(width=w, seg=seg["name"]):
-                    self.assertFalse(seg["over"],
-                                     f"★★ 「{seg['shown']}」被裁了（{seg['w']}px）")
+                    self.assertFalse(seg["over"], f"★★ 「{seg['shown']}」被裁了（{seg['w']}px）")
+                    self.assertIn(seg["shown"], ("", seg["name"]), "★★ 写了半个名字")
 
     def test_a_segment_wide_enough_shows_its_name(self):
-        """★★★ 反向：**写得下就必须写**，否则那一段只是一块无名色块。
-
-        ⚠️ 这条是 2026-09-21 实测缺陷的闸。第一版按「占比 ≥ 0.14」判，而占比**不是宽度** ——
-          1300 宽下 `Egan` 那段占 13.1%，换算 **75px**，4 个字母只要 28px，却被挡掉了。
-          阈值当时是按 880 标定的，**一次观测被当成了保证**。
-        ★ 这里用 `7px/字` 的**宽松上界**（真实 ≈5.6）——判据只对"绰绰有余"的段开口，
-          边界段两可，不制造假红：一条会假红的闸，用户学会的是忽略它。
-        """
+        """★★★ 反向：**写得下就必须写**。`7px/字` 是宽松上界（真实 ≈6.2），只对"绰绰有余"的段开口。"""
+        checked = 0
         for w, d in self.by_width.items():
             for seg in d["segw"]:
                 need = len(seg["name"]) * 7 + 12
                 if seg["w"] >= need:
+                    checked += 1
                     with self.subTest(width=w, seg=seg["name"]):
-                        self.assertEqual(seg["name"], seg["shown"],
-                                         f"★★★ {seg['w']}px 写得下「{seg['name']}」"
-                                         f"（只要 {need}px）却没写")
+                        self.assertEqual(seg["name"], seg["shown"], f"★★★ {seg['w']}px 写得下「{seg['name']}」却没写")
+        self.assertGreaterEqual(checked, 4, "★ 夹具里没有写得下的段 —— 这条什么都没验")
 
     def test_the_pin_is_visible_on_the_banner(self):
-        """★ 置顶决定钱花在哪个号上 —— 顶部这条是最该说出来的地方。"""
+        """★ 置顶决定钱花在哪个号上 —— 顶部「正在使用」是最该说出来的地方。"""
         self.assertGreaterEqual(self.r["pin"], 1, "★ 置顶角标没画出来")
 
 

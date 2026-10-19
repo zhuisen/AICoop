@@ -1,4 +1,4 @@
-"""总览上 ⌘1/⌘2/⌘3 切 Codex / Gemini / Grok 档，**不切号**（用户 2026-10-16：
+"""总览上 ⌘1~⌘4 切 Codex / Claude / Gemini / Grok 档（2026-10-19 交接包 page5 加了 Claude 档，顺序跟光晕），**不切号**（用户 2026-10-16：
 「在总览界面 command+数字，是切换 codex、gemini、grok，而不是切换对应的账号」）。
 
 取代 2026-09-14 / 09-19 的「⌘N 切第 N 张卡」。原来那条在**任何页面**都会切 codex 号 ——
@@ -52,10 +52,10 @@ def _node(expr):
 class TheIndexMapsToTheTabOrder(unittest.TestCase):
     def test_each_index_is_the_tab_at_that_position(self):
         got = _node("{ keys: m.POOL_PLATFORMS.map(p => p.key),"
-                    "  at: [0,1,2,3,8,-1,1.5].map(i => m.poolKeyAt(i) ?? null) }")
-        self.assertEqual(len(got["keys"]), 3, f"夹具前提：三档 {got['keys']}")
-        self.assertEqual(got["at"][:3], got["keys"], "★★ ⌘N 与 Tab 显示顺序不一致")
-        self.assertEqual(got["at"][3:], [None] * 4, "★ 越界 / 负数 / 非整数必须什么也不做")
+                    "  at: [0,1,2,3,4,8,-1,1.5].map(i => m.poolKeyAt(i) ?? null) }")
+        self.assertEqual(got["keys"], ["codex", "claude", "gemini", "grok"], f"夹具前提：四档、顺序同光晕 {got['keys']}")
+        self.assertEqual(got["at"][:4], got["keys"], "★★ ⌘N 与 Tab 显示顺序不一致")
+        self.assertEqual(got["at"][4:], [None] * 4, "★ 越界 / 负数 / 非整数必须什么也不做")
 
 
 class TheHandlerOnlySwitchesTabs(unittest.TestCase):
@@ -87,13 +87,16 @@ class TheCardsDropTheBadge(unittest.TestCase):
         self.assertNotIn("shortcut=", _strip((SRC / "App.tsx").read_text(encoding="utf-8")))
 
     def test_the_tabs_say_which_key(self):
-        c = _strip((SRC / "components" / "ProviderTabs.tsx").read_text(encoding="utf-8"))
-        self.assertIn("⌘${i + 1}", c, "★ Tab 的悬浮提示没写快捷键")
+        # 2026-10-19：平台档从 ProviderTabs 换成 `ov/OvHeader::OvTabs`；Overview 按 `POOL_PLATFORMS` 的顺序传档。
+        c = _strip((SRC / "components" / "ov" / "OvHeader.tsx").read_text(encoding="utf-8"))
+        self.assertIn(' · ⌘${i + 1}`}', c, "★ Tab 的悬浮提示没写快捷键")
+        self.assertIn("{tabs.map((tb, i) => {", c, "★ 序号不是档在列表里的位置")
+        ov = _strip((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8"))
+        self.assertIn("const TAB_ORDER: PoolKey[] = POOL_PLATFORMS.map((p) => p.key);", ov, "★★ 档的顺序不从 POOL_PLATFORMS 推 —— ⌘N 会对不上")
 
 
 PROBE_ACTIVE = """() => { const on = [...document.querySelectorAll('[data-provtab]')]
-  .filter(e => { const b = getComputedStyle(e).backgroundColor;
-                 return b && b !== 'transparent' && !/rgba\\(0, 0, 0, 0\\)/.test(b); });
+  .filter(e => e.dataset.active === '1');
   return { active: on.map(e => e.dataset.provtab), n: document.querySelectorAll('[data-provtab]').length,
            saved: localStorage.getItem('codexbar_provider') }; }"""
 WRAP = """() => { const T = window.__TAURI_INTERNALS__; const orig = T.invoke.bind(T); window.__calls = [];
@@ -108,7 +111,7 @@ def _drive(nav, keys):
         return None
     states = []
     with sync_playwright() as p:
-        br = p.chromium.launch(executable_path=CHROME, headless=True)
+        br = p.chromium.launch(executable_path=CHROME, headless=True, args=["--use-mock-keychain"])
         ctx = br.new_context(viewport={"width": 1200, "height": 800})
         ctx.add_init_script("localStorage.setItem('codexbar_provider', 'codex')")
         pg = ctx.new_page()
@@ -128,15 +131,15 @@ def _drive(nav, keys):
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class EndToEndInTheRealBundle(unittest.TestCase):
     def test_overview(self):
-        r = _drive("home", ["2", "3", "4", "1"])
+        r = _drive("home", ["2", "3", "4", "5", "1"])
         if r is None:
             self.skipTest("harness 3304 没起 —— skip 不是绿")
         states, calls = r
-        self.assertEqual(states[0]["n"], 3, f"夹具前提：Tab 渲染出来了 {states[0]}")
+        self.assertEqual(states[0]["n"], 4, f"夹具前提：Tab 渲染出来了 {states[0]}")
         self.assertEqual(states[0]["active"], ["codex"], f"起点不是 Codex：{states[0]}")
         got = [s["active"] for s in states[1:]]
-        self.assertEqual(got, [["gemini"], ["grok"], ["grok"], ["codex"]],
-                         f"★★ ⌘2/⌘3/⌘4/⌘1 之后的档：{got}")
+        self.assertEqual(got, [["claude"], ["gemini"], ["grok"], ["grok"], ["codex"]],
+                         f"★★ ⌘2/⌘3/⌘4/⌘5/⌘1 之后的档：{got}")
         self.assertEqual(states[-1]["saved"], "codex", "切档没记住")
         sw = [c for c in calls if '"switch"' in c[1] or "switch" in c[0]]
         self.assertEqual(sw, [], f"★★★ 按 ⌘N 触发了切号：{sw}")

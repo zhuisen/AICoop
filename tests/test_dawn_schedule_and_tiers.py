@@ -396,9 +396,11 @@ class TheUi(unittest.TestCase):
                          ["ultra", "", "", "", ""])
 
     def test_ultra_badge_is_wired_on_all_three_surfaces(self):
-        for p in ("components/AgyCard.tsx", "components/AgyRow.tsx", "components/RunwayHero.tsx"):
+        # 2026-10-19：旧续航条（RunwayHero）随总览重做删除；新顶部三栏照交接包 13 不画套餐徽章 ——
+        #   当前号的 ULTRA 就在它自己那张卡上（卡片网格总在 hero 正下方）。剩两个 surface。
+        for p in ("components/AgyCard.tsx", "components/AgyRow.tsx"):
             self.assertRegex(code(SRC / p), r"agyBadgePlan\(", p)
-        self.assertGreaterEqual(len(re.findall(r"plan=\{a\.plan\}", code(SRC / "App.tsx"))), 1)
+        self.assertGreaterEqual(len(re.findall(r"plan=\{a\.plan\}", code(SRC / "components" / "ov" / "Overview.tsx"))), 1)
         self.assertGreaterEqual(len(re.findall(r"plan=\{a\.plan\}", code(SRC / "MenuBar.tsx"))), 1)
 
     def test_catch_up_waits_for_the_random_minute(self):
@@ -409,9 +411,9 @@ class TheUi(unittest.TestCase):
         self.assertFalse(run_dawn_ts('m.dawnCatchUpDue({enabled:false,due_at:1},"2026-10-15",9)'))
 
     def test_the_chip_is_on_both_tabs_and_left_settings(self):
-        app = code(SRC / "App.tsx")
-        self.assertIn('<DawnChip t={t} kind="codex"', app)
-        self.assertIn('<DawnChip t={t} kind="agy"', app)
+        app = code(SRC / "components" / "ov" / "Overview.tsx")   # 2026-10-19 起头部在总览组件里
+        self.assertIn('<DawnChip t={p.t} kind="codex"', app)
+        self.assertIn('<DawnChip t={p.t} kind="agy"', app)
         settings = code(SRC / "pages" / "SettingsPage.tsx")
         for gone in ("dawn-probe", "dawnDesc", "toggleDawn"):
             self.assertNotIn(gone, settings, "★ 设置页还留着一份 —— 两处开关迟早分叉")

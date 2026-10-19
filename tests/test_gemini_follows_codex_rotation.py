@@ -180,11 +180,12 @@ class TheFrontendDoesNotRank(unittest.TestCase):
         self.assertIn("P.board(pool, live_sub)", seg)
 
     def test_the_overview_and_menubar_badge_come_from_the_board(self):
-        app = strip_ts((SRC / "App.tsx").read_text(encoding="utf-8"))
+        # 2026-10-19：总览的状态与顶部三栏都在 `components/ov/Overview.tsx`（App.tsx 只挂 <Overview>）。
+        app = strip_ts((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8"))
         mb = strip_ts((SRC / "MenuBar.tsx").read_text(encoding="utf-8"))
-        self.assertIn("isBest={agyBoard?.next?.aid === a.sub}", app)
+        self.assertIn("next: p.agyBoard?.next?.aid === a.sub", app)
         self.assertIn("mbAgyBoard?.next?.aid === a.sub", mb)
-        self.assertIn('<RunwayHero t={t} board={agyBoard} privacy={privacy} source="agy" />', app)
+        self.assertIn('<PoolHero source="agy" pc={p.colors.gemini} board={p.agyBoard}', app)
         for gone in ("agyBest", "建议切到", "agyRank"):
             self.assertNotIn(gone, app, f"★★★ 前端又在自己排 Gemini（{gone}）")
 

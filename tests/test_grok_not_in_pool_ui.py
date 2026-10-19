@@ -25,7 +25,10 @@ APP = SRC / "App.tsx"
 GROKROW = SRC / "components" / "GrokRow.tsx"
 
 # 由账号池派生、且被索引/计数/切号消费的数组名。
-POOL_ARRAYS = ("accounts", "alive", "aliveByLabel", "dead")
+POOL_ARRAYS = ("accounts", "alive", "aliveByLabel", "dead", "cMain", "cOff", "cDead")
+# ★ 2026-10-19 总览重做：池数组从 App.tsx 搬进 `components/ov/Overview.tsx`（`cMain/cOff/cDead`），
+#   App 只把 `accounts` 交下去。⌘1~⌘4 自 2026-10-16 起只切平台档、不再切号。
+OVERVIEW = SRC / "components" / "ov" / "Overview.tsx"
 
 
 def strip_comments(src: str) -> str:
@@ -39,16 +42,17 @@ class GrokNeverEntersPoolArrays(unittest.TestCase):
     def setUpClass(cls):
         cls.mb = strip_comments(MENUBAR.read_text(encoding="utf-8"))
         cls.app = strip_comments(APP.read_text(encoding="utf-8"))
+        cls.ov = strip_comments(OVERVIEW.read_text(encoding="utf-8"))
 
     def test_anchors_exist(self):
         """★ 先证明被测目标还在。改名之后断言会静默打空 —— 那是最坏的假绿。"""
-        self.assertIn("aliveByLabel", self.app, "App.tsx 的 aliveByLabel 不见了,断言已失效")
+        self.assertRegex(self.ov, r"const cMain = p\.accounts\.filter\(", "Overview.tsx 的 codex 池数组 cMain 不见了,断言已失效")
         self.assertIn("<GrokRow", self.mb, "菜单栏没有渲染 GrokRow,这条闸在守一个不存在的东西")
         self.assertIn("useGrokQuota", self.mb)
 
     def test_pool_arrays_are_never_concatenated_with_grok(self):
         """池数组不得被 push / concat / 展开进 grok 数据。"""
-        for src, name in ((self.mb, "MenuBar.tsx"), (self.app, "App.tsx")):
+        for src, name in ((self.mb, "MenuBar.tsx"), (self.app, "App.tsx"), (self.ov, "Overview.tsx")):
             for arr in POOL_ARRAYS:
                 for pat in (rf"{arr}\s*\.\s*push\s*\(", rf"{arr}\s*\.\s*concat\s*\(",
                             rf"\[\s*\.\.\.\s*{arr}\s*,"):
@@ -115,7 +119,10 @@ class MenubarAlwaysNamesItsDestination(unittest.TestCase):
 
     每个 `navigate-*` 事件也必须在 App.tsx 有对应监听,否则点了没反应且不报错。
     """
-    DEST_EVENTS = ("navigate-overview", "navigate-traffic", "navigate-platform", "navigate-settings")
+    # ★ 2026-10-19（交接包 4f / PLAN §2.3）：加一个统一跳转 `open-main-page`（`{page, platform}`），
+    #   账号行「点行内容 → 工作台总览对应 AI 档」走它（Claude 档也有了，旧的 navigate-overview 只认 3 家）。
+    DEST_EVENTS = ("navigate-overview", "navigate-traffic", "navigate-platform", "navigate-settings",
+                   "open-main-page")
 
     @classmethod
     def setUpClass(cls):
@@ -138,8 +145,16 @@ class MenubarAlwaysNamesItsDestination(unittest.TestCase):
 
     def test_every_event_has_a_listener(self):
         """★ 发了事件但主窗口没监听 = **点了没反应,而且不报错**。"""
+        rs = (ROOT / "codexbar" / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
         for ev in set(re.findall(r'openMain\(\s*"([^"]+)"', self.mb)):
             with self.subTest(event=ev):
+                if ev == "open-main-page":
+                    # ★ 2026-10-19（PLAN §2.3）：`open-main-page` 由 Rust 收下、转成 **`main-open-page` 只发主窗口**，
+                    #   App 只听后者（同名转发会让主窗收两次）。所以这条链两半都要在。
+                    i = rs.index('listen_any("open-main-page"')
+                    self.assertIn('emit_to("main", "main-open-page"', rs[i:i + 1200], "lib.rs 收了 open-main-page 却没转给主窗口")
+                    self.assertRegex(self.app, r'listen(?:<[^>]*>)?\(\s*"main-open-page"', "App.tsx 没有监听 main-open-page —— 点了不会有反应")
+                    continue
                 self.assertRegex(self.app, r'listen(?:<[^>]*>)?\(\s*"' + re.escape(ev) + r'"',
                                  "App.tsx 没有监听 {} —— 点了不会有反应".format(ev))
 
@@ -149,8 +164,13 @@ class MenubarAlwaysNamesItsDestination(unittest.TestCase):
         self.assertGreaterEqual(len(rows), 2, "没抓到账号行(可用 + 失效两处)")
         for expr in rows:
             with self.subTest(expr=expr.strip()[:50]):
-                self.assertIn("navigate-overview", expr,
-                              "账号行没有去总览:{!r}".format(expr.strip()[:60]))
+                self.assertIn('openOverview("codex")', expr,
+                              "账号行没有去总览的 Codex 档:{!r}".format(expr.strip()[:60]))
+        # `openOverview` 本身必须真的是「去总览」—— 否则上面那条只证明了名字。
+        m = re.search(r"const openOverview = useCallback\(\(pf: PlatformKey\) => \{([\s\S]*?)\}, \[openMain\]\)", self.mb)
+        self.assertIsNotNone(m, "★ 找不到 openOverview —— 断言打空了")
+        self.assertIn('openMain("open-main-page", { page: "overview", platform: pf })', m.group(1),
+                      "★★ openOverview 没有去总览（或没带平台）")
 
 
 class GrokIsInvisibleWhenAbsent(unittest.TestCase):

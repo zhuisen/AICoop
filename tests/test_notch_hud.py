@@ -1,7 +1,11 @@
 """刘海额度条（`codexbar/src-tauri/src/notch.rs` + `codexbar/src/NotchHud.tsx`）的静态闸。
 
+★ 2026-10-19 起展开态是交接包 4e 的「④ 悬浮卡片 + 光桥」（v1.11.0 的额度环面板退役）。卡片本身的行为闸
+  （Tab 规则、告警、版面、logo 来向、果冻下垂、真 bundle 的 DOM）在 `tests/test_notch_card.py`；这里守窗口、
+  光晕、取数这些跨版本不变的不变量。
+
 守的都是「错了不报错、只是看着怪」的那一类：
-  · 尺寸常量分在 Rust / TSX / CSS 三处，对不上时面板被裁或偏到一边；
+  · 尺寸常量分在 Rust / TS / CSS 三处，对不上时卡片被裁或偏到一边；
   · 少了 fullScreenAuxiliary，切到全屏应用就不见了 —— 2026-10-17 PR #1 作者实测确认过要的就是全屏可见；
   · 新窗口没进 capabilities，invoke/listen 全部静默失败，刘海上永远是一条空槽；
   · 默认关是用户定的（2026-10-17），被顺手改成默认开会让所有人的刘海上多出一条东西。
@@ -30,8 +34,11 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "codexbar"
 RS = APP / "src-tauri" / "src" / "notch.rs"
+# ★ 2026-10-19 起「谁在跑」（判据 + FSEvents 监听）从 notch.rs 抽到 activity.rs，刘海与托盘胶囊共用一条
+ACT = APP / "src-tauri" / "src" / "activity.rs"
 LIB = APP / "src-tauri" / "src" / "lib.rs"
 TSX = APP / "src" / "NotchHud.tsx"
+CARD = APP / "src" / "notchCard.ts"
 CSS = APP / "src" / "notch.css"
 SETTINGS = APP / "src" / "pages" / "SettingsPage.tsx"
 APP_TSX = APP / "src" / "App.tsx"
@@ -72,12 +79,23 @@ def _one(path, pattern, what):
 
 
 class SizesAgree(unittest.TestCase):
-    def test_panel_width_is_the_same_in_three_places(self):
-        rs = float(_one(RS, r"^pub const PANEL_W: f64 = (\d+(?:\.\d+)?);", "PANEL_W"))
-        tsx = float(_one(TSX, r"^const PANEL_W = (\d+);", "PANEL_W"))
-        css = float(_one(CSS, r"--pw: (\d+)px", "--pw"))
-        self.assertEqual(rs, tsx, "notch.rs 与 NotchHud.tsx 的面板宽不一致 ⇒ 面板被裁或偏到一边")
-        self.assertEqual(rs, css, "notch.rs 与 notch.css 的 --pw 不一致")
+    def test_card_width_is_the_same_in_three_places(self):
+        """4e 卡片宽 300：Rust 按它摆窗口与命中区，网页按它画。对不上 ⇒ 卡片被窗口裁掉一截，或命中区与卡片错位。"""
+        rs = float(_one(RS, r"^pub const CARD_W: f64 = (\d+(?:\.\d+)?);", "CARD_W"))
+        ts = float(_one(CARD, r"^export const CARD_W = (\d+);", "CARD_W"))
+        css = float(_one(CSS, r"--cw: (\d+)px", "--cw"))
+        self.assertEqual(rs, ts, "notch.rs 与 notchCard.ts 的卡片宽不一致")
+        self.assertEqual(rs, css, "notch.rs 与 notch.css 的 --cw 不一致")
+        self.assertRegex(code_only(TSX), r'\["--cw" as string\]: `\$\{C\.CARD_W\}px`', "组件没把 CARD_W 交给 --cw")
+        self.assertNotRegex(code_only(RS), r"\bPANEL_W\b", "v1.11.0 的面板宽已随旧面板退役，别留一个没人用的常量")
+
+    def test_card_gap_is_the_same_in_three_places(self):
+        """卡片在刘海下沿下方 10 pt（交接包「刘海与卡片之间 10 pt 空隙算卡片内」）：Rust 命中区按它算。"""
+        rs = float(_one(RS, r"^pub const CARD_GAP: f64 = (\d+(?:\.\d+)?);", "CARD_GAP"))
+        ts = float(_one(CARD, r"^export const CARD_GAP = (\d+);", "CARD_GAP"))
+        card = re.search(r"(?m)^\.nh-card \{([^}]*)\}", code_only(CSS)).group(1)
+        css = float(re.search(r"top: calc\(var\(--nh\) \+ (\d+)px\)", card).group(1))
+        self.assertEqual((rs, ts, css), (rs, rs, rs), "刘海与卡片之间的空隙三处不一致 ⇒ 穿过空隙时会被判成离开")
 
     def test_flare_matches_the_css(self):
         rs = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
@@ -100,6 +118,22 @@ class SizesAgree(unittest.TestCase):
             blur = float(re.search(r"filter: blur\((\d+)px\)", body).group(1))
             self.assertGreaterEqual(flare + gx, flare + extra_w / 2 + 2 * blur, f"{name}：两侧透明边装不下光晕 + 2σ")
             self.assertGreaterEqual(gy, top + extra_h + 2 * blur, f"{name}：下方透明边装不下光晕 + 2σ")
+
+    def test_window_has_room_for_the_alert_flash(self):
+        """告警快闪团（60 宽、blur 9）在某一段中点；最靠边的那一段也要连 2σ 一起装进透明边。"""
+        css = _code(CSS)
+        ga = re.search(r"(?m)^\.nh-glow \.ga \{([^}]*)\}", css).group(1)
+        w = float(re.search(r"width: (\d+)px", ga).group(1))
+        top = float(re.search(r"top: (-?\d+)px", ga).group(1))
+        extra_h = float(re.search(r"height: calc\(var\(--nh\) \+ (\d+)px\)", ga).group(1))
+        blur = float(re.search(r"filter: blur\((\d+)px\)", ga).group(1))
+        flare = float(_one(RS, r"^const FLARE: f64 = (\d+(?:\.\d+)?);", "FLARE"))
+        gx = float(_one(RS, r"^const GLOW_X: f64 = (\d+(?:\.\d+)?);", "GLOW_X"))
+        gy = float(_one(RS, r"^const GLOW_Y: f64 = (\d+(?:\.\d+)?);", "GLOW_Y"))
+        lefts = run_card("[1,2,3,4].flatMap(n => [...Array(n).keys()].map(i => m.alertBlobLeft(i, n, 179)))")
+        self.assertGreaterEqual(min(lefts) - 2 * blur, -(flare + gx), "最左那一段的快闪团被窗口左边裁掉")
+        self.assertLessEqual(max(lefts) + w + 2 * blur, 179 + flare + gx, "最右那一段的快闪团被窗口右边裁掉")
+        self.assertGreaterEqual(gy, top + extra_h + 2 * blur, "快闪团下方装不下 2σ")
 
 
 class WindowBehaviour(unittest.TestCase):
@@ -125,7 +159,7 @@ class WindowBehaviour(unittest.TestCase):
         lib = LIB.read_text(encoding="utf-8")
         block = re.search(r"generate_handler!\[(.*?)\]\)", lib, re.S)
         self.assertIsNotNone(block, "找不到 invoke_handler 的 generate_handler![...]")
-        for cmd in ("set_notch_hud", "notch_geometry", "notch_panel_height"):
+        for cmd in ("set_notch_hud", "notch_geometry", "notch_panel_height", "notch_card_resize", "notch_activity"):
             self.assertRegex(block.group(1), rf"\b{cmd}\b", f"{cmd} 没注册进 invoke_handler")
 
     def test_window_has_capabilities(self):
@@ -254,9 +288,12 @@ class TheSettingsRowTellsTheTruth(unittest.TestCase):
 
     def test_the_toggle_uses_the_answer_and_rolls_back_on_error(self):
         code = code_only(SETTINGS)
-        i = code.index('label="刘海额度条"')
+        # ★ 2026-10-19 改名「刘海屏版本」（交接包 DECISIONS）；存储键与命令沿用，见 test_settings_toggles.py。
+        i = code.index('label="刘海屏版本"')
         row = code[i:i + 1600]
-        self.assertIn("notchRowDesc(s.notchHud, notchSt, notchErr)", row)
+        self.assertIn("warn={notchRowWarn(s.notchHud, notchSt, notchErr)}", row,
+                      "原因单独一行（设置页文字不折行，跟在说明末尾会第一个被省略）")
+        self.assertIn("notchRowDesc(s.notchHud, notchSt, notchErr)", row, "全文进悬浮")
         self.assertRegex(row, r'invoke<NotchStatus>\("set_notch_hud"[^)]*\)\s*\.then\(\(st\) => setNotchSt',
                          "开关要收下 Rust 的回答（显示着没有 / 为什么）")
         self.assertNotRegex(row, r"\.catch\(\(\) => \{\}\)", "★ 不许再吞错 —— 失败要回滚开关并说原因")
@@ -338,8 +375,10 @@ class PushNotPoll(unittest.TestCase):
 
     def test_does_not_borrow_the_polling_hooks(self):
         code = _code(TSX)
-        for hook in ("useStore", "useAgyQuota", "useQuotaSidecar"):
-            self.assertNotRegex(code, rf"\b{hook}\b", f"刘海条不许用 {hook}：它自带 30s 定时器")
+        # ★ 4e 卡片多了 grok / Claude / 今日用量三路数据：对应的现成 hook 都自带定时器（grok 走 useQuotaSidecar、
+        #   useTraffic 30s 心跳、useClaudeQuota / useTodayTps 60s），刘海只读盘 + 收推送 + 展开时节流补读。
+        for hook in ("useStore", "useAgyQuota", "useQuotaSidecar", "useGrokQuota", "useTraffic", "useClaudeQuota", "useTodayTps"):
+            self.assertNotRegex(code, rf"\b{hook}\b", f"刘海条不许用 {hook}：它自带定时器")
         self.assertRegex(code, r"useNotchData\(\)", "刘海条要走只听推送的 useNotchData")
 
     def test_data_hook_only_listens(self):
@@ -373,6 +412,15 @@ class PushNotPoll(unittest.TestCase):
 
 
 GLOW = APP / "src" / "notchGlow.ts"
+
+
+def run_card(expr):
+    """notchCard.ts 零 import，直接用 node 跑。"""
+    r = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "-e",
+                        "import('%s').then(m => console.log(JSON.stringify(%s)))" % (CARD.as_posix(), expr)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-800:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
 
 
 def run_glow(expr):
@@ -411,16 +459,25 @@ class ActivityGlow(unittest.TestCase):
         got = self.colors("{codex: true, claude: true, agy: false, grok: false}", off="['claude']")
         self.assertEqual(got, ["#2dd4bf"], "设置里停用的平台不亮")
 
-    def test_several_platforms_share_the_ring_evenly(self):
-        """用户 2026-10-18：「底部的 2 个颜色我都看不清」—— 每家要先有一段纯色，不能整条都在渐变。"""
+    def test_several_platforms_blend_with_stops_at_segment_midpoints(self):
+        """★ 交接包 2026-10-19 DECISIONS「刘海光晕」定稿 = **加强前的原版**：平滑渐变、色标在每段中点。
+        维护者 2026-10-18 那版「每家中间 60% 纯色」被用户在交接包里否决（「加强版」在否决清单里）。"""
         bg = run_glow("m.glowBackground(['#a', '#b', '#c', '#d'])")
-        self.assertEqual(bg, "linear-gradient(90deg, #a 0.0%, #a 20.0%, #b 30.0%, #b 45.0%, #c 55.0%, #c 70.0%, #d 80.0%, #d 100.0%)",
-                         "每家占 1/n 段，段中间 60% 纯色")
-        self.assertEqual(run_glow("m.glowBackground(['#a', '#b'])"),
-                         "linear-gradient(90deg, #a 0.0%, #a 40.0%, #b 60.0%, #b 100.0%)")
+        self.assertEqual(bg, "linear-gradient(90deg, #a 12.5%, #b 37.5%, #c 62.5%, #d 87.5%)", "色标在每段中点")
+        self.assertEqual(run_glow("m.glowBackground(['#a', '#b'])"), "linear-gradient(90deg, #a 25.0%, #b 75.0%)")
+
+    def test_bridge_is_neutral_grey_when_idle(self):
+        """交接包：「空闲时光桥为中性灰」；在跑时与光晕同一条渐变（卡片顶边那条线同源）。"""
+        self.assertEqual(run_glow("m.bridgeBackground([])"),
+                         "linear-gradient(90deg, rgba(255,255,255,.22), rgba(255,255,255,.22))")
+        self.assertEqual(run_glow("m.bridgeBackground(['#a', '#b'])"), run_glow("m.glowBackground(['#a', '#b'])"))
+        self.assertEqual(run_glow("m.bridgeBackground(['#a'])"), "linear-gradient(90deg, #a, #a)",
+                         "一家 = 同色渐变（光桥与顶边线都按渐变画）")
+        self.assertEqual(run_glow("m.glowKeys({grok: true, agy: true, claude: false, codex: true}, (k) => k === 'grok')"),
+                         ["codex", "agy"], "固定顺序、停用的不亮")
 
     def test_rust_and_ts_agree_on_the_payload(self):
-        rs = _code(RS)
+        rs = _code(ACT)
         fields = re.search(r"pub struct Activity \{([^}]*)\}", rs).group(1)
         rs_keys = re.findall(r"pub (\w+): bool", fields)
         ts = _code(GLOW)
@@ -430,48 +487,54 @@ class ActivityGlow(unittest.TestCase):
 
     def test_hud_uses_the_pure_functions(self):
         code = _code(TSX)
-        self.assertRegex(code, r"const lit = glowColors\(act,", "光晕颜色必须走 notchGlow.ts（有行为闸的那份）")
-        self.assertRegex(code, r"const glow = glowBackground\(lit\);")
+        self.assertRegex(code, r"const litKeys = glowKeys\(act, isOff\);", "光晕颜色必须走 notchGlow.ts（有行为闸的那份）")
+        self.assertRegex(code, r"const glow = glowBackground\(litCols\);")
+        self.assertRegex(code, r"const bridge = bridgeBackground\(litCols\);")
         self.assertRegex(code, r'\["--glow" as string\]: glow', "算好的颜色没传给 --glow")
-        self.assertRegex(code, r'lit\.length > 0 \? "nh-active" : "nh-quiet"', "没有平台在跑就必须是 nh-quiet（不亮）")
+        self.assertRegex(code, r"const lit = litKeys\.length > 0;")
+        self.assertRegex(code, r'lit \? "nh-active" : "nh-quiet"', "没有平台在跑就必须是 nh-quiet（不亮）")
+        self.assertRegex(code, r"hot\.has\(k\) \? C\.ALERT :", "低额度那家那一段要换橙红")
         self.assertNotIn("quotaGlow", code, "空闲不再显示额度色")
 
-    def test_the_bottom_edge_is_thick_enough_to_read(self):
-        """用户 2026-10-18：多家同跑时中间几家只露在刘海下沿。下沿至少露 12px，散开层 blur ≤ 14px（再大邻色就混成一片）。"""
-        css = _code(CSS)
-        g1 = re.search(r"(?m)^\.nh-glow \.g1 \{([^}]*)\}", css).group(1)
-        top = float(re.search(r"top: (-?[\d.]+)px", g1).group(1))
-        extra = float(re.search(r"height: calc\(var\(--nh\) \+ ([\d.]+)px\)", g1).group(1))
-        self.assertGreaterEqual(top + extra, 12, "贴边层伸出刘海下沿不足 12px")
-        g2 = re.search(r"(?m)^\.nh-glow \.g2 \{([^}]*)\}", css).group(1)
-        self.assertLessEqual(float(re.search(r"blur\(([\d.]+)px\)", g2).group(1)), 14, "散开层 blur 太大，邻色会混在一起")
+    def _layer(self, g):
+        return re.search(rf"(?m)^\.nh-glow \.{g} \{{([^}}]*)\}}", _code(CSS)).group(1)
 
-    def test_glow_breathes_faster_while_working(self):
+    def test_glow_is_the_original_values(self):
+        """★ 交接包 DECISIONS「刘海光晕」/「刘海屏版本」：贴边层下沿 10 pt / blur 7 / 2.4 s 呼吸，散开层 blur 20 / .7 / 3.1 s。
+        维护者 2026-10-18 的加强版（下沿 12 / blur 5 / 14）被用户在交接包里否决 —— 回到原值。"""
+        g1, g2 = self._layer("g1"), self._layer("g2")
+        self.assertEqual(re.search(r"height: calc\(var\(--nh\) \+ ([\d.]+)px\)", g1).group(1), "10", "贴边层下沿 10")
+        self.assertEqual(re.search(r"top: (-?[\d.]+)px", g1).group(1), "-6")
+        self.assertEqual(re.search(r"blur\(([\d.]+)px\)", g1).group(1), "7")
+        self.assertRegex(g1, r"animation: nh-breathe 2\.4s ease-in-out infinite;")
+        self.assertEqual(re.search(r"blur\(([\d.]+)px\)", g2).group(1), "20")
+        self.assertRegex(g2, r"animation: nh-breathe-wide 3\.1s ease-in-out -2\.5s infinite;")
         css = _code(CSS)
-        for g in ("g1", "g2"):
-            base = float(re.search(rf"(?m)^\.nh-glow \.{g} \{{[^}}]*animation: nh-breathe[-\w]* ([\d.]+)s", css).group(1))
-            run = float(re.search(rf"(?m)^\.nh-active \.nh-glow \.{g} \{{ animation-duration: ([\d.]+)s; \}}", css).group(1))
-            self.assertLess(run, base, f"{g}：在跑时用快呼吸")
+        self.assertRegex(css, r"@keyframes nh-breathe-wide \{ 0%, 100% \{ opacity: \.7; \}", "散开层峰值 .7")
+        self.assertRegex(css, r"@keyframes nh-alert \{ 0%, 100% \{ opacity: 1; \} 50% \{ opacity: \.15; \} \}", "告警快闪 1→.15")
+        self.assertRegex(self._layer("ga"), r"animation: nh-alert \.9s ease-in-out infinite;", "告警快闪 0.9 s")
 
     def test_two_layers_do_not_breathe_in_lockstep(self):
         """两层同周期同相位，看着就是一块整齐的光在一明一暗 —— 作者嫌的正是「太整齐规则」。"""
-        css = _code(CSS)
-        dur = {g: re.search(rf"(?m)^\.nh-active \.nh-glow \.{g} \{{ animation-duration: ([\d.]+)s; \}}", css).group(1)
-               for g in ("g1", "g2")}
-        self.assertNotEqual(dur["g1"], dur["g2"], "两层呼吸周期要错开")
+        d1 = re.search(r"animation: nh-breathe ([\d.]+)s", self._layer("g1")).group(1)
+        d2 = re.search(r"animation: nh-breathe-wide ([\d.]+)s", self._layer("g2")).group(1)
+        self.assertNotEqual(d1, d2, "两层呼吸周期要错开")
 
-    def test_glow_hides_when_open_or_idle(self):
+    def test_glow_is_dark_when_idle_and_at_sixty_percent_while_open(self):
         css = _code(CSS)
-        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow, \.nh-open \.nh-glow \{ opacity: 0; \}",
-                         "展开面板时、以及没有平台在跑时，光晕要收掉")
-        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow i, \.nh-open \.nh-glow i \{ animation: none; \}",
-                         "收掉后不能还在跑动画（白耗 CPU）")
+        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow \{ opacity: 0; \}", "没有平台在跑时光晕要收掉")
+        self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow i \{ animation: none; \}", "收掉后不能还在跑动画（白耗 CPU）")
+        self.assertRegex(_code(TSX), r"opacity: !lit \? 0 : isOpen \? 0\.6 : 0\.9",
+                         "交接包：卡片展开时光晕降到 60% 保留（不是收掉）")
 
     def test_holds_still_under_reduce_motion(self):
         css = _code(CSS)
         m = re.search(r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*)\}\s*$", css, re.S | re.M)
         self.assertIsNotNone(m)
         self.assertRegex(m.group(1), r"\.nh-glow i \{ animation: none;", "开了「减弱动态效果」光晕就不该再动")
+        # ★ 组件读到系统设置后挂 `nh-reduce`（JS 读 matchMedia；harness 也只能改到 JS 这一侧）—— 告警橙红常亮不闪
+        self.assertRegex(_code(CSS), r"(?m)^\.nh-reduce \.nh-glow i \{ animation: none; \}", "减弱动态效果：告警常亮不闪")
+        self.assertRegex(_code(TSX), r'reduce && "nh-reduce"')
 
     def test_activity_is_pushed_by_rust(self):
         code = _code(TSX)
@@ -485,43 +548,67 @@ class ActivityGlow(unittest.TestCase):
     def test_rust_watches_instead_of_polling(self):
         """维护者 2026-10-18：Claude Code 加子 agent 约 8000 个会话文件，每 2s stat 一遍约 50 ms ⇒ 改 FSEvents 推送。
         判哪家在写的规则由 `cargo test` 的 `each_platform_is_told_apart_by_its_own_session_files` 守。"""
-        rs = _code(RS)
-        watch = rs[rs.index("fn watch_activity("):rs.index("pub fn activity(")]
+        rs = _code(ACT)
+        watch = rs[rs.index("fn watch_activity("):rs.index("fn run_live_soon(")]
         self.assertIn("notify::recommended_watcher(", watch, "活动检测要靠文件系统推送")
         self.assertIn("RecursiveMode::Recursive", watch)
-        self.assertNotIn("read_dir", rs, "不许回到逐个目录扫文件")
-        self.assertNotIn("last_proxy_ts", rs)
+        for f in (ACT, RS):
+            self.assertNotIn("read_dir", _code(f), "不许回到逐个目录扫文件")
+            self.assertNotIn("last_proxy_ts", _code(f))
         cls = rs[rs.index("fn classify("):rs.index("fn is_write(")]
         self.assertRegex(cls, r'n\.starts_with\("rollout-"\) && n\.ends_with\("\.jsonl"\)', "Codex 看 rollout 写入")
         self.assertRegex(cls, r'n\.ends_with\("\.db-wal"\)', "agy 是 WAL 库，生成时写的是 -wal，只看主库会永远判成空闲")
-        self.assertRegex(rs, r"if changed \{ let _ = app\.emit_to\(LABEL, \"notch-activity\", a\); \}", "只在变了才推")
+        self.assertRegex(watch, r"if changed \{ let _ = app\.emit_to\(crate::notch::LABEL, \"notch-activity\", a\); \}", "只在变了才推")
 
 
 
 class ActivityWatcher(unittest.TestCase):
-    """评审 2026-10-17（PR #1 退回意见）：检测线程快速开关后会丢；没有刘海屏时也在每 2s 扫文件。"""
+    """评审 2026-10-17（PR #1 退回意见）：检测线程快速开关后会丢；没有刘海屏时也在每 2s 扫文件。
+    ★ 2026-10-19 检测线程搬进 activity.rs、改成订阅制（刘海 `NOTCH` + 托盘胶囊 `TPS`）：「开关换代后旧线程退出」
+      与「窗口没了就别扫」两条，现在由「没有订阅者就退出」+「刘海窗口建 = 订阅、拆 = 退订」守。"""
 
     def setUp(self):
+        act = code_only(ACT)
+        self.watch = act[act.index("fn watch_activity("):act.index("fn run_live_soon(")]
+        self.sub = act[act.index("pub fn subscribe("):act.index("pub fn unsubscribe(")]
         rs = code_only(RS)
-        self.watch = rs[rs.index("fn watch_activity("):rs.index("pub fn activity(")]
         self.ensure = rs[rs.index("fn ensure_window("):rs.index("fn drop_window(")]
+        self.drop = rs[rs.index("fn drop_window("):rs.index("fn reconcile(")]
 
     def test_a_new_watcher_takes_over_instead_of_bailing_out(self):
-        self.assertNotIn("WATCHING", code_only(RS), "布尔标记：快速关了再开时新线程起不来、旧线程随后退出 ⇒ 一条都没有")
+        for f in (ACT, RS):
+            self.assertNotIn("WATCHING", code_only(f), "布尔标记：快速关了再开时新线程起不来、旧线程随后退出 ⇒ 一条都没有")
         self.assertIn("WATCHER.store(me", self.watch, "新起的一条直接接管")
         self.assertIn("WATCHER.load(Ordering::SeqCst) == me", self.watch, "旧的看到不是自己就退")
-        self.assertIn("ENABLE_GEN.load(Ordering::SeqCst) == gen", self.watch, "同 track：开关换代后旧线程退出")
         self.assertIn("WATCHER.compare_exchange(me, 0", self.watch, "退出时只清自己那一号")
         head = self.watch[:self.watch.index("std::thread::spawn")]
         self.assertNotIn("return", head, "起线程前不许因为「已经有一条」就退出 —— 那条可能正要因换代退出")
+        self.assertIn("prev == 0 || WATCHER.load(Ordering::SeqCst) == 0", self.sub,
+                      "第一个订阅者（或线程已退出）时必须起一条新的")
 
-    def test_runs_only_while_the_window_exists(self):
-        self.assertIn("app.get_webview_window(LABEL).is_some()", self.watch, "窗口没了（合盖 / 外接屏）就别再扫文件")
-        self.assertEqual(self.ensure.count("watch_activity(app)"), 2,
-                         "建窗和「窗口已在、只是重新打开」两条路都要接上检测线程（set_enabled 每次都换代）")
+    def test_the_glow_is_judged_by_live_and_published_when_live_returns(self):
+        """用户 2026-10-19「改用轮次结束标记」：光晕与托盘同一个裁判（live），同时熄。纯判定 `glow` 由 cargo test 守，
+        这里守接线：每 tick 和 live 一回来都走 `publish`，`publish` 用 live 那一份。"""
+        act = code_only(ACT)
+        pub = act[act.index("fn publish("):act.index("fn run_live_soon(")]
+        live = act[act.index("fn run_live_soon("):act.index("pub fn live_activity(")]
+        self.assertIn("glow(fs, *LIVE_ACT.lock().unwrap(), LIVE_SINCE.load(Ordering::SeqCst), now)", pub,
+                      "光晕要用 live 的判断（live 不可用才退回 FSEvents）")
+        self.assertIn("let fs = publish(&app);", self.watch, "每 tick 走 publish")
+        self.assertIn("run_live_soon(&app, fs)", self.watch, "live 失败时托盘退回的是 FSEvents 那一份")
+        i, j = live.index("*LIVE_ACT.lock().unwrap() = act;"), live.index("publish(&app);")
+        self.assertLess(i, j, "live 一回来先记下、再立刻推光晕（不等下一 tick）")
+        self.assertIn("let mut was_live = true;", self.watch, "订阅那一刻先跑一次 live（长工具调用中途打开时没有写入来叫醒）")
+
+    def test_runs_only_while_someone_is_subscribed(self):
+        self.assertIn("CONSUMERS.load(Ordering::SeqCst) != 0", self.watch, "没有订阅者（刘海窗口没了、t/s 关了）就别再扫文件")
+        self.assertEqual(self.ensure.count("crate::activity::subscribe(app, crate::activity::NOTCH)"), 2,
+                         "建窗和「窗口已在、只是重新打开」两条路都要订阅")
+        self.assertIn("crate::activity::unsubscribe(crate::activity::NOTCH)", self.drop,
+                      "窗口没了（合盖 / 外接屏 / 关掉）就退订")
         se = code_only(RS)
         se = se[se.index("pub fn set_enabled("):se.index("pub fn status(")]
-        self.assertNotIn("watch_activity", se, "不能在 set_enabled 里无条件起 —— 没有刘海屏时也会跑")
+        self.assertNotIn("subscribe", se, "不能在 set_enabled 里无条件订阅 —— 没有刘海屏时也会跑")
 
 
 if __name__ == "__main__":

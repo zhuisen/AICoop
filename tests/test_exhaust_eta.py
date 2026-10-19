@@ -207,11 +207,12 @@ class TheUi(unittest.TestCase):
 
     def test_only_the_pool_runway_shows_it(self):
         """★★ 用户 2026-10-15：「账号的连用≈4m，这些都要去除，只在 banner 全池续航展示就够了」。"""
-        hero = code("components/RunwayHero.tsx")
-        self.assertRegex(hero, r'\{eta && \(\s*<span data-eta5h title=\{eta5hTitle\(eta\)\}')
-        self.assertIn("5h 一窗≈{fmtEtaMin(eta.per_window_min)}", hero)
+        # 2026-10-19：全池续航从 RunwayHero 换到交接包 page5 的 `ov/OvHero::PoolHero`（「还能连续用」那栏的说明行）。
+        hero = code("components/ov/OvHero.tsx")
+        self.assertRegex(hero, r'eta \? <span data-eta5h="" title=\{eta5hTitle\(eta\)\}> · 5h 一窗≈\{fmtEtaMin\(eta\.per_window_min\)\}')
         self.assertRegex(hero, r'find\(\(e\) => e\?\.eta5h\?\.scope === "pool"\)', "★ 全池那块要取全池口径")
-        for f in ("components/AccountCard.tsx", "App.tsx"):
+        self.assertGreaterEqual(hero.count("{etaSpan}"), 2, "★ 算得出 / 算不出续航两种说明里都要带上 5h 一窗")
+        for f in ("components/AccountCard.tsx", "App.tsx", "components/ov/OvCard.tsx", "components/ov/Overview.tsx"):
             self.assertNotIn("eta5h", code(f), "★★ %s 又画回了每号的「连用≈」" % f)
         self.assertEqual(hero.count("data-eta5h"), 1, "★ 只在全池续航那一处")
 

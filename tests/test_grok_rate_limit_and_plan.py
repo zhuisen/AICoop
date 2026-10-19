@@ -198,11 +198,14 @@ class TheUi(unittest.TestCase):
                          ["SuperGrok", "", "", ""])
 
     def test_card_and_row_render_it(self):
-        for p in ("components/GrokCard.tsx", "components/GrokRow.tsx"):
-            s = (SRC / p).read_text(encoding="utf-8")
-            self.assertRegex(s, r"<PlanBadge plan=\{(grokBadgePlan\(a\)|plan \?\? \"\")\}", p)
+        card = (SRC / "components" / "GrokCard.tsx").read_text(encoding="utf-8")
+        # 2026-10-19：PlanBadge 随总览重做删除，套餐用卡片外壳的同一个标签（`OvTag` kind "ultra"，紫底）。
+        self.assertIn("const plan = grokBadgePlan(a);", card, "GrokCard.tsx 没从 grokBadgePlan 取套餐")
+        self.assertRegex(card, r'\{plan && <OvTag tag=\{\{ text: plan, kind: "ultra" \}\}', "GrokCard.tsx 拿到套餐却没画出来")
+        # 菜单栏行（2026-10-19 交接包 4f）：套餐名进行名下的小状态行 `Sub`，不再是独立 PlanBadge。
         row = (SRC / "components" / "GrokRow.tsx").read_text(encoding="utf-8")
         self.assertEqual(row.count("plan={grokBadgePlan(a)}"), 2, "菜单栏行两种形态（有读数 / 降级）都要带")
+        self.assertRegex(row, r"\{plan \? <span[^>]*>\{plan\}</span> : null\}", "Sub 拿到套餐名却没画出来")
 
     def test_rate_limited_note_says_when(self):
         note = ts_eval('m.grokReasonNote({reason:"rate_limited",retry_at:%d,token_expires_at:null})' % (time.time() + 600))

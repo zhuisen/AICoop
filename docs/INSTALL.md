@@ -172,8 +172,8 @@ TOML
 **macOS**：
 
 ```bash
-bash scripts/install-launchd.sh     # 生成 + 加载 4 个服务
-launchctl list | grep codex-rotate  # 应有 4 行
+bash scripts/install-launchd.sh     # 生成 + 加载 6 个服务
+launchctl list | grep codex-rotate  # 应有 6 行
 ```
 
 **Windows**（v1.0.4 起）：
@@ -198,8 +198,9 @@ schtasks /Query /TN "com.doushutangmu.codex-rotate.proxy"
 | `…quotad` | RunAtLoad + KeepAlive | 活动驱动读官方 usage API 刷额度（零消耗）+ 300s 全池扫描兜底 |
 | `…dawnprobe` | 每 60s 醒一次，自己判到点 | 定时计费探针，让 Plus 的 5h 窗口走动。时间在总览 Codex 档工具栏「定时」胶囊里选（默认 06:00），实际在所选时刻起 3 分钟内随机。⚠️ **会自动花钱，默认关闭**（`dawn_probe.enabled` 缺省假），装了也不会自己跑；空转不写日志 |
 | `…agydawn` | 同上 | Gemini（agy）版：给参与轮换的号各跑一次 agy 探针（每号约 15k token），开关与时间在 Gemini 档的「定时」胶囊里。同样**默认关闭** |
+| `…otel` | RunAtLoad + KeepAlive | 收 Claude Code 的耗时与 token，听 `127.0.0.1:4318`。设置里开了「Claude 实测速度」才有数据，见 [§5「Claude 实测速度」](#claude-实测速度otel仅-macos) |
 
-两个平台注册的是**同一组服务**（名字、入口脚本、端口都一致），由 `tests/test_installers_agree.py` 守着 —— 只改一边会让某个平台**静默少一个常驻进程**，而症状是「额度不更新」这类看起来跟安装器无关的现象。
+两个平台注册的是**同一组服务**（名字、入口脚本、端口都一致；`otel` 只装 macOS），由 `tests/test_installers_agree.py` 守着 —— 只改一边会让某个平台**静默少一个常驻进程**，而症状是「额度不更新」这类看起来跟安装器无关的现象。
 
 脚本自解析仓库根并**校验 python3 是 OpenSSL 构建**，找不到就报错退出，不会静默装成坏的。
 
@@ -282,13 +283,87 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 页面上的费用是**按公开牌价折算的等效 API 成本，订阅制下并非实付**，UI 各处均有标注。
 缓存读按各平台各自的折扣计价（不是统一 10%）。
 
+### Claude 实测速度（OTel，仅 macOS）
+
+**它是什么。** Claude Code 自带 OpenTelemetry 监控功能。开了之后，每次请求结束，Claude Code 发一条记录到本机接收端。CodexBar 用这些记录显示 Claude 的首字时间与速度（t/s）。
+
+**它发什么。** 只发耗时与 token，不发对话内容。开关把四个内容开关（`OTEL_LOG_USER_PROMPTS` 等）都写成 `0`。接收端另有字段白名单。白名单外的字段不写盘（包括邮箱与账号 id）。白名单：
+`request_id` · `gen_ai.response.id` · `session.id` · `model` · `ttft_ms` · `first_content_ms` · `duration_ms` · `input_tokens` · `output_tokens` · `cache_read_tokens` · `cache_creation_tokens` · `stop_reason` · `attempt` · `success` · `status_code` · `error_class` · `query_source` · `query_source_safe` · `speed` · `effort`，以及开始 / 结束时刻。
+接收端只听 `127.0.0.1`，不联网，不读凭证。
+
+**怎么开。**
+
+1. 装常驻服务：「设置 → 账号池接入」里勾「装常驻服务」。clone 装机也可以跑 `bash scripts/install-launchd.sh`。服务名是 `com.doushutangmu.codex-rotate.otel`。
+2. 打开「设置 → Claude 实测速度」。
+3. 关掉正在跑的 Claude Code 会话，再开一个新会话。Claude Code 只在启动时读这些设置。
+
+开关把下面 12 个键合并进 `~/.claude/settings.json` 的 `env`：
+
+```text
+CLAUDE_CODE_ENABLE_TELEMETRY=1          OTEL_TRACES_EXPORT_INTERVAL=1000
+CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1   OTEL_METRICS_EXPORTER=none
+OTEL_TRACES_EXPORTER=otlp               OTEL_LOGS_EXPORTER=none
+OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTEL_LOG_USER_PROMPTS=0                 OTEL_LOG_ASSISTANT_RESPONSES=0
+OTEL_LOG_TOOL_DETAILS=0                 OTEL_LOG_TOOL_CONTENT=0
+```
+
+- 写之前，开关把原文件备份到数据目录的 `backups/claude-settings/`（留最近 5 份）。
+- 开关只加这 12 个键。其它键与顺序不变。
+- `env` 里已有这 12 个键且值相同时，开关读成「已开」，不再写。
+- `env` 里已有别的 `OTEL_*` 键，或这 12 个键里有不同的值时，开关不写。设置页显示冲突的键名。你自己的 OTel 配置保持原样。
+
+**怎么验证。**
+
+1. 在新会话里发一条消息。记录在请求结束后几秒才到。
+2. 设置页这一行显示「已收到数据 · 最近 HH:MM」。
+3. 「请求」页的 Claude 行显示首字时间与速度。
+4. 也可以看文件：`<数据目录>/traffic/otel-ledger/.status.json` 的 `last_post_at`。
+
+数据目录：`.dmg` 装机是 `~/Library/Application Support/com.doushutangmu.codexbar`；clone 装机是仓库根。
+
+设置页这一行有三种状态：
+
+| 显示 | 意思 | 要做什么 |
+|---|---|---|
+| 开关关 | 没写这 12 个键 | — |
+| 开 · 已收到数据 · 最近 HH:MM | 接收端收到过记录 | — |
+| 开 · ⚠ 还没收到数据 | 已写入，接收端还没收到记录 | 重开 Claude Code 会话 |
+
+**怎么关。** 关掉设置里的开关，然后重开 Claude Code 会话。开关只删它自己写的键。值被你改过的键，开关不删。
+
+**端口 4318 被占用。** 4318 是 OTLP/HTTP 的标准端口。你自己的 OTel 收集器可能已经在用它。这时接收端起不来，并把原因写进 `.status.json`（`listening: false`）与日志页的 `otel` 行。设置页这一行也显示原因。
+
+1. 查占用者：`lsof -nP -iTCP:4318 -sTCP:LISTEN`。
+2. 停掉那个程序，或不开这个功能。接收端每 30 秒重试一次。
+
+**不开时会怎样。** 其它功能照常。数据少一些：
+
+- Claude 的速度从对话记录推算，是估值。
+- 「AI 用量信息」只算对话记录里的请求。只出现在 OTel 里的 Claude Code 后台调用不计入。
+
+**Claude 额度（不归这个开关管）。** 额度按下面的顺序取：
+
+1. 状态栏转写（`<数据目录>/traffic/statusline-ledger/claude.json`），有已用百分比与重置时间。要你自己接，见下。
+2. Claude.app 的 `~/Library/Application Support/Claude/plan-usage-history.json`。只有已用百分比，没有重置时间。Claude.app 要在运行，且 24 小时内打开过它的托盘菜单。
+3. 两个都没有时，额度显示「—」。
+
+接状态栏转写：在你的状态栏脚本开头加一行。它把 Claude Code 给状态栏的 JSON 转给转写脚本，并在后台跑，不拖慢状态栏。
+
+```bash
+input=$(cat); printf '%s' "$input" | python3 -I <运行时目录>/traffic/statusline_quota.py --ingest claude >/dev/null 2>&1 &
+```
+
+`<运行时目录>`：`.dmg` 装机是 `<数据目录>/runtime`；clone 装机是仓库根。脚本后面的部分改读 `"$input"`。
+
 ---
 
 ## 6. 卸载
 
 ```bash
 # 服务
-for s in proxy autosync quotad dawnprobe agydawn; do
+for s in proxy autosync quotad dawnprobe agydawn otel; do
   launchctl bootout gui/$(id -u)/com.doushutangmu.codex-rotate.$s 2>/dev/null
   rm -f ~/Library/LaunchAgents/com.doushutangmu.codex-rotate.$s.plist
 done
@@ -299,6 +374,7 @@ rm -f ~/.local/bin/{codex,codex-rotate,cxp,cxd,agy-rotate}
 ```
 
 再移除 `~/.codex/config.toml` 里的 `rotateproxy` 块，以及 `~/.codex/rotateproxy.config.toml`。
+开过「Claude 实测速度」时，先在设置里关掉它，再卸载。
 
 `auth/` 与 `state.json` 含凭证，删掉即清空本机账号池。
 

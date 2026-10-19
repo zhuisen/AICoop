@@ -15,6 +15,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "codexbar" / "src" / "App.tsx"
+# ★ 2026-10-19 总览重做（交接包 page5）：两档的头部与卡片网格都在 `components/ov/Overview.tsx`；
+#   停用的号收进「已停用」折叠条（卡仍在 DOM 里，CSS 折叠）；新鲜度行进了头部 ⋯ 菜单（同时写在「刷新全池」的悬浮里）。
+OVERVIEW = ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 BASE = "http://127.0.0.1:3304/harness.html?nav=home"
 
@@ -39,11 +42,11 @@ def _render(query):
         pg.goto(BASE + query, timeout=30000)
         pg.wait_for_timeout(3000)
         out = pg.evaluate("""() => {
-          const g = document.querySelector('[data-cards-grid]');
-          const cards = g ? [...g.children].filter(c => c.hasAttribute('data-aid')) : [];
-          const f = document.querySelector('[data-agy-freshness]');
+          const pg = document.querySelector('[data-ov-page]');
+          const cards = pg ? [...pg.querySelectorAll('[data-cards-grid] > [data-aid], [data-cards-off] > [data-aid]')] : [];
+          const f = document.querySelector('[data-ov-mi-info="fresh"]');
           return { heights: cards.map(c => Math.round(c.getBoundingClientRect().height)),
-                   off: g ? g.querySelectorAll('[data-rotate-off]').length : -1,
+                   off: pg ? pg.querySelectorAll('[data-rotate-off]').length : -1,
                    fresh: f ? f.textContent : null };
         }""")
         br.close()
@@ -60,7 +63,7 @@ def _need(q):
 
 class TheCardsAreTheSameHeight(unittest.TestCase):
     def test_gemini_cards_match_codex_cards(self):
-        codex, gem = _need(""), _need("&agypool=3&click=Gemini")
+        codex, gem = _need("&ovoff=1"), _need("&agypool=3&click=Gemini&ovoff=1")
         self.assertTrue(codex["heights"] and len(gem["heights"]) == 3,
                         f"★★ 夹具没渲染出卡片（codex {codex['heights']} / gemini {gem['heights']}）—— 闸此刻没有判别力")
         self.assertEqual(set(gem["heights"]), {max(codex["heights"])},
@@ -69,25 +72,29 @@ class TheCardsAreTheSameHeight(unittest.TestCase):
 
 class TheRotateOffBadgeIsDrawn(unittest.TestCase):
     def test_present_when_an_account_is_off(self):
-        self.assertEqual(_need("&agypool=3&click=Gemini")["off"], 1,
+        self.assertEqual(_need("&agypool=3&click=Gemini&ovoff=1")["off"], 1,
                          "★★ 夹具里第 3 个号 rotate_off，Gemini 卡上却没有 ⊘")
 
     def test_absent_when_none_is_off(self):
         """反向：没有停用的号时一个都不许画（防「恒画」的空闸）。"""
-        self.assertEqual(_need("&agypool=3&agyrotoff=0&click=Gemini")["off"], 0)
+        self.assertEqual(_need("&agypool=3&agyrotoff=0&click=Gemini&ovoff=1")["off"], 0)
 
 
 class TheFreshnessLineIsShared(unittest.TestCase):
     def test_gemini_tab_shows_it(self):
-        f = _need("&agypool=3&click=Gemini")["fresh"]
+        f = _need("&agypool=3&click=Gemini&ovoff=1")["fresh"]
         self.assertIsNotNone(f, "★★ Gemini 档没有新鲜度行")
         self.assertRegex(f, r"新鲜|都是新的|尚未刷新")
 
     def test_both_tabs_use_one_formatter(self):
         """★ 文案只有一份实现（`helpers.ts::freshnessLine`）—— 两处各写一套迟早只改一边。"""
-        c = re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", APP.read_text(encoding="utf-8"))
-        self.assertEqual(c.count("{freshnessLine("), 2)
-        self.assertNotIn("个陈旧", c, "★ App.tsx 里又手写了一份新鲜度文案")
+        c = re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", OVERVIEW.read_text(encoding="utf-8"))
+        c = re.sub(r"//[^\n]*", "", c)
+        self.assertIn("const codexFresh = freshnessLine(", c)
+        self.assertIn("freshnessLine(agyPoolFreshness(", c)
+        self.assertEqual(c.count("freshnessLine("), 2, "★ 两档各一次，同一个实现")
+        self.assertNotIn("个陈旧", c, "★ Overview.tsx 里又手写了一份新鲜度文案")
+        self.assertNotIn("个陈旧", re.sub(r"//[^\n]*", "", APP.read_text(encoding="utf-8")), "★ App.tsx 里又手写了一份新鲜度文案")
 
 
 if __name__ == "__main__":

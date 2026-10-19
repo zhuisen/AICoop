@@ -88,8 +88,10 @@ CACHE = _STORE / ".traffic-cache.json"
 CACHE_V = 1
 # ★ 改任何 _scan_* 的解析逻辑(改变 rows 里存什么/怎么算)必须 +1,否则那些此生不再变 mtime 的文件
 #   会永远沿用旧结果,产出一份新旧混血、无法察觉的数据集。
-PARSER_V = 12         # +1 于 2026-10-15:Claude row 多第 9 位 = 缓存写里的 1h 档份额(按 2× 输入价计)
-# PARSER_V = 11       # 2026-09-10:agy 时间戳改用 last_step_index 精确 join(4.4% 的记录换了日子)
+PARSER_V = 13         # +1 于 2026-10-19:Claude row 多第 10 位 = requestId(与 OTel 账本对账去重)
+#                       ★ 必须 +1:旧缓存里的 Claude 行没有 requestId,对账集合会是空的 ⇒ OTel 整本双计。
+# PARSER_V = 12       # 2026-10-15:Claude row 多第 9 位 = 缓存写里的 1h 档份额(按 2× 输入价计)
+# PARSER_V = 11      # 2026-09-10:agy 时间戳改用 last_step_index 精确 join(4.4% 的记录换了日子)
 # PARSER_V = 10       # 2026-09-09:agy 主源换成原生 SQLite(覆盖率 15.9% -> ~100%)
 # PARSER_V = 9        # 2026-09-09:codex row 多第 8 位 = model_provider(账号池/中转站分账)
 #                       ★ 必须 +1:旧缓存里的 codex 行没有这一位,只有版本号能逼它重解析。
@@ -104,6 +106,7 @@ _DATED = re.compile(r"-\d{8}$")          # claude-haiku-4-5-20251001 -> claude-h
 
 # rows 元素: [epoch, model, uncached_in, cache_read, cache_write, output]
 #   可选尾部: [6] 平台键(宿主源) · [7] model_provider(codex) · [8] cache_write 里 1h 档的份额(Claude)
+#             · [9] requestId(Claude,只用于和 OTel 账本去重,不进聚合)
 #   ★ [8] 是 cache_write 的**子集**不是第五类 —— 只决定价格(1h 档 2× 输入、5m 档 1.25×),不进 total。
 IDX_EPOCH, IDX_MODEL, IDX_IN, IDX_CR, IDX_CW, IDX_OUT = range(6)
 
@@ -299,7 +302,12 @@ def _scan_claude_lines(lines):
         #   以 `cache_creation_input_tokens` 为准、1h 份额钳到不超过它：实测有 18 条总数 0 而明细有数。
         cc = u.get("cache_creation")
         h1 = min(cw, _num(cc, "ephemeral_1h_input_tokens")) if isinstance(cc, dict) else 0
-        if h1:
+        # ★ 第 10 位 = `requestId`：与 OTel 账本的 `request_id` 对账用（`_claude_otel_rows`）。
+        #   只能随 row 进缓存 —— 缓存命中的文件不会重读，去重集合必须从缓存里拿得到。
+        rid = o.get("requestId")
+        if isinstance(rid, str) and rid:
+            row += [None, None, h1, rid]
+        elif h1:
             row += [None, None, h1]
         rows[mid] = row
     return rows
@@ -313,6 +321,109 @@ def _scan_claude_file(path):
         return {}
     with fh:
         return _scan_claude_lines(fh)
+
+
+# ★ Claude Code 的 OTel 账本（`otel_receiver.py` 写，白名单字段，无正文）。
+#   与 `requests.py::roots()["otel"]` **同一处、同一个环境变量** —— 两边各算各的路径，
+#   `.dmg` 复制运行时下就会一边读到、一边读不到（闸 `tests/test_scan_claude_otel.py`）。
+#   ⚠️ 这里不能 `import requests`：它反过来 `import scan`。
+OTEL_ROOT = Path(os.environ.get("REQUESTS_OTEL_DIR") or (_STORE / "traffic" / "otel-ledger"))
+
+
+def _scan_otel_lines(lines):
+    """OTel 账本行 -> {request_id: row}。逐行无状态（可增量）。
+
+    ★ 用 `t_end`（响应结束）当时刻，分桶交给聚合层（同 transcript：只存 epoch）。
+    ★ 缓存写没有 1h/5m 拆分 ⇒ 不带第 9 位，按 5m 档计价。这是账本的事实限制：
+      transcript 里同一类调用实测全是 1h 档，所以这部分费用偏低（约 cache_write × 0.75 × 输入价）。
+    ★ 不按 `success` 筛：本机 2026-10-19 账本 2164 行 `success` 全为 true、`attempt` 全为 1。
+      失败的请求若带了 token，那是服务端真处理过的量；四项全 0 的照 transcript 规矩跳过。
+      重试（attempt>1）每次有自己的 request_id，各算一次真调用。
+    """
+    rows = {}
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(r, dict):
+            continue
+        rid, t1 = r.get("request_id"), r.get("t_end")
+        if not isinstance(rid, str) or not rid or not isinstance(t1, (int, float)) or isinstance(t1, bool):
+            continue
+        i, cr = _num(r, "input_tokens"), _num(r, "cache_read_tokens")
+        cw, out = _num(r, "cache_creation_tokens"), _num(r, "output_tokens")
+        if not (i or cr or cw or out):
+            continue
+        model = r.get("model")
+        rows[rid] = [t1, _DATED.sub("", model if isinstance(model, str) else "unknown"), i, cr, cw, out]
+    return rows
+
+
+def _scan_otel_file(path):
+    """整本解析。**打不开抛 `ScanReadError`**：返回 `{}` 会连同签名进缓存，把账本钉成 0。"""
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise ScanReadError(str(e)) from e
+    with fh:
+        return _scan_otel_lines(fh)
+
+
+def _claude_otel_rows(tr_rows, cached, fresh, cut):
+    """只在 OTel 账本、不在 transcript 里的 Claude 调用 -> ([row], 新解析/增量的文件数)。
+
+    ★★ 用户 2026-10-19 定的口径：Claude 用量**按实际 API 调用算**。transcript 漏掉的是
+      Claude Code 的后台调用（子 agent 进度摘要 `agent_summary`、`web_fetch_apply`、
+      `web_search_tool`、`compact`）—— 真花额度，但不写进对话记录。
+      实测 2026-10-19 一天：transcript 1513 次 / 398.46M，OTel 多出 547 次（agent_summary 511 次 139.6M）。
+    ★ 去重键 = `request_id` ↔ transcript 的 `requestId`（不是 `message.id`；
+      OTel 的 `gen_ai.response.id` 也是 req_…，与 message.id 零交集）。两边都有的以 **transcript 为准**：
+      实测 1510 条两边 token 逐条相等，而 transcript 带 1h 缓存写拆分。
+    ★ 集合取自**全局去重后的 transcript rows**（含缓存命中的文件 —— requestId 随 row 进了缓存），
+      不是本轮重读过的那几个文件。
+    ★ 缓存走与 transcript 相同的 `sig` / 增量 / 读失败保留旧值三条规矩（见 `scan()` 主循环）：
+      账本只追加，增量只读新行。读失败有旧值就沿用（**连旧签名**，下一轮再试），没有就跳过 ——
+      绝不把已有的数清零。目录不存在 = 没开 OTel，静默返回空。
+    """
+    root = OTEL_ROOT
+    if not root.is_dir():
+        return [], 0
+    seen = {r[9] for r in tr_rows.values() if len(r) > 9 and r[9]}
+    spans, changed = {}, 0
+    for f in sorted(root.glob("*.jsonl")):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if st.st_mtime < cut:
+            continue
+        ck, sig = str(f), _sig(st)
+        hit = cached.get(ck)
+        if hit and hit.get("sig") == sig:
+            data = hit.get("r")
+            fresh[ck] = {"sig": sig, "r": data, "off": hit.get("off"), "a": hit.get("a")}
+        else:
+            got = _incr_try(f, st.st_size, hit, _scan_otel_lines) if hit is not None else None
+            if got is not None:
+                data, off, anc = got
+            else:
+                try:
+                    data = _scan_otel_file(f)
+                except ScanReadError:
+                    if hit is None:
+                        continue
+                    fresh[ck] = dict(hit)
+                    data = hit.get("r")
+                    off = None
+                else:
+                    off, anc = _full_off_anchors(f, st.st_size)
+            if off is not None:
+                fresh[ck] = {"sig": sig, "r": data, "off": off, "a": anc}
+                changed += 1
+        if isinstance(data, dict):
+            spans.update(data)
+    return [row for rid, row in spans.items() if rid not in seen], changed
 
 
 def _scan_codex_file(path):
@@ -1402,7 +1513,7 @@ SOURCES = (
     #   为 3% 再改四个解析器是拿风险换不了什么。Claude 一家占 94%(实测 744MB/795MB)。
     {"key": "claude", "name": "Claude", "root": CLAUDE_ROOT, "color": "#E0784F",
      "glob": "**/*.jsonl",         "parse": _scan_claude_file, "dedup": True,
-     "lines": _scan_claude_lines},
+     "lines": _scan_claude_lines, "extra": _claude_otel_rows},
     {"key": "codex",  "name": "Codex",  "root": CODEX_ROOT,  "color": "#2dd4bf",
      "glob": "**/rollout-*.jsonl*", "parse": _scan_codex_file,  "dedup": False, "keep": _codex_keep},
     {"key": "grok",   "name": "Grok",   "root": GROK_ROOT,   "color": "#8b7cf6",
@@ -1614,6 +1725,14 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
         #   放在这里而不是 parse 里,是因为 parse 的粒度是**单文件**,而缓存也按单文件存:
         #   把差分做进 parse,换一个文件集合就会得到另一套增量,且缓存还会把错的固化下来。
         rows_iter = merged.values() if dedup else seq
+        # ★ `extra` 钩子：别处的账本补进本源（目前只有 Claude ← OTel，见 `_claude_otel_rows`）。
+        #   必须拿**全局去重后的** rows 当对账集合，所以放在文件循环之后。
+        extra = src.get("extra")
+        if extra is not None:
+            more, n_more = extra(merged, cached, fresh, cut)
+            if more:
+                rows_iter = list(rows_iter) + more
+            scanned += n_more
         cov_fn = src.get("coverage")
         if cov_fn is not None:
             # 覆盖率用**差分前**的原始记录数:一次调用 = 一轮。差分后重复记录会被抹掉,

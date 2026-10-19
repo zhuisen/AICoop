@@ -12,6 +12,14 @@ use tauri::{
 
 #[cfg(target_os = "macos")]
 mod notch;
+/// 「谁在跑」检测 + t/s 实时循环（从 notch.rs 抽出，刘海与托盘胶囊共用一条 FSEvents 监听）。
+#[cfg(target_os = "macos")]
+mod activity;
+/// 托盘胶囊（page 1 定稿 D）：纯版面 + 动画 + NSImage 绘制。
+mod tray_pill;
+/// 托盘胶囊的悬停面板窗口 `tpshover`（page 2）。
+#[cfg(target_os = "macos")]
+mod tps_hover;
 
 /// 仓库根目录 —— `codex-rotate` / `traffic/scan.py` / `state.json` 都从这里找。
 ///
@@ -686,6 +694,155 @@ fn notch_panel_height(app: AppHandle, h: f64) {
     notch::set_panel_height(&app, h);
     #[cfg(not(target_os = "macos"))]
     let _ = (app, h);
+}
+
+/// 4e 悬浮卡片量出来的自然高度（随 Tab / 会话展开 / 告警行变；上限约 560）。与 `notch_panel_height` 同一份状态，
+/// 新名字给 F4 的卡片用 —— 窗口按它加上 10 pt 空隙与阴影边摆。
+#[tauri::command]
+fn notch_card_resize(app: AppHandle, h: f64) {
+    notch_panel_height(app, h)
+}
+
+/// 4e 展开态版面（刘海窗口内坐标）：窗口宽高、刘海矩形、卡片矩形。网页画光桥 / 卡片 / logo 来向用。
+#[tauri::command]
+fn notch_layout() -> Option<Value> {
+    #[cfg(target_os = "macos")]
+    return notch::open_layout();
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+// ---- t/s：请求账本 / 实时 / 状态栏额度（2026-10-19 交接包，PLAN §2.3） ----
+
+/// `traffic/requests.py` 的串行闸。★ `--json` 与 `--live` **共用一把**：两者都推进同一份游标与月账本，
+///   app 内并发跑两份只会让后一份读到前一份写了一半的游标（跨进程的并发由脚本自己的文件锁管）。
+///   独立于 `SCAN_LOCK` / `ROTATION_LOCK`，理由同 grok/agy 各自独立锁：互不相干的两件事共用一把会互相阻塞。
+static REQUESTS_LOCK: Mutex<()> = Mutex::new(());
+/// `.live.json` 比这个还旧就不信它（app 上次退出时可能停在「在跑」），现跑一次。
+const LIVE_STALE_SECS: u64 = 10;
+
+fn requests_script() -> String { format!("{}/traffic/requests.py", script_dir()) }
+fn live_path() -> String { format!("{}/traffic/requests-ledger/.live.json", data_dir()) }
+
+/// 跑一个只读本机盘的 python 脚本，拿 stdout。★ 脚本缺失 / 起不来 / 非零退出 / 空输出**一律是 Err**，
+/// 绝不折成一个看着正常的空结果 —— 「读不到」≠「没有请求」（本仓铁律）。
+fn run_py_script(script: &str, args: &[&str]) -> Result<String, String> {
+    if !std::path::Path::new(script).is_file() {
+        return Err(format!("script not found: {}", script));
+    }
+    let out = py_cmd().arg(script).args(args).output().map_err(|e| format!("exec: {}", e))?;
+    if !out.status.success() {
+        return Err(format!("{} exited {}: {}{}", script, out.status,
+            String::from_utf8_lossy(&out.stderr).trim(), String::from_utf8_lossy(&out.stdout).trim()));
+    }
+    let body = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if body.is_empty() { return Err(format!("{} printed nothing", script)); }
+    Ok(body)
+}
+
+/// 跑一次 `requests.py --live`（阻塞，调用方自己放到后台线程）。活动检测线程每 2 s 调一次。
+fn run_live_blocking() -> Result<String, String> {
+    let _g = REQUESTS_LOCK.lock();
+    run_py_script(&requests_script(), &["--live"])
+}
+
+/// 最近 2 天的逐条请求（「请求」页）。
+#[tauri::command]
+async fn read_requests() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _g = REQUESTS_LOCK.lock();
+        run_py_script(&requests_script(), &["--json"])
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}
+
+/// 当前的实时读数（悬停面板 / 刘海卡片 / 菜单栏弹窗首次挂载用；之后走 `tps-live` 推送）。
+/// 读 `.live.json`；没有或太旧（> 10 s）就现跑一次 `--live`。
+#[tauri::command]
+async fn read_live() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = live_path();
+        let fresh = fs::metadata(&p).ok().and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() <= LIVE_STALE_SECS);
+        if fresh {
+            if let Ok(body) = fs::read_to_string(&p) {
+                if !body.trim().is_empty() { return Ok(body); }
+            }
+        }
+        run_live_blocking()
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}
+
+/// 状态栏转写来的额度（`statusline_quota.py --read`）。只读本机盘。
+#[tauri::command]
+async fn read_statusline_quota() -> Result<String, String> {
+    let script = format!("{}/traffic/statusline_quota.py", script_dir());
+    tauri::async_runtime::spawn_blocking(move || run_py_script(&script, &["--read"]))
+        .await
+        .map_err(|e| format!("join: {}", e))?
+}
+
+/// 「Claude 实测速度」开关（`claude_otel_env.py`）。`status` 只读；`enable` / `disable` 改
+/// `~/.claude/settings.json` 的 `env` —— 边界全在 python 侧（只碰 12 个键、冲突不写、先备份、原子写），
+/// 这层只做白名单，同 `connector_cmd`。
+#[tauri::command]
+async fn claude_otel(action: String) -> Result<String, String> {
+    if !matches!(action.as_str(), "status" | "enable" | "disable") {
+        return Err(format!("unknown action: {}", action));
+    }
+    let script = format!("{}/claude_otel_env.py", script_dir());
+    tauri::async_runtime::spawn_blocking(move || run_py_script(&script, &[action.as_str(), "--json"]))
+        .await
+        .map_err(|e| format!("join: {}", e))?
+}
+
+/// 「在跑时显示 t/s」开关（默认开；App.tsx 启动时重发，同 `set_tray_style`）。关 ⇒ 立刻回原标题。
+#[tauri::command]
+fn set_tps_tray(app: AppHandle, enabled: bool) {
+    tray_pill::set_enabled(&app, enabled);
+}
+
+/// 悬停面板量出来的自然高度。
+#[tauri::command]
+fn tpshover_resize(app: AppHandle, h: f64) {
+    #[cfg(target_os = "macos")]
+    tps_hover::set_panel_height(&app, h);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, h);
+}
+
+/// 悬停面板的版面（窗口内坐标：面板、胶囊、各段 logo）。`tpshover-open` 带的是同一份；这里给首次挂载用。
+#[tauri::command]
+fn tpshover_layout() -> Option<Value> {
+    #[cfg(target_os = "macos")]
+    return tps_hover::layout();
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// logo 从胶囊飞进面板期间，托盘画「无 logo 的胶囊」，飞回后再画回（否则会看到两个 logo）。
+#[tauri::command]
+fn tray_pill_hide_logos(app: AppHandle, hidden: bool) {
+    tray_pill::set_hide_logos(&app, hidden);
+}
+
+/// 胶囊过渡帧要把空闲标题画进图里：标题文字 + 百分比那段的颜色（与 `refresh_tray` 同一条判据）。
+fn tray_title_spec() -> tray_pill::TitleSpec {
+    let text = format_tray_title();
+    #[cfg(target_os = "macos")]
+    let hi = {
+        let r = ACTIVE_REM.load(Ordering::Relaxed);
+        if r <= 100 {
+            let pat = format!("{}%", r);
+            text.find(&pat).map(|i| (i..i + pat.len(), rem_rgb(r)))
+        } else { None }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let hi = None;
+    tray_pill::TitleSpec { text, hi }
 }
 
 /// 多 AI 流量总览(Claude / Codex / Grok)。
@@ -1665,6 +1822,8 @@ const LOG_SOURCES: &[(&str, &str)] = &[
     ("autosync", "autosync.log"),
     ("dawnprobe", "dawnprobe.log"),
     ("agydawn", "agydawn.log"),
+    // Claude Code OTel 接收端（2026-10-19 起正式服务）。平时只有启动那一行；端口被占时原因在这里。
+    ("otel", "otel.log"),
     // agy 不是 launchd 任务，是 `bin/agy` wrapper 与 `agy-rotate` 的运行留痕。
     // 2026-09-14 加入：此前 agy 那一侧**一个字都不落盘**，界面上点了探针/刷新/切号、
     // 结果如何，事后完全无从复盘（用户实报要它）。
@@ -2048,6 +2207,10 @@ fn rem_rgb(rem: u32) -> (f64, f64, f64) {
 /// 只设纯文本的话颜色不会更新,标题变了色还停在上一次的阈值上。
 fn refresh_tray(app: &AppHandle) {
     let title = format_tray_title();
+    // ★ 胶囊正占着 status item（有 AI 在跑）：标题只算不画 —— 回到空闲时 `tray_pill` 会再调这里。
+    if tray_pill::is_shown() {
+        return;
+    }
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_title(Some(&title));
         // ★★ **Windows 托盘没有文字**。`TrayIcon::set_title` 在 Windows 上是**空实现**
@@ -2459,13 +2622,14 @@ pub fn run() {
         //   - **denylist 掉 `menubar`**:弹窗的高度由 ResizeObserver 按内容算、位置每次按托盘图标定位,
         //     恢复上次几何会同时和这两件事打架,把弹窗放到错误的位置。
         //     `notch`(刘海条)同理:位置每次按刘海算,存下展开态的尺寸会在下次建窗时被恢复回来。
+        //     `tpshover`(胶囊悬停面板)同理:位置每次按托盘算、高度由网页报。
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::SIZE
                         | tauri_plugin_window_state::StateFlags::POSITION,
                 )
-                .with_denylist(&["menubar", "notch"])
+                .with_denylist(&["menubar", "notch", "tpshover"])
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
@@ -2581,17 +2745,70 @@ pub fn run() {
             let _tray = builder
                 .title(format_tray_title())
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left | MouseButton::Right,
-                        button_state: MouseButtonState::Up,
-                        rect,
-                        ..
-                    } = event
-                    {
-                        toggle_menubar(tray.app_handle(), Some(rect));
+                    match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left | MouseButton::Right,
+                            button_state: MouseButtonState::Up,
+                            rect,
+                            ..
+                        } => {
+                            // ★ 先收起胶囊的悬停面板，再走原有菜单栏弹窗（page 2：点击胶囊 = 菜单栏弹窗）
+                            #[cfg(target_os = "macos")]
+                            tps_hover::on_click(tray.app_handle());
+                            toggle_menubar(tray.app_handle(), Some(rect));
+                        }
+                        // 悬停 200 ms 弹面板（只在有 AI 在跑时）；进出判定在 tps_hover 的光标轮询里
+                        #[cfg(target_os = "macos")]
+                        TrayIconEvent::Enter { .. } => tps_hover::on_enter(tray.app_handle()),
+                        #[cfg(target_os = "macos")]
+                        TrayIconEvent::Leave { .. } => tps_hover::on_leave(),
+                        _ => {}
                     }
                 })
                 .build(app)?;
+
+            // ---- t/s 胶囊的悬停面板（page 2）：与菜单栏弹窗一样启动时建好、藏着 ----
+            // ★ 不抢焦点（focused false + 出现走 orderFrontRegardless）、透明、层级盖过菜单栏（logo 从胶囊飞进来）。
+            #[cfg(target_os = "macos")]
+            {
+                let hover = WebviewWindowBuilder::new(handle, tps_hover::LABEL, WebviewUrl::App("tps-hover.html".into()))
+                    .title("CodexBar t/s")
+                    .inner_size(tps_hover::PANEL_W, 240.0)
+                    .decorations(false)
+                    .transparent(true)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .focused(false)
+                    .accept_first_mouse(true)
+                    .visible(false)
+                    .resizable(false)
+                    .build()?;
+                tps_hover::prepare(&hover);
+            }
+
+            // ★ 「在跑时显示 t/s」默认开：先订阅活动检测；设置页的开关在 localStorage，App.tsx 启动时会重发一次。
+            tray_pill::set_enabled(handle, true);
+
+            // ---- 导航：任何 webview 发 `open-main-page` {page, platform} ⇒ 主窗口 show + focus 并切页 ----
+            // ★ 转发成**另一个名字** `main-open-page` 只发给主窗口：发送方用全局 `emit` 时主窗口本来也会收到一份
+            //   `open-main-page`，同名转发就是两次；主窗口只听 `main-open-page`，无论对方怎么发都恰好一次。
+            {
+                use tauri::Listener;
+                let h2 = handle.clone();
+                handle.listen_any("open-main-page", move |ev| {
+                    let payload: Value = serde_json::from_str(ev.payload()).unwrap_or(Value::Null);
+                    let h3 = h2.clone();
+                    let _ = h2.run_on_main_thread(move || {
+                        if let Some(w) = h3.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                        apply_activation_policy(&h3);
+                        let _ = h3.emit_to("main", "main-open-page", payload);
+                    });
+                });
+            }
 
             // ---- startup: refresh every account from the official usage API (GET, zero quota) ----
             // Safe to run on every launch/login again: refresh-all no longer sends a billed
@@ -2781,6 +2998,9 @@ pub fn run() {
             open_url,
             set_dock_visible,
             set_notch_hud, notch_status, notch_geometry, notch_panel_height, notch_activity,
+            notch_card_resize, notch_layout,
+            read_requests, read_live, read_statusline_quota, claude_otel,
+            set_tps_tray, tpshover_resize, tpshover_layout, tray_pill_hide_logos,
             set_main_visible,
             read_auth_tokens,
             read_logs,
@@ -2935,5 +3155,32 @@ mod popover_tests {
     fn tiny_screen_still_stays_on_screen() {
         let (x, y) = place_popover((10.0, 300.0, 16.0, 16.0), (0.0, 0.0, 400.0, 500.0), 352.0, 600.0);
         assert!(x >= 0.0 && y >= 0.0, "极小屏下越出屏幕 x={} y={}", x, y);
+    }
+}
+
+#[cfg(test)]
+mod live_script_tests {
+    use super::run_py_script;
+
+    fn tmp_script(name: &str, body: &str) -> String {
+        let d = std::env::temp_dir().join(format!("codexbar-live-test-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join(name);
+        std::fs::write(&p, body).unwrap();
+        p.to_string_lossy().to_string()
+    }
+
+    /// 「读不到」≠「没有请求」：脚本缺失 / 非零退出 / 空输出都必须是 Err，不能折成空的成功。
+    #[test]
+    fn missing_or_failing_scripts_are_errors_not_empty_success() {
+        let e = run_py_script("/nonexistent/traffic/requests.py", &["--live"]).unwrap_err();
+        assert!(e.contains("script not found"), "{}", e);
+        let bad = tmp_script("bad.py", "import sys\nsys.stderr.write('boom')\nsys.exit(3)\n");
+        let e = run_py_script(&bad, &[]).unwrap_err();
+        assert!(e.contains("boom"), "非零退出要带上 stderr：{}", e);
+        let empty = tmp_script("empty.py", "pass\n");
+        assert!(run_py_script(&empty, &[]).unwrap_err().contains("printed nothing"));
+        let ok = tmp_script("ok.py", "print('{\"v\":1}')\n");
+        assert_eq!(run_py_script(&ok, &[]).unwrap(), "{\"v\":1}");
     }
 }

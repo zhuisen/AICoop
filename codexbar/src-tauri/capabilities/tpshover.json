@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tpshover",
+  "description": "托盘胶囊的悬停面板（tps_hover.rs）—— 只读数、只收事件、发导航事件。不给窗口操作 / 通知 / 自启动权限：位置全由 Rust 摆。",
+  "windows": [
+    "tpshover"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

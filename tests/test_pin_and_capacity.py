@@ -260,7 +260,8 @@ class TheDragHintNoLongerLies(unittest.TestCase):
 
     def test_the_hint_does_not_claim_to_drive_rotation(self):
         import re
-        raw = (ROOT / "codexbar" / "src" / "App.tsx").read_text(encoding="utf-8")
+        # 2026-10-19：卡片网格从 App 搬进 `ov/Overview.tsx`（交接包 page5），提示跟着走。
+        raw = (ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
         code = re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
         i = code.index("按住拖动")
         hint = code[i:i + 260]

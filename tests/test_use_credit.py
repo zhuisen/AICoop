@@ -236,11 +236,19 @@ class Wiring(unittest.TestCase):
         self.assertEqual(app.count('"use-credit"'), 1, "★★ `use-credit` 出现在不止一处 —— 有别的入口绕过了确认弹窗")
         self.assertGreater(app.index('"use-credit"'), app.index("<UseCreditDialog"),
                            "★★★ 发 use-credit 的调用不在弹窗的 onConfirm 里 —— 不可逆动作没经过确认")
-        self.assertIn("setCreditConfirm(a.aid)", app, "★★ 点角标应该只是「请求」确认弹窗")
+        # 2026-10-19：卡上入口是 ⋯「使用重置卡」，它只回调 `onUseCredit(aid)` —— App 拿到后只是打开确认弹窗。
+        self.assertIn("onUseCredit={(aid) => setCreditConfirm(aid)}", app, "★★ 卡上的入口应该只是「请求」确认弹窗")
 
     def test_the_badge_does_not_confirm_by_itself(self):
-        badge = re.sub(r"\{/\*[\s\S]*?\*/\}", "", (SRC / "components" / "CardBadge.tsx").read_text(encoding="utf-8"))
-        self.assertIn("stopPropagation", badge, "★★ 点角标会同时触发卡片选中")
+        """卡片自己不发命令：⋯ 里的「使用重置卡」只调 `onUseCredit`（请求弹窗），菜单层拦住冒泡（不连带点开卡片）。"""
+        card = re.sub(r"\{/\*[\s\S]*?\*/\}", "", (SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8"))
+        self.assertRegex(card, r'key: "credit", label: `使用重置卡（\$\{a\.cards\} 张）`, hidden: [^,]+, onClick: onUseCredit \}',
+                         "★★ ⋯ 里没有「使用重置卡」，或者它不是只回调 onUseCredit")
+        for bad in ("invoke(", "run_rotate", '"use-credit"'):
+            self.assertNotIn(bad, card, "★★★ 卡片自己发了命令 —— 绕过了确认弹窗")
+        ov = (SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
+        self.assertIn('data-ov-menu="" data-open={open ? "" : undefined} onClick={(e) => e.stopPropagation()}', ov,
+                      "★★ 点菜单项会同时触发卡片点击")
 
 
 def _render():
@@ -285,15 +293,20 @@ def _dialog_probe():
         br = p.chromium.launch(executable_path=CHROME, headless=True)
         pg = br.new_page(viewport={"width": 1300, "height": 900})
         pg.goto(BASE, timeout=30000); pg.wait_for_timeout(3000)
-        out = {"n_badges": pg.locator("[data-card-badge-use]").count()}
-        # 每张卡的动作条里都不许有「用卡」
-        bars = []
-        for i in range(pg.evaluate("document.querySelectorAll('[data-aid]').length")):
-            pg.evaluate(f"document.querySelectorAll('[data-aid]')[{i}].click()"); pg.wait_for_timeout(300)
-            bars.append(pg.evaluate("(document.querySelector('[data-actions]')||{innerText:''}).innerText"))
-        out["bar_has_use"] = any("用卡" in b for b in bars)
-        pg.evaluate("document.querySelectorAll('[data-actions]').forEach(()=>0)")
-        b = pg.locator("[data-aid]:has-text('Egan') [data-card-badge-use]").first
+        # 2026-10-19：入口是每张卡 ⋯ 里的「使用重置卡」（`data-ov-mi="credit"`），底栏动作里不许有「用卡」按钮。
+        out = {"n_badges": pg.locator('[data-ov-mi="credit"]').count()}
+        bars = pg.evaluate("[...document.querySelectorAll('[data-ov-actions]')].map(e => e.textContent)")
+        out["bar_has_use"] = any("用卡" in b.replace("使用重置卡", "") for b in bars)
+
+        class _Entry:   # 与旧 `b.click()` 同一个用法：每次都从 Egan 那张卡的 ⋯ 里点「使用重置卡」
+            @staticmethod
+            def click():
+                ok = pg.evaluate("""() => { const c = [...document.querySelectorAll('[data-ov-card]')]
+                    .find(c => (c.querySelector('[data-card-name]') || {}).textContent === 'Egan');
+                  const it = c && c.querySelector('[data-ov-mi="credit"]'); if (it) it.click(); return !!it; }""")
+                if not ok:
+                    raise AssertionError("★★ Egan 那张卡的 ⋯ 里没有「使用重置卡」")
+        b = _Entry
         dlg = "[data-use-credit-dialog]"
         b.click(); pg.wait_for_timeout(300)
         out["opened"] = pg.locator(dlg).count()
@@ -347,7 +360,7 @@ class TheConfirmDialog(unittest.TestCase):
             self.skipTest("没有 playwright 或 harness 静态服务（3304）没在跑")
         self.assertGreaterEqual(r["n_badges"], 2, "★★ 页脚角标没有可点的 —— 闸此刻没有判别力")
         self.assertFalse(r["bar_has_use"], "★★ 动作条里还有「用卡」按钮（用户要求取消，因为容易误触）")
-        self.assertEqual(r["opened"], 1, "★★ 点角标没有弹出确认弹窗")
+        self.assertEqual(r["opened"], 1, "★★ 点「使用重置卡」没有弹出确认弹窗")
         self.assertEqual(r["sent_on_open"], 0, "★★★ 弹窗一出来就已经发了 use-credit")
         self.assertRegex(r["target"], r"共 \d+ 张，用掉所选的这一张后剩 \d+ 张", "★★ 弹窗没说清用后剩几张")
         self.assertTrue(r["cancel_focused"], "★★ 默认焦点不在「取消」上")

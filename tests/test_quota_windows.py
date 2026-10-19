@@ -118,21 +118,21 @@ class WindowPredicateIsConsistent(unittest.TestCase):
 
 
 class HeroRingLabelMatchesItsNumber(unittest.TestCase):
-    """★★ hero 环的数字取 `tightest`(跨窗口最小),标签**必须取同一个窗口**的名字。
+    """★★ 汇总环的数字取 `tightest`(跨窗口最小),标签**必须取同一个窗口**的名字。
 
     只有一个窗口时两者永远一致,所以这个缺陷在 5h 缺席的那一年里根本不可能暴露。
     5h 回归 ⇒ Plus 号有两个窗口 ⇒ 数字可能来自周、标签却写着「5h」。
-    **这是"恢复 5h"这件事本身引入的缺陷,不是老 bug。**
+
+    ★ 2026-10-19：总览照交接包 page5 重做 —— 「正在使用」那颗环（`ov/OvHero`）取轮换板的
+      `cur.tightest`，卡片环（`AccountCard` → `ov/OvCard`）取 `a.tightest`；App 不再自己画环。
     """
-    SURFACES = ("App.tsx", "components/AccountCard.tsx", "components/AccountRow.tsx")
+    SURFACES = ("components/ov/OvHero.tsx", "components/AccountCard.tsx", "components/AccountRow.tsx")
 
     def test_no_surface_summarises_with_the_first_window(self):
-        """★★ **单个汇总数字一律取「最紧」的窗口**,四个 surface 都是:
-        hero 环、卡片环、菜单栏行、托盘标题。
+        """★★ **单个汇总数字一律取「最紧」的窗口**：hero 环、卡片环、菜单栏行、托盘标题。
 
         `windows[0]` 是 primary —— plus 号的 primary 现在是 **5h**,而真正卡住人的
         可能是周。用第一个 = **把约束藏起来**,而且它显示的还是个正常的绿数字。
-        只有"有空间列清单"的地方(卡片下方的细条)才该把 `windows` 全画出来。
         """
         for rel in self.SURFACES:
             code = strip_comments((ROOT / "codexbar" / "src" / rel).read_text(encoding="utf-8"))
@@ -141,6 +141,8 @@ class HeroRingLabelMatchesItsNumber(unittest.TestCase):
                                     "{}:还在用 windows[0] 做汇总 —— 会藏掉更紧的那个窗口".format(rel))
                 self.assertRegex(code, r"tightest",
                                  "{}:没有用 tightest".format(rel))
+        hero = strip_comments((ROOT / "codexbar" / "src" / "components" / "ov" / "OvHero.tsx").read_text(encoding="utf-8"))
+        self.assertIn("const pct = cur?.tightest ?? null;", hero, "★ 「正在使用」的环不是最紧那个窗口")
 
     def test_helpers_derives_tightest_from_the_window_list(self):
         ts = strip_comments(HELPERS.read_text(encoding="utf-8"))
@@ -148,112 +150,90 @@ class HeroRingLabelMatchesItsNumber(unittest.TestCase):
         self.assertRegex(ts, r"reduce\(\(a, b\) =>",
                          "tightest 不是从窗口列表里挑出来的,拿不到它是哪个窗口")
 
+class OverviewCardsShareOneRule(unittest.TestCase):
+    """★★ 总览四家的卡（2026-10-19 交接包 page5）：条色、数字色**同一个判据** `overview.ts::ovIsLow`，
+    四张卡共用一个行组件 `ov/OvCard::OvWinRow`。
 
-class WindowColourRule(unittest.TestCase):
-    """★★ C′：**窗口识别色 + 低额度夺色**（用户 2026-08-26 定稿）。
-
-    两个诉求本来打架，这条规则是它们的和解：
-      · 「5h 和周的颜色不一样」→ 平时按**窗口**取色（青 / 绿）；
-      · 「低额度靠条色报警」  → **跌破阈值时警告色夺回条色**。
-    即 **识别是常态，报警是例外，而例外优先** —— 额度快没了的时候，
-    「这是哪个窗口」远不如「这个要没了」重要。
-
-    这条闸守两件事：
-      ① 夺色**真的在**（低额度必须返回警告色，不能只按窗口分色）；
-      ② 两个 surface **不许各写一份** —— 菜单栏行与总览卡都必须调同一个函数。
-         本项目在 grok 那边栽过一次：同一状态两个 surface 两种画法，靠截图才发现。
+    ## 这一条取代了两条旧闸（作废记录，PLAN §4）
+    - `WindowColourRule`（C′，2026-08-26）与 `NumberAndBarNeverDisagree`（策略③）守的是
+      `helpers.ts::winBarColor / winNumColor / quotaLevel`：≤10 红、<50 琥珀、否则按窗口取色 / 中性灰。
+      交接包 page5 的窗口行只有「5h 青 / 周 绿 / 显示整数 <10% 橙红」三种色（与菜单栏 4f 同一套），
+      **<50 琥珀那一档被交接稿去掉了**；那三个函数随之无人调用，按「删组件连本体一起删」删除。
+    - 两条旧闸真正守的两件事**原样保留**：
+      ① 识别是常态、报警是例外且优先（低 ⇒ 夺色，否则按窗口取色）；
+      ② 条与数字**同一个判据**、各家卡**谁也不许手写阈值** —— 剩 7% 时条红、数字琥珀的老毛病不能回来。
     """
-    SURFACES = ("components/AccountRow.tsx", "components/AccountCard.tsx")
+    OVCARD = ROOT / "codexbar" / "src" / "components" / "ov" / "OvCard.tsx"
+    CARDS = ("components/AccountCard.tsx", "components/AgyCard.tsx", "components/GrokCard.tsx",
+             "components/ov/ClaudeCard.tsx")
 
     @classmethod
     def setUpClass(cls):
-        cls.ts = strip_comments(HELPERS.read_text(encoding="utf-8"))
+        c = strip_comments(cls.OVCARD.read_text(encoding="utf-8"))
+        i = c.index("export function OvWinRow(")
+        cls.row = c[i:c.index("\n}\n", i)]
 
-    def test_low_quota_takes_over_the_bar_colour(self):
-        """★ 用户要求①：低额度靠条色报警。判据打在函数体上，不是"这个词出现过"。"""
-        i = self.ts.index("export function winBarColor")
-        body = self.ts[i:self.ts.index("\n}", i)]
-        self.assertRegex(body, r'return\s*"#E0901C"',
-                         "低额度不再返回琥珀 —— 条色报警没了")
-        self.assertRegex(body, r'return\s*"#E0524D"',
-                         "危险档不再返回红")
-        # ★ 夺色必须**排在**识别色之前,否则永远轮不到
-        warn = min(body.index('"#E0901C"'), body.index('"#E0524D"'))
-        self.assertLess(warn, body.index("winColor("),
-                        "警告色排在识别色之后 —— 那样低额度永远夺不到色")
+    def test_low_takes_over_and_identity_survives(self):
+        self.assertIn("const low = ovIsLow(w.pct);", self.row, "行的 low 不是 ovIsLow 给的")
+        self.assertRegex(self.row, r'const bar = off \? "var\(--tx3\)" : low \? "var\(--bad\)" : w\.kind === "5h" \? "var\(--ovB5\)" : "var\(--ovBw\)";',
+                         "条色不是「低额度夺色、否则按窗口取色」")
 
-    def test_identity_colour_survives_at_healthy_levels(self):
-        """反向:别把窗口识别色整个删掉 —— 那就退回改动前了。"""
-        i = self.ts.index("export function winBarColor")
-        body = self.ts[i:self.ts.index("\n}", i)]
-        self.assertIn("winColor(", body, "正常档不再按窗口取色,双色相没了")
+    def test_number_uses_the_same_predicate(self):
+        self.assertRegex(self.row, r'w\.pct == null \? "var\(--ovPh\)" : low \? "var\(--badTx\)" : "var\(--tx\)"',
+                         "数字色没跟条色同一个判据 —— 条红数字不红")
 
-    def test_both_surfaces_use_the_same_rule(self):
-        for rel in self.SURFACES:
+    def test_the_threshold_judges_the_displayed_integer(self):
+        """★ 判的是**显示出来的整数**：剩 9.6% 环上写 10，就不该是红的（与托盘 / 菜单栏同口径）。"""
+        ts = strip_comments((ROOT / "codexbar" / "src" / "overview.ts").read_text(encoding="utf-8"))
+        self.assertIn("Math.round(pct) < OV_LOW_PCT", ts)
+
+    def test_no_card_hand_rolls_a_threshold(self):
+        for rel in self.CARDS:
             code = strip_comments((ROOT / "codexbar" / "src" / rel).read_text(encoding="utf-8"))
             with self.subTest(f=rel):
-                self.assertIn("winBarColor(", code, "{} 没走统一的配色规则".format(rel))
-                self.assertNotIn("quotaColor(", code,
-                                 "{} 还在直接用 quotaColor —— 与另一个 surface 会分叉".format(rel))
+                self.assertRegex(code, r"<OvCard\b", "{} 没走共用的 OvCard（窗口行由它画）".format(rel))
+                self.assertNotRegex(code, r"pct\s*[<>]=?\s*(10|50)\b", "{} 手写了一份阈值（10 / 50）".format(rel))
+                self.assertNotIn("quotaColor(", code, rel)
+        self.assertNotIn("winBarColor", HELPERS.read_text(encoding="utf-8"), "★ 已删的旧配色又回来了却没人用")
+        c = strip_comments(self.OVCARD.read_text(encoding="utf-8"))
+        self.assertEqual(len(re.findall(r"<OvWinRow ", c)), 2, "★ OvCard 的 ④ / ⑤ 两槽不都走 OvWinRow")
 
 
-class NumberAndBarNeverDisagree(unittest.TestCase):
-    """★★ 策略③：**百分比数字与条形共用同一套阈值**（用户 2026-08-26 定稿）。
+class MenubarRowsShareOneRule(unittest.TestCase):
+    """★★ 菜单栏四家的行（2026-10-19 交接包 4f）：条色、数字色、整行警示**同一个判据** `mbLogic.isLow`。
 
-    改动前三个 surface **各写一份，而且写的还不一样**：
-      · `AccountCard` / `AccountRow` —— `pct < 50 ? 琥珀 : 次级灰`，**没有红档**；
-      · `GrokCard`                   —— 三档（≤10 红 / <50 琥珀 / 否则灰）。
-    症状：剩 7% 时**条是红的、账号卡的数字却是琥珀** —— 同一个状态两种说法，
-    而它不报错、不折行、不溢出，任何自动化都看不见，只能靠人盯着截图。
-
-    这条闸守三件事：
-      ① 判据只有**一处**（`quotaLevel`），条色与数字色都从它取；
-      ② 数字**有红档**（回到两档就等于把危险说成警告）；
-      ③ 三个 surface 都调 `winNumColor`，谁也不许再手写一份。
+    同一个 C′ 思路（识别是常态、报警是例外且优先），只是阈值换成交接稿的 <10%：
+      · 条：低 ⇒ `--bad`，否则 5h `--b5`（青）/ 周 `--bw`（绿）；
+      · 数字：低 ⇒ `--bad`，否则中性 `--tx`；
+      · 整行：任一窗口低 ⇒ `qlow`（浅橙红底）。
+    三处都只认 `isLow`，四个行组件谁也不许自己写阈值。
     """
-    SURFACES = ("components/AccountCard.tsx", "components/AccountRow.tsx", "components/GrokCard.tsx")
+    QROW = ROOT / "codexbar" / "src" / "components" / "mb" / "QuotaRow.tsx"
+    ROWS = ("components/AccountRow.tsx", "components/AgyRow.tsx", "components/GrokRow.tsx",
+            "components/mb/ClaudeRow.tsx")
 
     @classmethod
     def setUpClass(cls):
-        cls.ts = strip_comments(HELPERS.read_text(encoding="utf-8"))
+        cls.q = strip_comments(cls.QROW.read_text(encoding="utf-8"))
 
-    def test_single_threshold_predicate(self):
-        """★ 条色与数字色必须**都**走 `quotaLevel` —— 两处各写一串 if 迟早分叉。"""
-        self.assertIn("function quotaLevel", self.ts, "quotaLevel 不见了")
-        for fn in ("winBarColor", "winNumColor"):
-            i = self.ts.index("export function {}".format(fn))
-            body = self.ts[i:self.ts.index("\n}", i)]
-            with self.subTest(f=fn):
-                self.assertIn("quotaLevel(", body,
-                              "{} 没有走 quotaLevel —— 阈值又变成两份了".format(fn))
+    def test_bar_number_and_row_use_is_low(self):
+        self.assertRegex(self.q, r'const bar = low \? "var\(--bad\)" : w\.label === "5h" \? "var\(--b5\)" : "var\(--bw\)"',
+                         "条色不是「低额度夺色、否则按窗口取色」")
+        self.assertRegex(self.q, r'low \? "var\(--bad\)" : "var\(--tx\)"', "数字色没跟条色同一个判据")
+        self.assertRegex(self.q, r"const low = isLow\(w\.pct\)", "格子的 low 不是 isLow 给的")
+        self.assertRegex(self.q, r"wins\.some\(\(w\) => w != null && isLow\(w\.pct\)\)", "整行警示不是 isLow 给的")
 
-    def test_number_keeps_a_danger_level(self):
-        """★★ 数字必须有红档。退回两档 = 把「危险」说成「警告」，而条还是红的。"""
-        i = self.ts.index("export function winNumColor")
-        body = self.ts[i:self.ts.index("\n}", i)]
-        self.assertRegex(body, r'return\s*"#E0524D"', "数字没有危险档(红)")
-        self.assertRegex(body, r'return\s*"#E0901C"', "数字没有警告档(琥珀)")
-        self.assertIn("t.text2", body, "数字正常态不再是中性灰 —— 策略③的前半句没了")
-
-    def test_normal_state_stays_neutral(self):
-        """反向：正常态**不许**染窗口识别色（那是策略②，用户没选它）。
-
-        判据打在函数体上：`winNumColor` 里不该出现 `winColor(`。
-        """
-        i = self.ts.index("export function winNumColor")
-        body = self.ts[i:self.ts.index("\n}", i)]
-        self.assertNotIn("winColor(", body,
-                         "数字正常态跟着染窗口色了 —— 那是策略②，一屏六个彩色数字")
-
-    def test_no_surface_hand_rolls_the_rule(self):
-        for rel in self.SURFACES:
+    def test_no_row_hand_rolls_a_threshold(self):
+        for rel in self.ROWS:
             code = strip_comments((ROOT / "codexbar" / "src" / rel).read_text(encoding="utf-8"))
             with self.subTest(f=rel):
-                self.assertIn("winNumColor(", code,
-                              "{}:没走统一的数字取色".format(rel))
-                self.assertNotRegex(
-                    code, r"pct\s*<\s*50\s*\?",
-                    "{}:又手写了一份 `pct < 50 ?` 阈值 —— 这正是本闸要挡的".format(rel))
+                self.assertNotRegex(code, r"[<>]=?\s*(10|50)\b|\b(10|50)\s*[<>]",
+                                    "{} 手写了一份阈值（10 / 50）".format(rel))
+                for m in re.finditer(r"const low\s*=\s*([^;]+);", code):
+                    self.assertIn("isLow(", m.group(1), "{} 自己算了 low，没走 isLow".format(rel))
+                self.assertNotIn("quotaColor(", code, rel)
+                self.assertNotIn("winBarColor(", code, rel)
+                self.assertIn("QuotaRow", code, "{} 没走共用的 QuotaRow".format(rel))
 
 
 if __name__ == "__main__":

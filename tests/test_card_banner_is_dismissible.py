@@ -29,7 +29,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "codexbar" / "src"
 MENUBAR = SRC / "MenuBar.tsx"
-BADGE = SRC / "components" / "CardBadge.tsx"
+# ★ 2026-10-19（交接包 4f）：重置卡提醒并进了**通知条**（多条告警合并成一条，只显示最紧急的那条 +
+#   「还有 N 条」）。关闭按钮从 MenuBar 里的 `.mb-banner-x` 搬进 `NoticeBar` 的 `data-mb-notice-x`；
+#   「可关、按卡身份记忆、单行」三条规则一条不少，只是判据换到了新的落点。
+NOTICE = SRC / "components" / "mb" / "NoticeBar.tsx"
+# 2026-10-19：重置卡角标的本体从 CardBadge 组件并进 AccountCard 的页脚（交接包 page5），悬浮文字随之搬家。
+BADGE = SRC / "components" / "AccountCard.tsx"
 HOOK = SRC / "hooks" / "useCardBannerDismiss.ts"
 
 
@@ -59,15 +64,20 @@ class TheBannerCanBeDismissed(unittest.TestCase):
                       "★★★ 横幅没接关闭状态 —— 又变回「无法取消」")
 
     def test_there_is_a_close_control(self):
-        self.assertIn("mb-banner-x", self.mb, "★★★ 没有关闭按钮")
-        self.assertIn("bannerDismiss", self.mb, "★★★ 关闭按钮没接上 dismiss")
+        nb = _strip(NOTICE.read_text(encoding="utf-8"))
+        self.assertIn("data-mb-notice-x", nb, "★★★ 通知条里没有关闭按钮")
+        self.assertRegex(nb, r"n\.dismissible\s*\?", "★★★ 关闭按钮不是按「这条可关」出现的")
+        self.assertRegex(nb, r"onDismiss\(n\)", "★★★ 关闭按钮没接上 onDismiss")
+        self.assertRegex(self.mb, r"dismissible:\s*true", "★★★ 重置卡那条没标成可关")
+        self.assertRegex(self.mb, r"bannerDismiss\(cardAlert\)", "★★★ 关闭没接上 dismiss（按卡的身份记忆）")
 
     def test_the_close_control_has_an_accessible_label(self):
-        """★ 一个 10.5px 的 `×` 必须有可读的名字与 `title`，否则只有肉眼能发现它。"""
-        i = self.mb.index("mb-banner-x")
-        seg = self.mb[i:i + 320]
+        """★ 一个小小的 `×` 必须有可读的名字与 `title`，否则只有肉眼能发现它。"""
+        nb = _strip(NOTICE.read_text(encoding="utf-8"))
+        i = nb.index("data-mb-notice-x")
+        seg = nb[nb.rfind("<span", 0, i):i + 320]
         self.assertIn("aria-label", seg, "★ 关闭按钮没有 aria-label")
-        self.assertIn("title", seg, "★ 关闭按钮没有悬浮说明")
+        self.assertIn("title=", seg, "★ 关闭按钮没有悬浮说明")
 
 
 class DismissingOneAlertIsNotDismissingAllOfThem(unittest.TestCase):
@@ -187,11 +197,16 @@ class TheBannerIsOneLineNow(unittest.TestCase):
         会被省略号从尾部切掉动作那半，而本仓披露铁律要求告警必须说下一步。
         ⚠️ 前提被取代，不是规则被放弃：重置卡横幅**仍然**必须是单行，只是判据现在只看它。
         """
+        # ★ 2026-10-19：重置卡提醒是通知条里的**一条文字**（`text:` 一个字符串），不再有自己的 JSX。
         seg = self.mb.split("cardAlert && bannerVisible", 1)
-        self.assertEqual(len(seg), 2, "找不到重置卡横幅那一段 —— 判据的锚点漂了")
-        block = seg[1].split("</div>\n      )}", 1)[0]
-        self.assertNotIn("mb-banner-sub", block,
-                         "★★ 重置卡横幅的副标题行又回来了 —— 它必须是单行")
+        self.assertEqual(len(seg), 2, "找不到重置卡那一条 —— 判据的锚点漂了")
+        block = seg[1].split("\n  }", 1)[0]
+        self.assertEqual(block.count("text:"), 1, "★★ 重置卡那条不是单独一句话")
+        self.assertNotIn("mb-banner-sub", block, "★★ 重置卡提醒的副标题行又回来了 —— 它必须是单行")
+        nb = _strip(NOTICE.read_text(encoding="utf-8"))
+        head = nb[nb.index("data-mb-notice-head"):][:260]
+        self.assertIn('whiteSpace: "nowrap"', head, "★★ 通知条首行可以折行 —— 它必须是单行")
+        self.assertIn("height: 32", nb, "★ 通知条首行不是交接包的 32 高")
 
     def test_the_fake_action_button_is_gone(self):
         """★★★ 那颗「用卡: /usage」**点了并不用卡**，只弹 toast。
@@ -211,10 +226,13 @@ class TheBannerIsOneLineNow(unittest.TestCase):
     def test_the_close_target_is_bigger_than_the_glyph(self):
         """★ 10.5px 的 `×` 本身太小 —— 命中区必须靠 padding 撑大，
         否则「点不中」和「没点」长得一模一样（同 harness 那条 clicks 纪律）。"""
-        i = self.css.index(".mb-banner-x")
-        seg = self.css[i:i + 300]
-        self.assertIn("padding", seg, "★ 关闭按钮没有额外命中区")
-        self.assertIn("cursor: pointer", seg, "★ 关闭按钮没有指针光标")
+        # ★ 2026-10-19 起关闭按钮在 `NoticeBar`（内联样式），`.mb-banner-x` 那条 CSS 已随旧横幅删除。
+        self.assertNotIn(".mb-banner-x", self.css, "★ 旧横幅的关闭样式还留着 —— 没人用的样式会被当成还在生效")
+        nb = _strip(NOTICE.read_text(encoding="utf-8"))
+        i = nb.index("data-mb-notice-x")
+        seg = nb[i:i + 360]
+        self.assertRegex(seg, r"padding:\s*\"\d", "★ 关闭按钮没有额外命中区")
+        self.assertIn('cursor: "pointer"', seg, "★ 关闭按钮没有指针光标")
 
 
 if __name__ == "__main__":

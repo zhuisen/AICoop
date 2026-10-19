@@ -79,6 +79,27 @@ STUB = """
     // ★ 菜单栏停留在哪个平台档（v4 芯片行）。**必须能打桩** —— 芯片只有 logo 没有文字，
     //   `click=` 那条路匹配不到它，不给这个开关的话 gemini/grok 两档一个像素都验不到。
     if (p.get('mbplat')) localStorage.setItem('codexbar_mb_plat', p.get('mbplat'));
+    // ★ 菜单栏弹窗 4f（交接包 2026-10-19）的几个开关 —— 不给的话这些态一个像素都截不到：
+    //   `?mbstrip=1` 在跑条展开（默认折叠，与真实默认一致）· `?mbtheme=light` 浅色（日夜切换已移出弹窗，
+    //   弹窗只读 `codexbar_theme`）· `?probehold=1` 把探针钉在「按住中途」那一帧（只给截图用）。
+    localStorage.setItem('codexbar_mb_strip', p.get('mbstrip') === '1' ? '1' : '0');
+    // ★ `?theme=light`（主窗口）与 `?mbtheme=light`（菜单栏）现在写同一个键：日夜切换 2026-10-19 移进设置页，
+    //   所有 webview 共读 `codexbar_theme`（`SettingsPage.tsx::loadTheme`）。在 bundle 之前写，App 首帧就是浅色。
+    var themeQ = p.get('mbtheme') || p.get('theme');
+    if (themeQ) localStorage.setItem('codexbar_theme', themeQ);
+    else localStorage.removeItem('codexbar_theme');
+    if (p.get('probehold') === '1') localStorage.setItem('codexbar_mb_probehold', '1');
+    else localStorage.removeItem('codexbar_mb_probehold');
+    // ★ 总览（交接包 page5，2026-10-19）的几个开关 —— 不给的话这些态一个像素都截不到：
+    //   `?ovplat=codex|claude|gemini|grok` 停在哪一档（真源是 localStorage `codexbar_provider`）·
+    //   `?ovhover=<序号|aid>` 把那张卡钉在悬停态（headless 里 JS 事件不激活 `:hover`，见 verification.md）·
+    //   `?ovoff=1` 已停用 / 失效那两条折叠条默认展开。
+    if (p.get('ovplat')) localStorage.setItem('codexbar_provider', p.get('ovplat'));
+    if (p.get('ovhover') != null) localStorage.setItem('codexbar_ov_hover', p.get('ovhover'));
+    else localStorage.removeItem('codexbar_ov_hover');
+    if (p.get('ovoff') === '1') localStorage.setItem('codexbar_ov_stripopen', '1');
+    else localStorage.removeItem('codexbar_ov_stripopen');
+    localStorage.removeItem('codexbar_ov_sort');
     // ★★ `?h=<n>` 预置**记住的弹窗高度**。账号 Tab 用的就是这个数(今日页没渲染,量不到),
     //    所以「两个 Tab 等高」这条闸**必须能预置它** —— 否则每次加载 localStorage 都是空的,
     //    账号页永远落到兜底值,验出来的"相等"只是两个兜底值相等,与真实行为无关。
@@ -119,6 +140,52 @@ STUB = """
   var SNAPSHOT = __SNAPSHOT__;
   var STATE = __STATE__;
   window.__HSTATE = STATE;   // ★ 让测试能就地改夹具（如打乱明细顺序）再触发刷新
+  // ★ 总览夹具（交接包 page5）。全部在**脱敏夹具**上改，不碰任何真文件：
+  //   `?anon=1`     号名一律换成 号A / 号B …（按原名排序），轮换夹具里的同名一并换 —— 对外截图用；
+  //   `?ovcool=1`   第 2 个活号 429 冷却 41 分钟（`cooling_until`，板子 `cool_min` 跟着它算）；
+  //   `?ovunprobed=1` 最后一个活号没有任何窗口（「未探测」）；`?ovlow=1` 第 3 个活号 5h 剩 6%（「额度低」）；
+  //   `?relay=long` 一整窗连续用 48 分钟（真机是 4.0）—— 让接力条在 4h 轴上画得出多段 + 断档 + 回来的号，
+  //   用来与交接包的示意对照；默认夹具（真机配速）下几乎整条都是断档，那是真话。
+  var ANON = {}, AGY_ANON = ['号W', '号X', '号Y', '号Z'];
+  (function () {
+    var ids = Object.keys(STATE.slots || {}).filter(function (a) { return !STATE.slots[a].auth_dead && !STATE.slots[a].rotate_off; });
+    var now = Date.now() / 1000;
+    if (p.get('ovcool') === '1' && ids.length > 1) STATE.slots[ids[1]].cooling_until = now + 41 * 60 + 30;
+    if (p.get('ovunprobed') === '1' && ids.length) { STATE.slots[ids[ids.length - 1]].quota = {}; }
+    if (p.get('ovlow') === '1' && ids.length > 2) {
+      var q3 = STATE.slots[ids[2]].quota || {};
+      if (q3.primary) q3.primary.used_percent = 94; else if (q3.secondary) q3.secondary.used_percent = 94;
+    }
+    if (p.get('anon') === '1') {
+      var labels = Object.keys(STATE.slots || {}).map(function (a) { return STATE.slots[a].label || a; }).sort();
+      labels.forEach(function (l, i) { ANON[l] = '号' + String.fromCharCode(65 + i); });
+      Object.keys(STATE.slots || {}).forEach(function (a) { var sl = STATE.slots[a]; sl.label = ANON[sl.label] || sl.label; });
+      // 轮换夹具自己的假号名（plus1…plus9 / pro1…）也映射过去，截图里「今天的切换」与卡片同一套名字。
+      for (var k = 1; k <= 9; k++) { ANON['plus' + k] = '号' + String.fromCharCode(64 + k); ANON['pro' + k] = '号P' + k; }
+    }
+  })();
+  function anonDeep(v, map) {
+    if (p.get('anon') !== '1' || v == null) return v;
+    var txt = JSON.stringify(v);
+    Object.keys(map).sort(function (a, b) { return b.length - a.length; }).forEach(function (k) {
+      txt = txt.split('"' + k + '"').join('"' + map[k] + '"').split(k + ' →').join(map[k] + ' →').split('→ ' + k).join('→ ' + map[k]);
+    });
+    return JSON.parse(txt);
+  }
+  // ★ 菜单栏 4f 的两条通知夹具（真 state.json 恰好没有时，通知条那几种说法一句都截不到）：
+  //   `?mblow=1`  最后一个活号 5h 剩 6%（低额度行 + 「只剩 N%」通知）；
+  //   `?mbsub=1`  第一个活号订阅 5 天后到期（「订阅 N 天后到期」通知）。
+  (function () {
+    var ids = Object.keys(STATE.slots || {}).filter(function (a) { return !STATE.slots[a].auth_dead; });
+    if (p.get('mblow') === '1' && ids.length) {
+      var sl = STATE.slots[ids[ids.length - 1]];
+      if (sl.quota && sl.quota.primary) sl.quota.primary.used_percent = 94;
+      else if (sl.quota && sl.quota.secondary) sl.quota.secondary.used_percent = 94;
+    }
+    if (p.get('mbsub') === '1' && ids.length) {
+      STATE.slots[ids[0]].sub_until = new Date(Date.now() + 5.5 * 86400000).toISOString();
+    }
+  })();
 
   // ★ 菜单栏宽 412,而 **Chrome 最小窗宽是 500** —— 直接传 --window-size=412 会按 500 布局、
   //   按 412 裁图,伪装成"横向溢出"(CLAUDE.md §4 记过这个坑)。所以窗口开 500,用 CSS 把
@@ -140,6 +207,28 @@ STUB = """
     sh.textContent = '.mb-row-switch-wrap{opacity:1 !important;pointer-events:auto !important}'
       + '.cb-hoverpop{opacity:1 !important;visibility:visible !important}';
     document.head.appendChild(sh);
+  }
+  // ★ 菜单栏 4f 账号行悬停（`?mbhover=<n>`：第 n 个可切换的行，从 1 数）。headless 下 JS 事件不激活
+  //   `:hover`，所以给那一行加 `qhov` 并注入与 `.qrow:not(.qro):hover` 同值的样式 ——
+  //   **只验排版与遮挡（最右列 0→46、条跟着缩、「切换」出现），不验 :hover 触发本身。**
+  //   `?mbnotice=1` 点开通知条（展开「还有 N 条」）。
+  if (p.get('mbhover') || p.get('mbnotice')) {
+    var sq = document.createElement('style');
+    sq.textContent = '.qrow.qhov:not(.qro){grid-template-columns:16px var(--nameW,46px) minmax(0,1fr) minmax(0,1fr) 46px !important;'
+      + 'background:var(--hov2) !important;transition:none !important}.qrow.qhov .sw2{opacity:1 !important;transform:none !important;transition:none !important}';
+    document.head.appendChild(sq);
+    setTimeout(function () {
+      if (p.get('mbhover')) {
+        var rs = document.querySelectorAll('.qrow:not(.qro)'), k = parseInt(p.get('mbhover'), 10) - 1;
+        if (rs[k]) rs[k].classList.add('qhov');
+        clicks.push('mbhover=' + p.get('mbhover') + ' →命中 ' + (rs[k] ? 1 : 0) + '/' + rs.length);
+      }
+      if (p.get('mbnotice') === '1') {
+        var nh = document.querySelector('[data-mb-notice] > div');
+        if (nh) nh.click();
+        clicks.push('mbnotice →命中 ' + (nh ? 1 : 0));
+      }
+    }, 900);
   }
   // ★★★ `read_logs` 的夹具。**在 2026-09-14 之前 `LOGS_TXT` 是个从未定义过的名字** ——
   //   那条 case 一旦被调用就 `ReferenceError`。此前没人发现，因为**前端根本没有调用方**
@@ -176,6 +265,74 @@ STUB = """
   window.addEventListener('unhandledrejection', function (e) {
     errors.push('reject: ' + String(e.reason && (e.reason.stack || e.reason.message || e.reason)).slice(0, 200));
   });
+
+  // ★★ 「请求」页夹具（`read_requests`，契约 PLAN §2.1）。**全部脱敏**：账号名只用 号A…，
+  //   没有邮箱、没有会话正文。时间相对 `_NOW` 现算 —— 钉死时间戳会让「今天 / 昨天」随日子腐烂成全空。
+  //   覆盖：四家平台 · 今天 + 昨天 · codex 直连行 · 首字读不到的 claude / agy 行 · 首字 > 30 s 的行 ·
+  //   t/s 读不到的行 · 1M 以上输入。生成器照抄交接包 RequestsV2.html 的 `gen()`（同一组示意分布）。
+  //   `?req=ok|empty|stale|error|errfirst`：
+  //     empty    今天 0 条（昨天照常）—— 空列表态；
+  //     stale    后端自己报 ok:false + 旧行 + stale_since —— 读失败态（后端保留旧值那条路）；
+  //     error    第 1 次成功、之后 IPC 一律失败 —— 读失败态（前端保留上次列表那条路，需拉长虚拟时间 >10 s）；
+  //     errfirst 一次都没读到 —— 红条 + 空列表。
+  var reqCalls = 0;
+  function REQ_FIXTURE(mode) {
+    var pad = function (v) { return String(v).padStart(2, '0'); };
+    var dkey = function (d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+    var now = new Date(_NOW * 1000);
+    var mid = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+    var P = [
+      { k: 'codex', model: 'gpt-6-sol', srcs: ['交互', 'exec'], accs: ['号A', '号B', '号D', '直连'], ttft: 1, tps: [45, 180] },
+      { k: 'claude', model: 'claude-opus-5.5', srcs: ['Claude Code'], accs: ['本机'], ttft: 0.5, tps: [8, 100] },
+      { k: 'agy', model: 'gemini-4-argon', srcs: ['agy -p', 'agy 交互'], accs: ['号C', null], ttft: 0, tps: [60, 150] },
+      { k: 'grok', model: 'grok-4.7', srcs: ['grok CLI'], accs: ['单号'], ttft: 1, tps: [40, 95] }
+    ];
+    function gen(seed, n, tEndMax, tEndMin, tag) {
+      var x = seed, rnd = function () { return (x = (x * 16807) % 2147483647) / 2147483647; };
+      var out = [], sessCount = {}, step = Math.max(20, Math.min(600, (tEndMax - tEndMin) / (n + 1)));
+      var t = tEndMax;
+      for (var i = 0; i < n; i++) {
+        var p0 = P[Math.floor(rnd() * 10) % 10 < 5 ? 0 : (rnd() < .6 ? 1 : (rnd() < .5 ? 2 : 3))];
+        t -= Math.round(step * (0.6 + rnd() * 0.8)); if (t <= tEndMin) t = tEndMin + 1 + i;
+        var inp = Math.round(20 + rnd() * 190) * 1000, cache = rnd() < .12 ? 0 : Math.round(60 + rnd() * 39);
+        var o = Math.round(80 + rnd() * 3400), tps = +(p0.tps[0] + rnd() * (p0.tps[1] - p0.tps[0])).toFixed(1);
+        var g = o / tps, hasT = rnd() < p0.ttft, ttft = hasT ? +(rnd() < .1 ? 30 + rnd() * 15 : 1 + rnd() * 6).toFixed(1) : null;
+        var sess = p0.k + Math.floor(rnd() * 3); sessCount[sess] = (sessCount[sess] || 0) + 1;
+        var total = (ttft || 0) + g;
+        out.push({ key: p0.k + ':' + tag + i, platform: p0.k, t_start: t - total, t_end: t, model: p0.model,
+          source: p0.srcs[Math.floor(rnd() * p0.srcs.length)], session: tag + sess, session_title: 'demo-project',
+          account: p0.accs[Math.floor(rnd() * p0.accs.length)], input: inp, cached: Math.round(inp * cache / 100),
+          output: o, reasoning: null, ttft_ms: ttft == null ? null : Math.round(ttft * 1000),
+          gen_ms: Math.round(g * 1000), total_ms: Math.round(total * 1000), tool_ms: null, tps: tps,
+          est: p0.k === 'claude' && !hasT, _sess: sess });
+      }
+      out.forEach(function (r) { r.session_req_n = sessCount[r._sess]; delete r._sess; });
+      return out;
+    }
+    var today = mode === 'empty' ? [] : gen(42, 64, _NOW - 60, mid, 't');
+    // 固定前五条，保证每个要验的形态**一定在首屏**（随机分布不保证）。
+    var fix = [
+      { platform: 'codex', model: 'gpt-6-sol', source: '交互', account: '直连', ttft_ms: 4200, tps: 176.7, est: false },
+      { platform: 'claude', model: 'claude-opus-5.5', source: 'Claude Code', account: '本机', ttft_ms: null, tps: 82.3, est: true },
+      { platform: 'codex', model: 'gpt-6-sol', source: 'exec', account: '号A', ttft_ms: 39500, tps: 113.7, est: false },
+      { platform: 'agy', model: 'gemini-4-argon', source: 'agy 交互', account: '号C', ttft_ms: null, tps: null, est: false, input: 1234567 },
+      { platform: 'grok', model: 'grok-4.7', source: 'grok CLI', account: '单号', ttft_ms: 4900, tps: 64.6, est: false }
+    ];
+    fix.forEach(function (f, i) {
+      if (!today[i]) return;
+      var r = today[i];
+      Object.keys(f).forEach(function (k) { r[k] = f[k]; });
+      r.key = r.platform + ':tfix' + i;
+      if (r.ttft_ms != null) r.total_ms = r.ttft_ms + r.gen_ms; else r.total_ms = r.gen_ms;
+      if (r.input != null) r.cached = Math.round(r.input * 0.75);
+    });
+    var yest = gen(7, 78, mid - 60, mid - 86400, 'y');
+    var y0 = new Date((mid - 3600) * 1000);
+    return { v: 1, generated_at: _NOW, ok: mode !== 'stale', error: mode === 'stale' ? 'requests-ledger/2026-10.jsonl 被占用' : null,
+      stale_since: mode === 'stale' ? _NOW - 140 : null, requests: today.concat(yest),
+      days: { today: { date: dkey(now), n: today.length, avg_tps: null, ttft_median_s: null, tokens: 0 },
+              yesterday: { date: dkey(y0), n: yest.length, avg_tps: null, ttft_median_s: null, tokens: 0 } } };
+  }
 
   function fire(event, payload) {
     (listeners[event] || []).forEach(function (id) {
@@ -455,6 +612,10 @@ STUB = """
   };
 
   var ipc = {}, sizes = [], emitted = [];
+  // 悬停面板（harness-tpshover.html）：emit 的完整 payload（JSON）+ 它调的三条命令。
+  var emittedJ = [], hvCalls = [];
+  // 刘海卡片（harness-notch.html）：`notch_card_resize` 每次报的高度。
+  var ntCalls = [];
   // ★★ **路由分账夹具必须自己注入,不能指望活快照。**
   //   `.traffic-latest.json` 会被**正在运行的 app** 用它自己打包的（旧）`scan.py` 覆盖 ——
   //   实测过一次:harness 刚生成好，app 一扫就把 `by_provider` 抹没了，
@@ -681,6 +842,7 @@ function relayEntry() {
         //   `ipc` 只数 run_traffic/read_traffic_snapshot,截图也看不出跳转意图
         //   (菜单栏与主窗是两个 webview,harness 里只渲染其中一个)。
         emitted.push(args.event + (args.payload != null ? '=' + args.payload : ''));
+        try { emittedJ.push({ event: args.event, payload: args.payload }); } catch (e) { emittedJ.push({ event: args.event, payload: '?' }); }
         fire(args.event, args.payload);
         return Promise.resolve(null);
       // ★ `?snap_delay=<ms>` 让快照**异步**送达。默认 0(同步)保持既有行为。
@@ -706,7 +868,7 @@ function relayEntry() {
           subs.push(sub);
           accs[sub] = {
             // ★ `?agyname0=<名字>` 换第一个号的名字（2026-10-16：长名字 + ULTRA + 当前 + 下一个 把「当前」挤成两行）。
-            label: (i === 0 && p.get('agyname0')) || ['qq55', 'Asen', 'Huo', 'wing'][i] || ('acc' + i),
+            label: (i === 0 && p.get('agyname0')) || (p.get('anon') === '1' ? AGY_ANON : ['qq55', 'Asen', 'Huo', 'wing'])[i] || ('acc' + i),
             email: 'demo' + i + '@example.com',
             // ★ 档位（2026-10-15）：第一个号 Ultra（当值 ⇒ Hero / 卡 / 菜单栏都看得到徽章），其余 Pro（不画）。
             plan: i === 0 ? 'ultra' : 'pro',
@@ -1004,6 +1166,7 @@ function relayEntry() {
           //   「置顶排最前、停用不进队列、取不到写 —」，写死的话这些一条都验不到，
           //   而截图会正常渲染、探针报干净。
           var _pin = STATE.pinned || [];
+          var _pw = p.get('relay') === 'long' ? 48 : 4.0;
           var _rem = function (sl, k) {
             var w = (sl.quota || {})[k] || {};
             return w.used_percent == null ? null : Math.round(100 - w.used_percent);
@@ -1016,12 +1179,12 @@ function relayEntry() {
             var pi = _pin.indexOf(aid);
             return { aid: aid, label: sl.label, email: sl.email, plan: sl.plan,
                      pin: pi < 0 ? null : pi + 1, off: !!sl.rotate_off, dead: !!sl.auth_dead,
-                     cool_min: 0, wins: ws,
+                     cool_min: Math.max(0, Math.floor(((sl.cooling_until || 0) - Date.now() / 1000) / 60)), wins: ws,
                      tightest: ws.length ? Math.min.apply(null, ws.map(function (w) { return w.rem; })) : null,
                      weekly: _rem(sl, 'secondary'),
                      // 与 `codex-rotate::_eta5h` 同形：全池 3 次用完、一整窗 4.0 分钟（2026-10-15 真机数）
                      eta5h: _rem(sl, 'primary') == null || sl.plan === 'pro' ? null
-                       : { left_min: Math.round(40 * _rem(sl, 'primary') / 100) / 10, per_window_min: 4.0, n: 3, scope: 'pool' } };
+                       : { left_min: Math.round(10 * _pw * _rem(sl, 'primary') / 100) / 10, per_window_min: _pw, n: 3, scope: 'pool' } };
           };
           var _ids = Object.keys(STATE.slots || {});
           // ★★★ `?pool=stranded` 专验「池子见底」那一支 —— 一个号都不可用时，
@@ -1032,7 +1195,7 @@ function relayEntry() {
           var _strand = p.get('pool') === 'stranded';
           var _rec = p.get('pool') === 'recovered';
           var _ok = _strand ? [] : _ids.filter(function (a2) { var s2 = STATE.slots[a2];
-            return !s2.auth_dead && !s2.rotate_off; });
+            return !s2.auth_dead && !s2.rotate_off && !((s2.cooling_until || 0) > Date.now() / 1000); });
           // 与 `proxy.py::_sort_avail` 同一把键：(套餐档, 置顶, 最紧已用%)
           _ok.sort(function (x, y) {
             var ex = _ent(x), ey = _ent(y);
@@ -1053,6 +1216,10 @@ function relayEntry() {
           // ★ `?runway=none` 专验「取不到写 —，不写 0」那一支 —— 没有这个开关，
           //   那条分支一个像素都验不到（本仓反复记的假绿）。
           var _none = p.get('runway') === 'none';
+          // ★ 与真 CLI 同一个耦合：`_burst` 为 None ⇔ 没有一个号带 `eta5h`（`codex-rotate::_burst`）。
+          //   只关 burst、留着 eta5h 的话，续航条照样按每号配速算出数字，而说明行说「算不出来」——
+          //   那是一个真机不会出现的组合，验它等于验夹具。
+          if (_none) _q.concat(_rest).forEach(function (e) { e.eta5h = null; });
           // ★ `?runway=reset` 专验「续航长过最早一次周重置 ⇒ 只说撑得到重置」那一支。
           var _past = p.get('runway') === 'reset';
           return Promise.resolve(JSON.stringify({
@@ -1075,8 +1242,10 @@ function relayEntry() {
             outlasts_reset: !_none && _past,
             samples: _none ? 3 : 226, last_sample_min: _none ? null : 181,
             // 连续使用口径（`codex-rotate::_burst`，2026-10-15 真机数）；`?runway=none` ⇒ 没有用完历史
-            burst: _none ? null : { now_min: 16.5, week_min: 146.3, refill_h: 2.46, n: 6,
-                                    wk_per_5h: 0.156, events: 3, per_window_min: 4.0 } }));
+            burst: _none ? null : { now_min: Math.round(_q.reduce(function (t2, e) { return t2 + (e.eta5h ? e.eta5h.left_min : 0); }, 0) * 10) / 10,
+                                    // 真 `_burst`：比值缺失 ⇒ `week_min` 为 None（同一个耦合，见上面 `_none`）
+                                    week_min: p.get('relay') === 'long' ? null : 146.3, refill_h: 2.46, n: 6,
+                                    wk_per_5h: p.get('relay') === 'long' ? null : 0.156, events: 3, per_window_min: _pw } }));
         }
       }
       // run_rotate 的桩。默认什么都不做(返回 null),只有 `priority --set` 要真的改 STATE ——
@@ -1096,7 +1265,8 @@ function relayEntry() {
           Object.keys(STATE.slots || {}).forEach(function (k) {
             byLabel[(STATE.slots[k] || {}).label] = k;
           });
-          STATE.pick_order = want.map(function (n) { return byLabel[n]; })
+          // ★ 写 `card_order`（与 `codex-rotate priority --set` 一致：新键；`pick_order` 只读兼容旧装机）。
+          STATE.card_order = want.map(function (n) { return byLabel[n]; })
                                  .filter(function (x) { return !!x; });
         }
         return Promise.resolve('');
@@ -1127,15 +1297,15 @@ function relayEntry() {
       case 'read_rotation_snapshot': {
         var rs = p.get('rot') || 'ok';
         if (rs === 'fail' || rs === 'nosnap') return Promise.resolve(null);
-        if (rs === 'snaponly') return Promise.resolve(ROT.ok);
-        return Promise.resolve(ROT[rs] || ROT.ok);
+        if (rs === 'snaponly') return Promise.resolve(anonDeep(ROT.ok, ANON));
+        return Promise.resolve(anonDeep(ROT[rs] || ROT.ok, ANON));
       }
       // ★ Gemini 版「代理轮换」（2026-09-24）。夹具由 **真的 `traffic/agy_rotation.py::collect`**
       //   在生成 harness 时跑一份合成日志算出来（见文件末尾 `agy_rot_fixture`）——
       //   不在这里手写 JSON，否则验的是一份与引擎无关的假数据。`?agyrot=fail` 验失败态。
       case 'read_agy_rotation':
         if (p.get('agyrot') === 'fail') return Promise.reject('读不到 agy 日志');
-        return Promise.resolve(__AGYROT__);
+        return Promise.resolve(anonDeep(__AGYROT__, { qq55: AGY_ANON[0], Asen: AGY_ANON[1], Huo: AGY_ANON[2], wing: AGY_ANON[3] }));
       case 'read_proxy_rotation': {
         var rk = p.get('rot') || 'ok';
         // ★★ `?rot=snaponly` —— **全扫永不返回**,只有快照能把页面画出来。
@@ -1145,7 +1315,7 @@ function relayEntry() {
         //     指望它也证不了)。
         if (rk === 'snaponly') return new Promise(function () {});
         if (rk === 'fail') return Promise.reject('读不到 proxy/proxy.log');
-        return Promise.resolve(ROT[rk] || ROT.ok);
+        return Promise.resolve(anonDeep(ROT[rk] || ROT.ok, ANON));
       }
       case 'set_dock_visible':
       case 'set_main_visible':
@@ -1157,6 +1327,84 @@ function relayEntry() {
       //   而你想验的六个降级态一张都截不到 —— 页面照常渲染、零报错,看着像通过。
       //   同族的前车之鉴:`metadata` 空对象 / `read_auth_tokens` 返 null 那两次假阴性。
       //   `?grok=ok|expired|401|missing|never|stale`,email 一律脱敏。
+      // ★ 菜单栏在跑条 / 悬停面板的实时读数（`read_live`，契约 PLAN §2.1 `--live`）。
+      //   `?run=0`（默认，空闲）· `1` 只有 Codex · `3` Codex×2 + Claude×3 + Gemini（交接包示意同形）。
+      case 'read_live': {
+        if (p.get('hv')) return Promise.resolve(JSON.stringify(HV_LIVE(p.get('hv'), null)));
+        var rn = parseInt(p.get('run') || '0', 10);
+        var mk = function (on, n, tps, tok, base) {
+          var ss = [];
+          for (var j = 0; j < n; j++) ss.push({ id: base + j, title: 'proj-' + base + j, tps: tps == null ? null : tps / n,
+                                                tokens: tok / n, last_t_end: _NOW - 5, active: true });
+          return { running: on, n_sessions: on ? n : 0, tps: on ? tps : null, tokens_today: tok, sessions: on ? ss : [] };
+        };
+        return Promise.resolve(JSON.stringify({ v: 1, generated_at: _NOW, platforms: {
+          codex: mk(rn >= 1, 2, 244, 3.8e6, 'c'), claude: mk(rn >= 3, 3, 190, 5.1e6, 'k'),
+          agy: mk(rn >= 3, 1, 141, 0.6e6, 'g'), grok: mk(false, 0, null, 0, 'x') },
+          today: { tokens: 415e6, avg_tps: 58.4, n: 312 } }));
+      }
+      // ★ Claude 额度（`read_statusline_quota`，契约 PLAN §2.2 `--read`）。
+      //   `?claudeq=ok`（默认，状态栏转写，带重置时刻）· `plan`（Claude.app，无重置时刻）·
+      //   `stale`（2 小时前的读数）· `low`（5h 剩 6%）· `none`（读不到）· `err`（命令失败）·
+      //   `idle`（5h 已过重置点、之后的读数没再报它 ⇒ 100% 未启动）。
+      // ★ 悬停面板的三条命令（`tps_hover.rs` / lib.rs）：记下参数，测试核「高度报了多少、托盘 logo 藏 / 放回」。
+      // ★ 刘海卡片（`harness-notch.html`，交接包 4e）的四条命令：几何 / 谁在跑 / 卡片高度上报 / 版面。
+      //   不打桩 ⇒ 落到 default 返回 null ⇒ 刘海尺寸、光晕全是默认空值，卡片照样渲染、零报错 —— 假绿。
+      case 'notch_geometry':
+        return Promise.resolve({ left: 0, width: 179, height: 32, top: 0, open: p.get('ntopen') !== '0' });
+      case 'notch_activity': {
+        var ntS = p.get('nt') || 'A';
+        return Promise.resolve(ntS === 'B' ? { codex: false, claude: false, agy: false, grok: false }
+                                           : { codex: true, claude: true, agy: true, grok: false });
+      }
+      case 'notch_card_resize':
+        ntCalls.push(cmd + '=' + JSON.stringify(args));
+        return Promise.resolve(null);
+      case 'notch_layout':
+        return Promise.resolve(null);
+      case 'tpshover_resize':
+      case 'tray_pill_hide_logos':
+        hvCalls.push(cmd + '=' + JSON.stringify(args));
+        return Promise.resolve(null);
+      case 'tpshover_layout':
+        hvCalls.push(cmd);
+        return Promise.resolve(p.get('hvnull') === '1' ? null : HV_LAYOUT(p.get('hv')));
+      // ★ 设置页「Claude 实测速度」（`claude_otel_env.py`）。`?cotel=off`（默认）· `recv` 已开且收到过 ·
+      //   `wait` 已开没收到 · `down` 端口被占 · `conflict` 已有别的 OTel 配置 · `err` 命令失败。
+      //   enable / disable 只切 off ↔ recv，**不碰任何真实文件**。
+      case 'claude_otel': {
+        var co = window.__cotel || p.get('cotel') || 'off';
+        if (co === 'err') return Promise.reject('script not found: claude_otel_env.py');
+        var act = args && args.action;
+        if (act === 'enable') co = window.__cotel = 'recv';
+        else if (act === 'disable') co = window.__cotel = 'off';
+        var on = co === 'recv' || co === 'wait' || co === 'down';
+        var ui = co === 'recv' ? 'on_receiving' : co === 'wait' ? 'on_waiting' : co === 'down' ? 'on_down' : co;
+        return Promise.resolve(JSON.stringify({ ok: true, state: on ? 'on' : co, ui: ui, error: null,
+          conflicts: co === 'conflict' ? ['OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_METRICS_EXPORTER', 'OTEL_EXPORTER_OTLP_HEADERS'] : [],
+          settings: '~/.claude/settings.json',
+          receiver: { last_post_at: co === 'recv' ? _NOW - 300 : null, listening: co === 'down' ? false : true,
+                      error: co === 'down' ? '端口 4318 已被别的程序占用（可能是你自己的 OTel 收集器，或另一份接收端）' : null,
+                      port_open: true } }));
+      }
+      case 'read_statusline_quota': {
+        var cq = p.get('claudeq') || 'ok';
+        if (cq === 'err') return Promise.reject('statusline_quota.py: not found');
+        var cap = cq === 'stale' ? _NOW - 7200 : _NOW - 120;
+        var w5 = cq === 'idle' ? { used_pct: 56, resets_at: _NOW - 1800, captured_at: _NOW - 6000, expired: true }
+          : { used_pct: cq === 'low' ? 94 : 37, resets_at: cq === 'plan' ? null : _NOW + 7500, captured_at: cap, expired: false };
+        var w7 = { used_pct: 22, resets_at: cq === 'plan' ? null : _NOW + 4 * 86400 + 3600, captured_at: cap, expired: false };
+        var cl = cq === 'none' ? { source: 'none', captured_at: null, five_hour: null, seven_day: null, error: null }
+          : { source: cq === 'plan' ? 'plan-usage-history' : 'statusline', captured_at: cap, five_hour: w5, seven_day: w7, error: null };
+        return Promise.resolve(JSON.stringify({ claude: cl, agy: { source: 'none', captured_at: null, plan_tier: null, buckets: {}, error: null } }));
+      }
+      case 'read_requests': {
+        var rq = p.get('req') || 'ok';
+        reqCalls++;
+        if (rq === 'errfirst' || (rq === 'error' && reqCalls > 1))
+          return Promise.reject('读 traffic/requests-ledger 失败：Resource temporarily unavailable');
+        return Promise.resolve(JSON.stringify(REQ_FIXTURE(rq)));
+      }
       case 'read_relay_snapshot':
       case 'run_relay_usage': {
         if (relayMode() === 'empty') return Promise.resolve(JSON.stringify({ ok: true, relays: [], route: relayRoute(), fetched_at: Math.floor(Date.now()/1000) }));
@@ -1230,12 +1478,224 @@ function relayEntry() {
 
   // 页面切换靠 app 自己监听的导航事件(App.tsx 的 navigate-traffic / navigate-settings /
   // navigate-platform),不去猜 DOM 结构点击侧栏。
+  // ★★ 悬停面板（`harness-tpshover.html`，交接包 page2）。数据照 HoverSpec.html 画板（账号无、标题脱敏）。
+  //   `?hv=1`  1 家 1 会话（C）· `2` Codex + Gemini 还没出数（D）· `4` 四家、Codex×2 / Claude×3（A）
+  //   `?hvstop=codex` 900 ms 时推一份 tps-live，那家停下（40% → 3 s → 收起；dump 用短 budget 拍 40% 态）
+  //   `?hvexpand=claude` 1000 ms 时把鼠标移进那一行（250 ms 后应展开）· `?hvleave=1` 再 1000 ms 后移出
+  //   `?hvnull=1` 打开事件 payload = null（不飞，直接淡入）· `?hvopen=0` 不发打开事件
+  //   `?hvtheme=light` · `?hvreduce=1`（减弱动态效果）· `?hvclick=link` 1200 ms 点「请求页 →」
+  //   `?hvclose=leave|click` 1600 ms 发关闭 · `?hvbg=desk` 画一块桌面 + 菜单栏底（截图看得见透明窗）
+  //   1800 ms 起把几何核对 / IPC / emit 写进 <body data-hv-*>（dump-dom 读）。
+  function HV_LIVE(mode, stop) {
+    var S = function (id, title, tps, tok) { return { id: id, title: title, tps: tps, tokens: tok, last_t_end: _NOW - 4, active: true }; };
+    var P = function (k, sess, nOverride) {
+      if (!sess || stop === k) return { running: false, n_sessions: 0, tps: null, tokens_today: 0, sessions: [] };
+      var any = false, sum = 0, tok = 0;
+      sess.forEach(function (x) { if (typeof x.tps === 'number') { any = true; sum += x.tps; } tok += x.tokens; });
+      return { running: true, n_sessions: nOverride || sess.length, tps: any ? sum : null, tokens_today: tok, sessions: sess };
+    };
+    var m = String(mode);
+    var codex = m === '4' ? [S('c1', 'codex-account-rotator · 重构轮换', 178, 2.6e6), S('c2', 'market-intel · 选品报告', 66, 1.2e6)]
+                          : [S('c1', 'codex-account-rotator · 重构轮换', 178, 2.6e6)];
+    var claude = m === '4' ? [S('k1', 'CodexBar · 托盘胶囊', 82, 2.3e6), S('k2', '四方评审 · 交接包', 64, 1.9e6), S('k3', 'ERP · 退货对账', 44, 0.9e6)] : null;
+    var agy = m === '4' ? [S('g1', 'skill-hub', 141, 0.6e6)] : (m === '2' ? [S('g1', 'skill-hub', null, 0.1e6)] : null);
+    var grok = m === '4' ? [S('x1', 'oneman-co', 82, 0.4e6)] : null;
+    return { v: 1, generated_at: _NOW, platforms: { codex: P('codex', codex), claude: P('claude', claude), agy: P('agy', agy), grok: P('grok', grok) },
+             today: { tokens: 48.7e6, avg_tps: 58.4, n: 312 } };
+  }
+  // 版面夹具：与 `tps_hover.rs::window_rect` 同形（面板在窗口内 (40, 30)，胶囊右沿 = 面板右沿 − 8）。
+  function HV_LAYOUT(mode) {
+    var keys = String(mode) === '4' ? ['codex', 'claude', 'agy', 'grok'] : (String(mode) === '2' ? ['codex', 'agy'] : ['codex']);
+    var pw = keys.length === 1 ? 70 : (keys.length === 2 ? 96 : 104), px = 40 + 300 - 8 - pw, py = 3;
+    var segs = keys.map(function (k, i) {
+      var x = 6 + i * ((pw - 12) / Math.max(1, keys.length));
+      return { platform: k, x: x, w: 12, logo: { x: px + x, y: py + 3, size: 12 } };
+    });
+    return { window: { w: 380, h: 380 }, menubar_h: 24, panel: { x: 40, y: 30, w: 300, h: 224 },
+             pill: { x: px, y: py, w: pw, h: 18 }, segments: segs };
+  }
+  if (location.pathname.indexOf('harness-tpshover') >= 0) {
+    try { localStorage.setItem('codexbar_theme', p.get('hvtheme') === 'light' ? 'light' : 'dark'); } catch (e) { errors.push('hv theme: ' + e); }
+    if (p.get('hvreduce') === '1') {
+      var _mm = window.matchMedia ? window.matchMedia.bind(window) : null;
+      window.matchMedia = function (q) {
+        if (String(q).indexOf('prefers-reduced-motion') >= 0) return { matches: true, media: q, addEventListener: function () {}, removeEventListener: function () {} };
+        return _mm ? _mm(q) : { matches: false, media: q, addEventListener: function () {}, removeEventListener: function () {} };
+      };
+    }
+    if (p.get('hvbg') === 'desk') {
+      var hb = document.createElement('style');
+      hb.textContent = 'html{background:linear-gradient(' + (p.get('hvtheme') === 'light' ? '#e9edf2,#e9edf2' : '#1c2128,#1c2128')
+        + ') 0 0/100% 24px no-repeat,linear-gradient(160deg,#33496b,#4b3f6b) !important}';
+      document.head.appendChild(hb);
+    }
+    window.addEventListener('load', function () {
+      var hv = p.get('hv') || '4';
+      if (p.get('hvopen') !== '0') setTimeout(function () { fire('tpshover-open', p.get('hvnull') === '1' ? null : HV_LAYOUT(hv)); }, 150);
+      if (p.get('hvstop')) setTimeout(function () { fire('tps-live', JSON.stringify(HV_LIVE(hv, p.get('hvstop')))); }, 900);
+      var rowEl = function (k) { return document.querySelector('[data-hover-row="' + k + '"]'); };
+      if (p.get('hvexpand')) {
+        setTimeout(function () {
+          var el = rowEl(p.get('hvexpand'));
+          clicks.push('hvexpand →命中 ' + (el ? 1 : 0));
+          if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }));
+        }, 1000);
+        if (p.get('hvleave') === '1') setTimeout(function () {
+          var el = rowEl(p.get('hvexpand'));
+          if (el) el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+        }, 2000);
+      }
+      if (p.get('hvclick') === 'link') setTimeout(function () {
+        var a = document.querySelector('[data-hover-link]');
+        clicks.push('hvclick →命中 ' + (a ? 1 : 0));
+        if (a) a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }, 1200);
+      if (p.get('hvclose')) setTimeout(function () { fire('tpshover-close', p.get('hvclose')); }, 1600);
+      setTimeout(function () {
+        var geom = [];
+        document.querySelectorAll('[data-logo-target]').forEach(function (e) {
+          var r = e.getBoundingClientRect(), t = e.getAttribute('data-logo-target').split(',');
+          geom.push({ k: e.getAttribute('data-hover-logo-cell'), tx: +t[0], ty: +t[1], ax: r.left, ay: r.top, w: r.width });
+        });
+        var pnl = document.querySelector('[data-hover-panel]');
+        var b = document.body;
+        b.setAttribute('data-hv-geom', JSON.stringify(geom));
+        if (pnl) b.setAttribute('data-hv-panel', JSON.stringify({ h: pnl.getBoundingClientRect().height, logic: +pnl.getAttribute('data-hover-h'),
+                                                                  w: pnl.getBoundingClientRect().width }));
+        b.setAttribute('data-hv-calls', JSON.stringify(hvCalls));
+        b.setAttribute('data-hv-emit', JSON.stringify(emittedJ));
+        b.setAttribute('data-hv-errors', JSON.stringify(errors.concat(unknown)));
+      }, parseInt(p.get('hvat') || '1800', 10));
+    });
+  }
+
+  // ★★ 刘海卡片（`harness-notch.html`，交接包 page4 · 4e）。场景照 `P4NotchMotion.html`：
+  //   `?nt=A`（默认）Codex×2 / Claude×3 / Gemini 在跑 · `B` 空闲（默认今日、在跑置灰）· `C` Gemini 当前号 5h 剩 8%（告警）
+  //   `?ntopen=0` 不展开（拍果冻下垂）· `?ntcur=<dx>,<distance>` 200 ms 时推一帧 `notch-cursor`
+  //   `?nttab=today` 1000 ms 点「今日」· `?ntexpand=claude` 1000 ms 把鼠标移进那一行（250 ms 后应展开）
+  //   `?ntclose=1&ntreopen=1` 收起后 2200 ms 再展开 · `?ntreduce=1` 减弱动态效果 · `?ntclick=requests|traffic|overview` 1200 ms 点链接 · `?ntclose=1` 1600 ms 收起
+  //   `?ntbg=desk` 画一块桌面 + 32 高菜单栏底（截图看得见透明窗）。刘海与卡片恒黑，浅色主题无关。
+  //   `?ntat=<ms>`（默认 1800）起把卡片实量 / logo 落点 / IPC / emit 写进 <body data-nt-*>（dump-dom 读）。
+  if (location.pathname.indexOf('harness-notch') >= 0) {
+    var ntScene = p.get('nt') || 'A';
+    if (!p.get('run')) p.set('run', ntScene === 'B' ? '0' : '3');
+    if (!p.get('agypool')) p.set('agypool', '2');
+    if (ntScene === 'C' && !p.get('agylive')) { p.set('agylive', 'sub1'); p.set('agylive_at', '60'); }
+    if (p.get('ntreduce') === '1') {
+      var _ntmm = window.matchMedia ? window.matchMedia.bind(window) : null;
+      window.matchMedia = function (q) {
+        if (String(q).indexOf('prefers-reduced-motion') >= 0) return { matches: true, media: q, addEventListener: function () {}, removeEventListener: function () {} };
+        return _ntmm ? _ntmm(q) : { matches: false, media: q, addEventListener: function () {}, removeEventListener: function () {} };
+      };
+    }
+    if (p.get('ntbg') === 'desk') {
+      var nb = document.createElement('style');
+      nb.textContent = 'html{background:linear-gradient(rgba(28,28,30,.86),rgba(28,28,30,.86)) 0 0/100% 32px no-repeat,linear-gradient(170deg,#2c4a6b,#3d3a66) !important}';
+      document.head.appendChild(nb);
+    }
+    window.addEventListener('load', function () {
+      if (p.get('ntcur')) setTimeout(function () {
+        var c = p.get('ntcur').split(',');
+        fire('notch-cursor', { x: 0, y: 0, dx: +c[0], distance: +c[1] });
+      }, 200);
+      if (p.get('nttab') === 'today') setTimeout(function () {
+        var el = document.querySelector('[data-notch-tab="today"]');
+        clicks.push('nttab →命中 ' + (el ? 1 : 0));
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }, 1000);
+      if (p.get('ntexpand')) setTimeout(function () {
+        var el = document.querySelector('[data-notch-row="' + p.get('ntexpand') + '"]');
+        clicks.push('ntexpand →命中 ' + (el ? 1 : 0));
+        if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }));
+      }, 1000);
+      if (p.get('ntclick')) setTimeout(function () {
+        var a = document.querySelector('[data-notch-link="' + p.get('ntclick') + '"]');
+        clicks.push('ntclick →命中 ' + (a ? 1 : 0));
+        if (a) a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }, 1200);
+      if (p.get('ntclose') === '1') setTimeout(function () { fire('notch-open', false); }, 1600);
+      // ★ `?ntreopen=1` 2200 ms 再展开一次 —— 验「每次展开都回到默认 Tab」（要配 `ntclose=1` 与 `ntat` ≥ 2400）
+      if (p.get('ntreopen') === '1') setTimeout(function () { fire('notch-open', true); }, 2200);
+      setTimeout(function () {
+        var b = document.body, stage = document.querySelector('.nh-stage'), card = document.querySelector('[data-notch-card]');
+        var sr = stage ? stage.getBoundingClientRect() : { left: 0, top: 0 };
+        var geom = [];
+        document.querySelectorAll('[data-notch-logo]').forEach(function (e) {
+          var r = e.getBoundingClientRect();
+          geom.push({ k: e.getAttribute('data-notch-logo'), x: r.left - sr.left, y: r.top - sr.top, w: r.width });
+        });
+        var content = document.querySelector('.nh-content');
+        if (card) b.setAttribute('data-nt-card', JSON.stringify({
+          h: card.getBoundingClientRect().height, logic: +document.querySelector('[data-notch-h]').getAttribute('data-notch-h'),
+          content: content ? content.getBoundingClientRect().height : null, w: card.getBoundingClientRect().width,
+          x: card.getBoundingClientRect().left - sr.left, y: card.getBoundingClientRect().top - sr.top }));
+        b.setAttribute('data-nt-geom', JSON.stringify(geom));
+        b.setAttribute('data-nt-fly', String(document.querySelectorAll('[data-notch-fly]').length));
+        b.setAttribute('data-nt-calls', JSON.stringify(ntCalls));
+        b.setAttribute('data-nt-emit', JSON.stringify(emittedJ));
+        b.setAttribute('data-nt-clicks', JSON.stringify(clicks));
+        b.setAttribute('data-nt-errors', JSON.stringify(errors.concat(unknown)));
+      }, parseInt(p.get('ntat') || '1800', 10));
+    });
+  }
+
+  // ★ `?notrans=1` 关掉所有 CSS 过渡。headless 的 `--virtual-time-budget` **不推进 CSS 过渡**：
+  //   切浅色后截图拍到的是 .35s 颜色过渡的半路（深字还没变过来，表格像被擦掉），
+  //   侧栏选中底色同理 —— 截图在说一件 DOM 里没有的事。
+  if (p.get('notrans') === '1') {
+    var nt = document.createElement('style');
+    nt.textContent = '*,*::before,*::after{transition:none !important}';
+    document.head.appendChild(nt);
+  }
   window.addEventListener('load', function () {
     setTimeout(function () {
       var nav = p.get('nav') || 'traffic';
       if (nav.indexOf('platform:') === 0) fire('navigate-platform', nav.slice(9));
       else if (nav === 'settings') fire('navigate-settings');
       else if (nav === 'home') { /* 账号池是默认页,不发导航事件 */ }
+      // ★ `?nav=ovjump&ovto=<platform>`：菜单栏账号行点击的那条（`open-main-page` → Rust → `main-open-page`），
+      //   带平台参数 ⇒ 停在那一档。先切到日志页，证明「跳过来」真的发生了。`?navtwice=1` 同上。
+      else if (nav === 'ovjump') {
+        var lg = document.querySelector('[data-page="logs"]');
+        if (lg) lg.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        setTimeout(function () {
+          var pl = { page: 'overview', platform: p.get('ovto') || null };
+          if (p.get('navtwice') === '1') fire('open-main-page', pl);
+          fire('main-open-page', pl);
+        }, 150);
+      }
+      // ★ `?nav=requests` 走 `open-main-page` 事件（托盘悬停面板 / 刘海卡片的「请求页 →」用的同一条），
+      //   顺带验 App.tsx 的订阅。`?rplat=claude` = 带平台过来；`?rday=yest`、`?rf=<平台>`、`?rsel=<行号>`、
+      //   `?rscroll=<px>` 按 `data-req-*` 身份点 / 滚（不按位置、不按文字）。要等异步 IPC 的行出来，所以轮询。
+      else if (nav === 'requests') {
+        // ★ 主窗口只听 Rust 转发的 `main-open-page`（App.tsx）。`?navtwice=1` 模拟真机：发送方全局 `emit` 时
+        //   主窗口**也**收到一份原名 `open-main-page` —— 两个都听就会跳两回（`data-nav-count` = 2）。
+        if (p.get('navtwice') === '1') fire('open-main-page', { page: 'requests', platform: p.get('rplat') || null });
+        fire('main-open-page', { page: 'requests', platform: p.get('rplat') || null });
+        (function pollReq(tries) {
+          var ready = document.querySelector('[data-req-row], [data-req-empty]');
+          if (!ready && tries > 0) { setTimeout(function () { pollReq(tries - 1); }, 100); return; }
+          if (!ready) { errors.push('请求页没有渲染出行或空态'); return; }
+          var hit = function (sel, name) {
+            var el = document.querySelector(sel);
+            clicks.push(name + ' →命中 ' + (el ? 1 : 0));
+            if (!el) errors.push('请求页点不到 ' + sel);
+            return el;
+          };
+          if (p.get('rday')) { var d = hit('[data-req-day="' + p.get('rday') + '"]', 'rday'); if (d) d.click(); }
+          if (p.get('rf')) { var f = hit('[data-req-filter="' + p.get('rf') + '"]', 'rf'); if (f) f.click(); }
+          setTimeout(function () {
+            if (p.get('rsel')) {
+              var r = hit('[data-req-row="' + p.get('rsel') + '"]', 'rsel');
+              if (r) r.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }
+            if (p.get('rscroll')) {
+              var sc = hit('[data-req-scroll]', 'rscroll');
+              if (sc) sc.scrollTop = parseInt(p.get('rscroll'), 10);
+            }
+          }, 80);
+        })(30);
+      }
       // ★★ `?nav=logs` —— 日志页**没有** `navigate-logs` 事件(App.tsx 只监听 traffic/
       //   settings/platform 三个,因为只有它们是 Rust/托盘会发的)。所以只能点侧栏。
       //   ⚠️ **不能用 `?click=日志`**:窗口 <860 时侧栏自动折叠、只剩图标,文字压根不渲染
@@ -1983,7 +2443,7 @@ stub = (STUB.replace("__SNAPSHOT__", json.dumps(snapshot))
             .replace("__AGYROT__", json.dumps(agy_rot_fixture())))
 ANCHOR = "<script type=\"module\""
 for src, dst in (("index.html", "harness.html"), ("menubar.html", "harness-menubar.html"),
-                 ("notch.html", "harness-notch.html")):
+                 ("notch.html", "harness-notch.html"), ("tps-hover.html", "harness-tpshover.html")):
     html = (APP / src).read_text()
     assert html.count(ANCHOR) >= 1, f"{src} 注入锚点未命中"
     (APP / dst).write_text(html.replace(ANCHOR, stub + "\n    " + ANCHOR, 1))

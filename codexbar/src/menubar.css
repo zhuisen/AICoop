@@ -149,14 +149,6 @@
   white-space: normal; line-height: 1.35;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-/* 关闭按钮：命中区比字形大一圈（10.5px 的 `×` 本身太小，点不中和没点长得一样）。 */
-.mb-banner-x {
-  flex: none; cursor: pointer; user-select: none;
-  color: #b08d55; font-size: 14px; line-height: 1;
-  padding: 2px 6px; margin: -2px -4px -2px 0; border-radius: 6px;
-  transition: color .15s, background .15s;
-}
-.mb-banner-x:hover { color: #f2b45c; background: rgba(224,144,28,.16); }
 .mb-banner-icon { display: grid; place-items: center; flex: none; }
 .mb-banner-body { flex: 1; min-width: 0; }
 .mb-banner-title { font-size: 11.5px; font-weight: 700; }
@@ -182,10 +174,10 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 12px 12px;
+  /* 交接包 4f：账号区 `padding: 2px 12px 16px`、块间距 8（间距由里层 `.mb-slide` 给）。 */
+  padding: 2px 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
 }
 .mb-list::-webkit-scrollbar { width: 5px; }
 .mb-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 5px; }
@@ -431,3 +423,59 @@
 /* 图表整块可点 → 主窗流量总览(弹窗不给 tooltip,想看细节就点图) */
 .mb-today-chart-click { cursor: pointer; border-radius: 10px; transition: background .15s; }
 .mb-today-chart-click:hover { background: rgba(255, 255, 255, .03); }
+
+/* ── 2026-10-19 交接包 page4 · 4f（菜单栏弹窗 · 账号行版）─────────────────────────────
+   数值逐个照抄 `page4-popover-notch/code/P4PopRows.html` 的内联样式与 <style> 块；
+   颜色走 `components/mb/vars.ts` 注入的 CSS 变量。曲线 `--sp` = 临界阻尼弹簧的 linear() 近似。 */
+
+.mb-root .ld, .mb-root .ll { display: block; }
+
+/* 账号行：最右一列平时 0，悬停 0→46（300 ms 临界阻尼），两根条同步缩短。
+   ★ 号名列宽 `--nameW` 由组件按这一块里最长的名字算（mbLogic.nameColWidth），整块共用才对得齐。 */
+.qrow {
+  display: grid;
+  grid-template-columns: 16px var(--nameW, 46px) minmax(0, 1fr) minmax(0, 1fr) 0px;
+  column-gap: 9px;
+  align-items: center;
+  transition: grid-template-columns 300ms var(--sp), background 140ms;
+}
+.qrow:not(.qro):hover { grid-template-columns: 16px var(--nameW, 46px) minmax(0, 1fr) minmax(0, 1fr) 46px;
+  background: var(--hov2) !important; }
+.qrow.qro:hover { background: var(--hov) !important; }
+.qrow.qlow:hover { background: var(--badBg) !important; filter: brightness(1.08); }
+.qrow .sw2 { opacity: 0; transform: translateX(8px); transition: opacity 160ms, transform 300ms var(--sp); }
+.qrow:hover .sw2 { opacity: 1; transform: none; }
+.qrow .qbar { transition: width .55s var(--sp); }
+
+/* 在跑条 / 通知条的折叠：grid-template-rows 0fr↔1fr。★ 折叠内容一律留在 DOM 里，
+   只靠 CSS 控制可见性（ui.md §5c：条件渲染会让 --dump-dom 的闸静默失效）。 */
+.mb-fold { display: grid; transition: grid-template-rows 380ms var(--sp); }
+.mb-fold > div { overflow: hidden; min-height: 0; }
+
+/* Tab 内容进场：账号从左、今日从右（交接包「账号在左、今日在右」，380 ms 弹簧 + 200 ms 淡入）。
+   平台芯片切换同理，方向按芯片顺序。 */
+@keyframes mbSlideIn { from { opacity: 0; transform: translateX(var(--dx, 0px)); } to { opacity: 1; transform: none; } }
+.mb-slide { animation: mbSlideIn 380ms var(--sp) both; }
+@media (prefers-reduced-motion: reduce) {
+  .mb-slide { animation: cbFade 150ms ease-out both; }
+  .qrow, .qrow .sw2, .mb-fold, .mb-tab-pill { transition-duration: 150ms !important; }
+}
+
+/* 今日 Tab：图从左往右揭开 900 ms，各家行逐行上浮（错开 40 ms）。 */
+@keyframes mbReveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.mb-reveal { animation: mbReveal 900ms cubic-bezier(.2,.7,.2,1) 120ms both; }
+@keyframes mbRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.mb-rise { animation: mbRise 380ms var(--sp) both; }
+
+.mb-hbtn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  border-radius: 7px; cursor: pointer; transition: background .15s, color .15s; }
+.mb-hbtn:hover { background: var(--hov); color: var(--tx); }
+.mb-chip2 { transition: background 200ms, border-color 200ms; }
+.mb-chip2:hover { filter: brightness(1.15); }
+.mb-foot-btn { cursor: pointer; user-select: none; white-space: nowrap; transition: filter .15s, background .15s; }
+.mb-foot-btn:hover { filter: brightness(1.1); }
+.mb-menu-item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 7px;
+  font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+.mb-menu-item:hover { background: var(--hov2); }
+.mb-trow { transition: background .15s; border-radius: 6px; }
+.mb-trow:hover { background: var(--hov); }

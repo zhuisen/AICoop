@@ -13,7 +13,7 @@
  *   而取色要去用量注册表里找，那家在 `scan.py` 里的键是 `agy`。
  *   一律走 `colorOf(traffic, colorKey)`，别在组件里写死色值。
  */
-export type PoolKey = "codex" | "gemini" | "grok";
+export type PoolKey = "codex" | "claude" | "gemini" | "grok";
 
 export interface PoolPlatform {
   key: PoolKey;
@@ -40,6 +40,11 @@ export const POOL_PLATFORMS: readonly PoolPlatform[] = [
   { key: "codex", label: "Codex", colorKey: "codex", codexActions: true,
     note: "账号池 · 经本地代理逐请求换号 · 5h/周双窗口",
     addHint: "加号：终端里跑 `codex-rotate login`" },
+  // ★ 2026-10-19 交接包 page5：总览平台档 Codex → Claude → Gemini → Grok（同光晕顺序）。
+  //   Claude 本机只有 1 个号、没有账号池后端 ⇒ 这一档只看额度，不切号、不探针（PLAN §4）。
+  { key: "claude", label: "Claude", colorKey: "claude", codexActions: false,
+    note: "Claude Code · 本机 1 个号 · 只看额度",
+    addHint: "Claude 只有本机一个号 —— 登录由 Claude Code 自己管" },
   { key: "gemini", label: "Gemini", colorKey: "agy", codexActions: false,
     // ★ 「启动前换凭证」是**设计事实**不是缺陷：agy 只在进程启动时读凭证，
     //   所以换号只对下一次启动生效，已经开着的会话不受影响。
@@ -73,6 +78,7 @@ export function loadPoolKey(): PoolKey {
     const v = localStorage.getItem(STORE_KEY);
     if (v === "google" || v === "gemini") return "gemini";
     if (v === "xai" || v === "grok") return "grok";
+    if (v === "claude") return "claude";
   } catch { /* 隐私模式下读不了，落到默认 */ }
   return "codex";
 }

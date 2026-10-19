@@ -95,19 +95,30 @@ const tabFor = n => [...document.querySelectorAll('*')].filter(e =>
 
 const cards = () => [...document.querySelectorAll('[data-cards-grid] > div[data-aid]')];
 const heights = () => cards().map(c => Math.round(c.getBoundingClientRect().height));
-const click = i => cards()[i].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+// ★ 2026-10-19（交接包 page5）：「选中」= 悬停 / 键盘聚焦，底栏原位换成操作。headless 里 JS 事件激活不了
+//   `:hover`，`--dump-dom` 下窗口没焦点、`focus()` 也激活不了 `:focus-within` ⇒ 直接挂上 harness 用的
+//   `ov-hov` 类（与 `:hover` 同一条 CSS 规则）。这只验排版与显隐，不验 `:hover` 触发本身。
+const click = i => cards().forEach((c, j) => c.classList.toggle('ov-hov', j === i));
+const shown = () => [...document.querySelectorAll('[data-ov-actions]')].filter(e => +getComputedStyle(e).opacity > 0.5);
 
 (async () => {
   try {
+    // ★ `--virtual-time-budget` 下 CSS 过渡不一定推进（实测：挂上 ov-hov 600ms 后 opacity 仍是 0，
+    //   同一件事在 playwright 实时里是 1）。先记下过渡属性（「有动画」那条闸要它），再关掉过渡只量终态。
+    const fact0 = document.querySelector('[data-ov-actions]');
+    out.barTransition = fact0 ? getComputedStyle(fact0).transitionProperty : null;
+    const st = document.createElement('style');
+    st.textContent = '.ov-card .ov-fact, .ov-card .ov-fdef { transition: none !important; }';
+    document.head.appendChild(st);
     measure('codex'); corner('codex');
     out.heights = { '收起': heights() };
     click(0);
     await wait(600); measure('codex-selected');
     out.heights['选中第 1 张'] = heights();
-    out.actions = document.querySelectorAll('[data-actions]').length;
+    out.actions = shown().length;
     // ★ 「换行」的判据是**按钮的 y 坐标出现了两种**，不是 `flexWrap` 写了什么 ——
     //   写 nowrap 却让内容溢出，同样是坏的，而只看属性看不出来。
-    const bar = document.querySelector('[data-actions]');
+    const bar = shown()[0];
     if (bar) { const br = bar.getBoundingClientRect(), cs = getComputedStyle(bar);
       // ★ 只数**参与排版**的子元素。2026-09-23 加了倒计时细线（绝对定位钉在底边），
       //   它的 top 天然与按钮不同 —— 不排除的话「行数」恒为 2，一条假红（实测当场踩到）。
@@ -115,24 +126,23 @@ const click = i => cards()[i].dispatchEvent(new MouseEvent('click', { bubbles: t
       const kids = [...bar.children].filter(e => getComputedStyle(e).position !== 'absolute')
                                     .map(e => e.getBoundingClientRect());
       out.barKids = kids.length;
-      out.barBorder = cs.borderTopColor;
-      // ★ computed 值是**像素**不是关键字（`169.664px 46px`），所以判据是
-      //   「y 分量 ≈ 元素高度」。直接比字面量 'bottom' 会恒红（实测踩到）。
-      out.barOrigin = cs.transformOrigin;
-      out.barOriginAtBottom =
-        Math.abs(parseFloat(cs.transformOrigin.split(' ')[1]) - br.height) < 2;
-      out.accent = getComputedStyle(document.querySelector('[data-actions] span')).backgroundColor;
+      const card = bar.closest('[data-ov-card]');
+      out.barBorder = getComputedStyle(card).borderTopColor;
+      out.barCardState = card.dataset.ovCard;
+      const pri = document.querySelector('.ov-abp');
+      out.accent = pri ? getComputedStyle(pri).backgroundColor : null;
       out.bar = { 行数: new Set(kids.map(r => Math.round(r.top))).size,
                   溢出: Math.round(Math.max(0, Math.max(...kids.map(r => r.right))
                                               - (br.right - parseFloat(cs.paddingRight)))) }; }
-    const ov = document.querySelector('[data-actions]');
-    if (ov) { const r = ov.getBoundingClientRect(), c = cards()[0].getBoundingClientRect();
-      out.overlay = { '超出卡片底边': Math.round(r.bottom - c.bottom),
-                      '动画': getComputedStyle(ov).animationName }; }
+    const ov = shown()[0];
+    if (ov) { const r = ov.getBoundingClientRect(), c = ov.closest('[data-ov-card]').getBoundingClientRect();
+      out.overlay = { '超出卡片底边': Math.round(r.bottom - c.bottom) }; }
     // ★ 改选另一张：验的是"换一张展开"也不改高度，不是只验"第一次展开"
     click(3); await wait(600);
     out.heights['改选第 4 张'] = heights();
-    click(3); await wait(400);          // 收起，让后面的档位测量回到干净状态
+    out.actionsAfter = shown().length;
+    out.actionsOn = shown().map(e => cards().indexOf(e.closest('[data-aid]')));
+    click(-1); await wait(400);   // 收起
     for (const name of ['Gemini', 'grok']) {
       const tab = tabFor(name);
       if (!tab) { out.lanes[name] = 'tab-not-found'; continue; }
@@ -255,9 +265,10 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
                                  f"★★★ {k} 把高度改了：{base} → {self.r['heights'][k]}")
 
     def test_only_the_selected_card_has_an_action_bar(self):
-        """★ 浮层不再需要"隐形占位"，所以同一时刻**只该有一条**动作条在 DOM 里。"""
-        self.assertEqual(self.r["actions"], 1,
-                         f"★ 动作条数量不是 1：{self.r['actions']} —— 隐形占位又回来了？")
+        """★ 同一时刻**只有一张卡**露出操作（2026-10-19 起每张卡的操作都在 DOM 里，靠 CSS 显隐 ——
+        所以数的是「看得见的」，不是「存在的」）。改选之后也只有新选的那张。"""
+        self.assertEqual(self.r["actions"], 1, f"★ 露出操作的卡不是 1 张：{self.r['actions']}")
+        self.assertEqual(self.r["actionsOn"], [3], f"★ 改选第 4 张后露出操作的是 {self.r['actionsOn']}")
 
     def test_the_overlay_sits_inside_the_card(self):
         """★ 它是**覆盖在卡片底部**，不是吊在卡外（那是 demo 里的 B 案，用户没选）。"""
@@ -295,21 +306,21 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         ★ 保险仍然要留：字号档位、更长的按钮文案、以后多加一个控件，
           任何一条都会让那 4px 余量消失，而那时 `nowrap` 就是最后一道。
         """
-        # ★ 2026-09-23 起动作条外壳收进 `CardActionBar`（两张卡共用一份），保险跟着搬过去；
-        #   两张卡则必须**真的用它** —— 各写一套正是那次「只改了一边」的由来。
+        # ★ 2026-10-19 起操作栏外壳是 `ov/OvCard` 的底栏 `.ov-fact`（所有卡共用一份）；总览根上
+        #   `.ov-root * { white-space: nowrap }` 管文字，flex 容器本身不许 wrap。
         strip = lambda raw: re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
-        bar = strip((SRC / "components" / "CardActionBar.tsx").read_text(encoding="utf-8"))
-        i = bar.index("data-actions")
-        self.assertIn('flexWrap: "nowrap"', bar[i:], "★ 动作条允许换行了 —— 保险没了")
-        for name in ("AccountCard.tsx", "AgyCard.tsx"):
+        ov = strip((SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8"))
+        i = ov.index('<div className="ov-fact" data-ov-actions=""')
+        self.assertNotIn("flexWrap", ov[i:i + 300], "★ 操作栏允许换行了 —— 保险没了")
+        css = (SRC / "components" / "ov" / "overview.css").read_text(encoding="utf-8")
+        self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", css, "★ 总览的 nowrap 保险没了")
+        self.assertNotRegex(css, r"flex-wrap:\s*wrap", "★ 总览样式里出现了 flex-wrap: wrap")
+        for name in ("AccountCard.tsx", "AgyCard.tsx", "GrokCard.tsx"):
             code = strip((SRC / "components" / name).read_text(encoding="utf-8"))
             with self.subTest(card=name):
-                self.assertIn("<CardActionBar open=", code, f"★ {name} 没用共用的动作条外壳")
-                self.assertNotIn("data-actions", code,
-                                 f"★★ {name} 又自己写了一份动作条外壳 —— 两套迟早只改一边")
-        icons = (SRC / "components" / "CardIcons.tsx").read_text(encoding="utf-8")
-        self.assertIn("flexShrink: 1", icons,
-                      "★ 图标钮压不动 —— nowrap 下只能横向溢出")
+                self.assertIn("<OvCard ", code, f"★ {name} 没用共用的卡片外壳")
+                self.assertNotIn("data-ov-actions", code,
+                                 f"★★ {name} 又自己写了一份操作栏外壳 —— 两套迟早只改一边")
 
     def test_the_card_can_never_get_too_narrow_for_its_own_action_bar(self):
         """★★★ 这才是**根因的闸**：按钮再怎么压，卡片窄过某个宽度就是装不下。
@@ -318,13 +329,18 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         也要 ~234px 内宽 ⇒ 怎么排都要折行。只调按钮是治标。
         现在网格按 `CARD_MIN_W` auto-fill：宽屏仍 3 列，窄屏退到 2 列、卡片反而更宽。
         """
-        app = (SRC / "App.tsx").read_text(encoding="utf-8")
-        m = re.search(r"const CARD_MIN_W = (\d+);", app)
-        self.assertIsNotNone(m, "★★ 找不到 CARD_MIN_W —— 列数又被写死了？")
-        self.assertGreaterEqual(int(m.group(1)), 300,
-                                "★★★ 卡片最小宽低于 300 —— 动作条会重新折行")
-        self.assertIn("repeat(auto-fill, minmax(${CARD_MIN_W}px, 1fr))", app,
-                      "★★★ 网格不是按最小宽自适应 —— 窄窗会把卡压到装不下动作条")
+        # ★ 2026-10-19 起列数由 `overview.ts::ovLayout(内容区宽)` 给（交接包：4 / 3 / 2 列），不再 auto-fill。
+        #   根因闸换成**算**：任何内容区宽度下，卡片宽都要装得下最宽那条操作栏
+        #   （切换 + 探针 + 刷新 + ⋯ ≈ 214px，加左右内边距 28 ⇒ 下限 242，留余量取 250）。
+        if shutil.which("node") is None:
+            self.skipTest("没有 node")
+        pure = (SRC / "overview.ts").as_posix()
+        js = ("import('file://%s').then(m => { let worst = 1e9, at = 0; for (let w = 560; w <= 2600; w++) {"
+              " const c = m.ovLayout(w).cols; const cw = (w - 12 * (c - 1)) / c; if (cw < worst) { worst = cw; at = w; } }"
+              " console.log(JSON.stringify([worst, at])); });" % pure)
+        r = subprocess.run(["node", "--experimental-strip-types", "-e", js], capture_output=True, text=True, timeout=60)
+        worst, at = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertGreaterEqual(worst, 250, f"★★★ 内容区 {at}px 时卡片只有 {worst:.0f}px —— 装不下操作栏")
 
     def test_the_overlay_border_is_a_hairline_not_the_accent(self):
         """★★ 用户 2026-09-21：「取消绿色的边框」。
@@ -336,21 +352,19 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         ★ 判据取**渲染后的 computed border-color**，不是源码里写了哪个变量 ——
           主题换一套、`cardBorder` 被改成青色，源码断言照样绿。
         """
-        self.assertIsNotNone(self.r.get("barBorder"), f"没量到浮层边框：{self.r}")
+        # 2026-10-19：没有浮层了 —— 守的是同一件事的新形态：悬停 / 聚焦那张卡的描边是发丝线，不是 accent 青。
+        self.assertIsNotNone(self.r.get("barBorder"), f"没量到卡片边框：{self.r}")
+        self.assertIsNotNone(self.r.get("accent"), "★ 已知阳性：没找到主按钮来取 accent 色")
         self.assertNotEqual(self.r["barBorder"], self.r["accent"],
-                            f"★★ 浮层边框仍是 accent 青：{self.r['barBorder']}")
+                            f"★★ 悬停卡的描边是 accent 青：{self.r['barBorder']}")
 
-    def test_the_entrance_animation_grows_from_the_bottom_edge(self):
-        """★ 浮层贴着卡片**底边**，缩放却从中心长开的话，顶边和底边会同时往外推，
-        看着像"膨胀"而不是"从底边升起" —— 与它实际锚定的位置不一致。"""
-        self.assertTrue(self.r.get("barOriginAtBottom"),
-                        f"★ 缩放原点不在底边：{self.r.get('barOrigin')}")
-
-    def test_the_entrance_animation_is_the_repos_own(self):
+    def test_the_swap_is_animated_not_instant(self):
         """★ 用户 2026-09-21：「弹出动态效果要好看自然贴切 codexbar 风格」。
-        判据是**真的挂上了那条动画**，不是源码里写了类名。"""
-        self.assertEqual(self.r["overlay"]["动画"], "cbRise",
-                         "★ 入场动画没生效 —— 浮层会硬生生地出现")
+        2026-10-19 起是交接包的「底栏原位换成操作」：操作栏淡入并上移 6px（`.ov-fact` 的 transition），
+        旧的 `cbRise` 缩放入场随浮层一起删除。判据是**渲染后真的挂着过渡**，不是源码里写了类名。"""
+        tp = self.r.get("barTransition") or ""
+        self.assertIn("opacity", tp, f"★ 操作栏没有淡入：{tp!r}")
+        self.assertIn("transform", tp, f"★ 操作栏没有上移：{tp!r}")
 
 
 class TheRowMathAndTheGridShareOneNumber(unittest.TestCase):
@@ -360,18 +374,25 @@ class TheRowMathAndTheGridShareOneNumber(unittest.TestCase):
     错误的一排上 —— 而界面看起来完全正常，只是留白位置不对。
     """
 
+    # 2026-10-19：卡片网格在 `ov/Overview.tsx`（主网格）与 `ov/OvStrip.tsx`（停用 / 失效条展开后的网格），
+    #   列数都来自同一个 `ovLayout(...).cols`（Overview 把 `layout.cols` 传给 OvStrip）。
     def setUp(self):
-        raw = APP.read_text(encoding="utf-8")
-        self.code = re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
+        strip = lambda raw: re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
+        self.code = strip((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8"))
+        self.strip = strip((SRC / "components" / "ov" / "OvStrip.tsx").read_text(encoding="utf-8"))
+        self.app = strip(APP.read_text(encoding="utf-8"))
 
     def test_no_grid_hardcodes_its_column_count(self):
-        self.assertNotIn('gridTemplateColumns: "repeat(3', self.code,
-                         "★★ 又把列数写死了 —— 它必须来自 CARD_COLS")
+        for src in (self.code, self.strip, self.app):
+            self.assertNotRegex(src, r'gridTemplateColumns: "repeat\(\d', "★★ 又把列数写死了 —— 它必须来自 ovLayout")
 
     def test_every_card_grid_uses_the_shared_constant(self):
-        n = self.code.count("data-cards-grid")
-        self.assertEqual(self.code.count("gridTemplateColumns: CARD_GRID_COLS"), n,
-                         f"★★ {n} 张卡片网格里有的没走 CARD_GRID_COLS")
+        self.assertIn('data-cards-grid="" data-ov-cols={layout.cols}', self.code)
+        self.assertIn("gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`", self.code)
+        self.assertIn("gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`", self.strip)
+        self.assertEqual(len(re.findall(r"(?<![-\w])cols=\{layout\.cols\}", self.code)), self.code.count("<OvStrip "),
+                         "★★ 有一条折叠条的列数没跟主网格走")
+        self.assertNotIn("data-cards-grid", self.app, "★ App.tsx 里又出现了一张卡片网格")
 
     def test_the_reservation_logic_is_gone_for_good(self):
         """★★ 卡片不再长高 ⇒ 那套预留逻辑**存在的理由本身消失了**，连代码一起删。

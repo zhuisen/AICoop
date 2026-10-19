@@ -181,7 +181,8 @@ class UiIsWiredToTheCli(unittest.TestCase):
     两个真源迟早分叉成「界面说停用了、代理还在用」(同 dawn-probe 那个开关)。"""
 
     def test_toggle_invokes_the_cli(self):
-        app = (ROOT / "codexbar" / "src" / "App.tsx").read_text(encoding="utf-8")
+        # 2026-10-19：卡片网格从 App 搬进 `ov/Overview.tsx`（交接包 page5）。第一处是 codex 卡。
+        app = (ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
         i = app.index("onToggleRotate=")
         body = app[i:i + 400]
         self.assertIn('"rotate"', body, "开关没有调 `codex-rotate rotate`")

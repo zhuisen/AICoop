@@ -37,7 +37,7 @@ APP_DIR = ROOT / "codexbar" / "uishot" / "app"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 #: 六个页面全扫。★ 只扫一页会漏掉别页新加的浮层 —— 这条闸的价值正在于"下一个"。
-PAGES = ["platform:codex", "home", "logs", "relay", "traffic", "settings"]
+PAGES = ["platform:codex", "home", "logs", "relay", "traffic", "settings", "requests"]
 
 _PROBE = r"""
 const out = { triggers: [], inside: [] };

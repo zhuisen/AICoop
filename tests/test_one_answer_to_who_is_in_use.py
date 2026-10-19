@@ -56,16 +56,20 @@ def _call_site(src: str, needle: str, span: int = 1400) -> str:
 
 class TheCodexTabHasExactlyOneAnswer(unittest.TestCase):
     APP = property(lambda self: _strip((SRC / "App.tsx").read_text(encoding="utf-8")))
+    # ★ 2026-10-19 总览重做：卡片的状态（在用 / 下一个 / …）由 `components/ov/Overview.tsx` 算好交给卡片。
+    OV = property(lambda self: _strip((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")))
     MB = property(lambda self: _strip((SRC / "MenuBar.tsx").read_text(encoding="utf-8")))
 
     def test_the_card_highlight_comes_from_the_real_picker(self):
         """★★★ 卡片的高亮角标必须由 `board.next` 驱动，不是 `recommended()`。"""
-        call = _call_site(self.APP, "<AccountCard")
+        st = self.OV[self.OV.index("const cState = (a: Account): OvState => ovState({"):][:400]
+        self.assertIn("next: p.board?.next?.aid === a.aid", st,
+                      "★★★ 卡片「下一个」不是来自真挑号器 —— 它会报一个代理不会挑的号")
+        call = _call_site(self.OV, "<AccountCard")
         self.assertTrue(call, "★★ 找不到 codex 档的卡片调用 —— 断言打空了")
-        self.assertIn("isBest={board?.next?.aid === a.aid}", call,
-                      "★★★ 卡片高亮不是来自真挑号器 —— 它会报一个代理不会挑的号")
-        self.assertNotIn("hero?.aid", call,
-                         "★★★ 又用回了 `recommended()`（剩余最多，不看置顶不看停用）")
+        self.assertIn("state={cState(a)}", call, "★★ 卡片没吃这份状态")
+        for gone in ("hero?.aid", "recommended("):
+            self.assertNotIn(gone, self.OV, "★★★ 又用回了 `recommended()`（剩余最多，不看置顶不看停用）")
 
     def test_the_menubar_says_the_same_thing(self):
         """★★ §5c 页面统一性：同一件事在两个界面必须来自同一处。
@@ -92,10 +96,14 @@ class TheCodexTabHasExactlyOneAnswer(unittest.TestCase):
           「把当前号切到 X」这类 tooltip 仍含「当前」二字，全文搜必假红，
           而一条会假红的闸，用户学会的是忽略它（本仓形态④/⑫）。
         """
-        call = _call_site(self.APP, "<AccountCard")
-        self.assertIn('curLabel="直连"', call,
-                      "★★ codex 卡片的右上角标没改成「直连」—— 与顶部「正在使用」撞名")
-        self.assertIn("curTitle=", call, "★ 改了名就必须给一句解释它到底是什么")
+        # 2026-10-19（交接包 page5）：「直连」挪到页脚（`到期 … · 直连`），右上角留给「下一个 / 最优 / -15%」；
+        #   「在用」= 顶部「正在使用」同一个号（代理在用），二者不再同名。
+        call = _call_site(self.OV, "<AccountCard")
+        self.assertIn("isDirect={a.aid === p.currentNode}", call, "★★ 直连号不是 state.active 那个")
+        card = _strip((SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8"))
+        self.assertIn('{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}', card,
+                      "★★ codex 卡片没写「直连」，或没给一句解释它到底是什么")
+        self.assertNotRegex(card, r'text: "当前"', "★★ codex 卡片又出现了「当前」标签 —— 与顶部「正在使用」撞名")
 
     def test_the_action_bar_uses_the_same_word_as_the_corner(self):
         """★★ 动作条里的「✓ 直连」与右上角「直连」是同一件事，必须同一个词。
@@ -105,15 +113,15 @@ class TheCodexTabHasExactlyOneAnswer(unittest.TestCase):
         """
         src = (SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8")
         code = re.sub(r"\{/\*[\s\S]*?\*/\}|/\*[\s\S]*?\*/", "", src)
-        self.assertIn(">✓ 直连</span>", code, "★★ codex 卡动作条没用「✓ 直连」")
-        self.assertNotIn(">✓ 当前</span>", code, "★★ codex 卡动作条还在写「✓ 当前」，与右上角「直连」两个名字")
+        # 2026-10-19：动作条没了，「✓ 直连」进了 ⋯ 菜单那一行说明 —— 仍与页脚同一个词。
+        self.assertIn('label: "✓ 直连号（auth.json 里是它）"', code, "★★ codex 卡 ⋯ 里没用「✓ 直连」")
+        self.assertNotIn("✓ 当前", code, "★★ codex 卡还在写「✓ 当前」，与「直连」两个名字")
 
     def test_the_agy_tab_now_follows_the_same_rule(self):
         """★ 2026-09-24 用户拍板：Gemini 也按 codex 的规范 —— 角标同样来自**真挑号器**
         （`agy/pool.py::pick` → `read_agy_board`），不再是前端排的「推荐切到谁」。
         （此前这里守的是「agy 档保留 USE」，那条前提已被用户撤掉。）"""
-        agy = _call_site(self.APP, "isBest={agyBoard?.next?.aid === a.sub}")
-        self.assertTrue(agy, "★★ agy 档的「下一个」没有来自真挑号器")
+        self.assertIn("next: p.agyBoard?.next?.aid === a.sub", self.OV, "★★ agy 档的「下一个」没有来自真挑号器")
 
 
 class TheBorrowFallbackIsSwitchable(unittest.TestCase):

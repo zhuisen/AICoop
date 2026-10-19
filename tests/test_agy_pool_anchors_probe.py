@@ -254,7 +254,8 @@ class TheUiCarriesIt(unittest.TestCase):
 
     def test_the_gui_probe_asks_for_json_and_shows_the_toast(self):
         self.assertIn('["probe", label, "--json"]', ts_code("hooks/useAgyPool.ts"))
-        self.assertEqual(ts_code("App.tsx").count("showToast(agyProbeToast(r), 8000)"), 2)
+        # 头部「探针 全池」+ 卡上「探针」两处；2026-10-19 起都在总览组件里（App.tsx 只挂 <Overview>）。
+        self.assertEqual(ts_code("components/ov/Overview.tsx").count("showToast(agyProbeToast(r), 8000)"), 2)
 
 
 if __name__ == "__main__":

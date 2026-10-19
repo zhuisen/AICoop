@@ -26,9 +26,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "codexbar" / "src"
 APP = SRC / "App.tsx"
 GHOST = SRC / "components" / "GhostButton.tsx"
-PROBE = SRC / "components" / "ProbeButton.tsx"
+# ★ 2026-10-19 总览照交接包 page5 重做：ProbeButton / RunwayHero 删除，卡片探针是 `ov/OvCard::HoldAb`，
+#   顶部三栏是 `ov/OvHero`，总览头部在 `ov/Overview`；文字不换行由 `ov/overview.css` 的根规则统一兜住。
+PROBE = SRC / "components" / "ov" / "OvCard.tsx"
+OVERVIEW = SRC / "components" / "ov" / "Overview.tsx"
+OVCSS = SRC / "components" / "ov" / "overview.css"
 CARD = SRC / "components" / "AccountCard.tsx"
-HERO = SRC / "components" / "RunwayHero.tsx"
+HERO = SRC / "components" / "ov" / "OvHero.tsx"
 
 
 def strip_comments(src: str) -> str:
@@ -45,13 +49,15 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         cls.app = strip_comments(APP.read_text(encoding="utf-8"))
         cls.card = strip_comments(CARD.read_text(encoding="utf-8"))
         cls.hero = strip_comments(HERO.read_text(encoding="utf-8"))
+        cls.ov = strip_comments(OVERVIEW.read_text(encoding="utf-8"))
+        cls.css = OVCSS.read_text(encoding="utf-8")
 
     def test_anchors_exist(self):
         """★ 先证明被测文件还是那个文件 —— 组件改名后断言会静默打空。"""
-        for name, src in (("GhostButton", self.ghost), ("ProbeButton", self.probe)):
-            with self.subTest(f=name):
-                self.assertIn("inline-flex", src, "{}:不再是 inline-flex 按钮?".format(name))
-        self.assertIn("总览", self.app)
+        self.assertIn("inline-flex", self.ghost, "GhostButton:不再是 inline-flex 按钮?")
+        self.assertRegex(self.css, r"\.ov-ab \{\s*display: inline-flex", "卡片底栏按钮不再是 inline-flex?")
+        self.assertIn('className="ov-ab ov-abw"', self.probe, "探针不再用底栏按钮的样式?")
+        self.assertIn("总览", self.ov)
 
     # ---- ① 原子不断字 --------------------------------------------------------
 
@@ -68,10 +74,10 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
 
     def test_shared_buttons_never_break_mid_word(self):
         """★ 两个按钮都不许**在按钮内部折行**（那是这一族闸的本意）。"""
-        for name, src in (("GhostButton", self.ghost), ("ProbeButton", self.probe)):
-            with self.subTest(f=name):
-                self.assertRegex(self._button_style_block(src), r'whiteSpace:\s*"nowrap"',
-                                 "{}:样式块里没有 nowrap —— 窄窗下文字会在按钮内部折行".format(name))
+        self.assertRegex(self._button_style_block(self.ghost), r'whiteSpace:\s*"nowrap"',
+                         "GhostButton:样式块里没有 nowrap —— 窄窗下文字会在按钮内部折行")
+        # 总览里所有按钮（含探针）由根规则兜住；行为闸 `test_overview_5b::CardsAreFixedAndNothingWraps` 实量。
+        self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", self.css, "总览没有统一的 nowrap 根规则")
 
     def test_toolbar_buttons_hold_their_width_but_the_card_one_compresses(self):
         """★★ 2026-09-21：**两个按钮的要求从此相反**，别再统一断言。
@@ -84,17 +90,17 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         """
         self.assertRegex(self._button_style_block(self.ghost), r"flexShrink:\s*0",
                          "GhostButton 不该被压缩 —— 工具行里该退让的是说明文字")
-        probe = self._button_style_block(self.probe)
-        self.assertRegex(probe, r"flexShrink:\s*1",
-                         "★★ ProbeButton 压不动 —— 动作条会横向溢出或折行")
-        self.assertRegex(probe, r"minWidth:\s*\d+",
-                         "★ ProbeButton 可收缩却没有下限 —— 会被压成一条缝")
+        # ★ 2026-10-19：卡片底栏的按钮**不再压缩**（`.ov-ab { flex-shrink: 0 }`）。理由换了：
+        #   列数改由 `ovLayout` 按内容区宽给，任何宽度下卡片 ≥250px（`test_card_uniformity` 逐像素算），
+        #   最宽那条底栏（切换 + 探针 + 刷新 + ⋯ ≈ 214）永远放得下 —— 压缩只会让「探针」被裁成「探」。
+        self.assertRegex(self.css, r"\.ov-ab \{[^}]*flex-shrink: 0", "★ 底栏按钮可被压缩 —— 会被裁成半个字")
 
     def test_page_title_never_breaks(self):
         """「总览」被劈成「总 / 览」是用户报的第一个症状。"""
-        m = re.search(r"<span style=\{\{[^}]*fontSize:\s*20[^}]*\}\}>总览</span>", self.app, re.S)
+        m = re.search(r"<span style=\{\{[^}]*fontSize:\s*22[^}]*\}\}>总览</span>", self.ov, re.S)
         self.assertIsNotNone(m, "找不到总览标题 —— 断言可能打空了")
-        self.assertIn("nowrap", m.group(0), "总览标题没有 nowrap")
+        self.assertIn("flexShrink: 0", m.group(0), "总览标题会被压缩")
+        self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", self.css, "总览标题没有 nowrap")
 
     def test_hero_date_segments_never_break(self):
         """★ 断开的日期会被读成另一个日期 —— 比断开的按钮严重得多。
@@ -107,43 +113,26 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
           指向旧 markup 的断言必须跟着搬 —— 留着它只会假红，
           而一条会假红的闸，用户学会的是忽略它。
         """
-        m = re.search(r"<span[^>]*>到期 \{a\.exp\}", self.card)
-        self.assertIsNotNone(m, "找不到卡片上的「到期」那段 —— 断言可能打空了")
-        self.assertIn("nowrap", m.group(0),
-                      "「到期 <日期>」没有 nowrap,窄窗会劈成「2026- / 09-08」")
-        # ★ 「临时借用」角标：左列收窄后实测被劈成「临时借 / 用」（2026-09-21 截图）。
-        #   它是原子，不许内部断开 —— 要让的是旁边那个带省略号的邮箱。
-        mb = re.search(r"<span data-runway-borrowed[\s\S]*?>", self.hero)
+        # 2026-10-19：这些原子都在 `.ov-root` 下，由根规则 `white-space: nowrap` 统一兜住；这里守「它们还在」
+        #   且「不会被 flex 压扁」。真折没折由 `test_overview_5b` 在 1200 / 860 实量（文本节点的行数）。
+        self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", self.css)
+        self.assertRegex(self.card, r"到期 \{a\.exp\}", "找不到卡片上的「到期」那段 —— 断言可能打空了")
+        # ★ 「临时借用」角标：左列收窄后实测被劈成「临时借 / 用」（2026-09-21 截图）。要让的是旁边带省略号的邮箱。
+        mb = re.search(r"<span data-runway-borrowed[\s\S]*?>临时借用", self.hero)
         self.assertIsNotNone(mb, "找不到「临时借用」角标 —— 断言可能打空了")
-        self.assertIn("nowrap", mb.group(0), "「临时借用」角标没有 nowrap，窄列会劈成两行")
-        m2 = re.search(r"<span key=\{w\.label\}[^>]*>", self.hero)
-        self.assertIsNotNone(m2, "找不到续航条里窗口额度那段 —— 断言可能打空了")
-        self.assertIn("nowrap", m2.group(0), "「周 96% ↻6d13h」那段没有 nowrap")
+        self.assertIn("flexShrink: 0", mb.group(0), "「临时借用」角标会被压缩")
 
     # ---- ② 容器允许整块换行 ---------------------------------------------------
 
-    def test_header_and_hero_containers_allow_wrapping(self):
-        """只做 nowrap 不做 flexWrap 会从"断字"变成"横向溢出" —— 两层缺一不可。"""
-        needles = (
-            (r'justifyContent:\s*"space-between",\s*\n?\s*marginBottom:\s*12,[^}]*flexWrap:\s*"wrap"',
-             "总览头部容器没有 flexWrap"),
-            # ★ 2026-10-15 起紧凑顶栏把间距收到 5（`cb ? 5 : 7`），换行兜底不变。
-            (r'gap:\s*(?:cb \? 5 : )?7,\s*alignItems:\s*"center",\s*\n?\s*flexWrap:\s*"wrap"',
-             "按钮行没有 flexWrap"),
-        )
-        for pat, msg in needles:
-            with self.subTest(msg=msg):
-                self.assertRegex(self.app, pat, msg)
-        # ★ 按钮行有两条（codex / Gemini 档各一条）：只要求「有一处」的话，漏掉另一条照样绿。
-        with self.subTest(msg="每一条按钮行都要 flexWrap"):
-            rows = re.findall(r'gap:\s*(?:cb \? 5 : )?7,\s*alignItems:\s*"center",[^}]*\}', self.app)
-            self.assertGreaterEqual(len(rows), 2, "找不到两条按钮行 —— 断言可能打空了")
-            for r in rows:
-                self.assertIn('flexWrap: "wrap"', r, "有一条按钮行没有 flexWrap")
-        # ★ hero 元信息行搬进了 `RunwayHero.tsx`（2026-09-21），所以它单独断言在那份文件上。
-        with self.subTest(msg="续航条元信息行没有 flexWrap"):
-            self.assertRegex(self.hero, r'gap:\s*11,\s*marginTop:\s*3[^}]*flexWrap:\s*"wrap"',
-                             "续航条元信息行没有 flexWrap —— 只做 nowrap 会变成横向溢出")
+    def test_the_header_drops_labels_instead_of_wrapping(self):
+        """★ 2026-10-19 **改写**（交接包 page5 §4「窗口变窄」）：头部是**定高 32 的一行**，变窄时
+        按钮先去掉文字只留图标、平台档只留 logo + 数字 —— 不再整块换行（原来那条「容器要 flexWrap」作废）。
+        守的仍是同一件事：窄窗下不断字、不横向溢出；实量在 `test_overview_5b`（860 宽头部五个动作都在、零折行）。"""
+        self.assertIn('<div data-overview-head="" style={{ display: "flex", alignItems: "center", gap: 12, height: 32, flexShrink: 0, minWidth: 0 }}>',
+                      self.ov, "头部不再是定高的一行")
+        self.assertIn("labels={layout.labels}", self.ov, "头部按钮的文字没跟版式走 —— 窄窗只能挤或折")
+        tabs = strip_comments((SRC / "components" / "ov" / "OvHeader.tsx").read_text(encoding="utf-8"))
+        self.assertIn("layout.tabNames &&", tabs, "平台档的名字没跟版式走")
 
     def test_narrow_threshold_and_min_width_agree(self):
         """★ 自动折叠阈值 与 窗口 `minWidth` 是**一对**,只改一个就会破。
@@ -244,6 +233,14 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         """
         self.assertNotRegex(self.app, r'gridTemplateColumns:\s*"1fr 1fr 1fr"',
                             "九宫格用了裸 1fr —— 列压不下去,内容一变宽就整体溢出")
+        # ★ 2026-10-19：机制第三次换 —— 列数由 `ovLayout(内容区宽)` 给（4/3/2，交接包 page5），每列
+        #   `minmax(0, 1fr)`（列能缩、省略号接手）；「卡片窄到装不下底栏」由 `test_card_uniformity` 逐宽度算。
+        for src, name in ((self.ov, "Overview.tsx"),
+                          (strip_comments((SRC / "components" / "ov" / "OvStrip.tsx").read_text(encoding="utf-8")), "OvStrip.tsx")):
+            with self.subTest(f=name):
+                self.assertRegex(src, r"gridTemplateColumns: `repeat\(\$\{(layout\.)?cols\}, minmax\(0, 1fr\)\)`",
+                                 "{} 的网格列不是 minmax(0, 1fr) —— 列压不下去".format(name))
+        return
         # ⚠️ 2026-09-21 **机制换了，性质没换**：从「固定 3 列 + 列可缩到 0」改成
         #   「按最小宽 auto-fill」。两者都保证内容永不撑爆布局，但走的是相反的路 ——
         #   前者让列缩、内部省略号接手；后者**让列数减少**，卡片反而更宽。
@@ -274,7 +271,7 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         #   否则它会静默变成"永远通过"。改成认**被测的那个属性本身**(渲染 `{a.node}` 的 span)。
         # ★ `<span[^>]*?` 容许 style 前面有别的属性（2026-10-14 加了 `data-card-name` 给一屏闸用，
         #   原来写死 `<span style=` 当场打空 —— 又是下面那句"断言可能打空了"接住的）。
-        m = re.search(r"<span[^>]*? style=\{\{[^}]*\}\}>\{a\.node\}", card, re.S)
+        m = re.search(r"<(?:span|b)[^>]*? style=\{\{[^}]*\}\}>\{a\.node\}", card, re.S)
         self.assertIsNotNone(m, "找不到账号名那个 span —— 断言可能打空了")
         self.assertNotRegex(m.group(0), r"minWidth:\s*0\b",
                             "账号名 minWidth 是 0 —— flex 会把它压到消失")
@@ -288,9 +285,9 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         用户要求删掉了它。所以这条闸改成盯**标题行里那个会缩的容器** ——
         断言不能继续找一个已经不存在的东西，那样它测的是"我还在"而不是"它会让位"。
         """
-        m = re.search(r"总览</span>", self.app)
+        m = re.search(r"总览</span>", self.ov)
         self.assertIsNotNone(m, "找不到总览标题 —— 断言打空了")
-        block = self.app[max(0, m.start() - 500):m.start() + 900]
+        block = self.ov[max(0, m.start() - 500):m.start() + 900]
         self.assertIn("minWidth: 0", block,
                       "标题行没有任何可收缩的容器 —— 窄窗下会挤按钮")
         self.assertIn("flexShrink: 0", block,

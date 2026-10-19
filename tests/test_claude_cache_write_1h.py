@@ -66,12 +66,13 @@ class TheBucketCarriesIt(unittest.TestCase):
         (d / "p" / "s.jsonl").write_text(text, encoding="utf-8")
         cl = next(x for x in scan.SOURCES if x["key"] == "claude")
         fake = dict(cl, root=d)
-        orig = scan.SOURCES
+        orig = scan.SOURCES, scan.OTEL_ROOT
         scan.SOURCES = (fake,)
+        scan.OTEL_ROOT = d / "otel-ledger"      # ★ Claude 源会并入 OTel 账本：不指到夹具就读到真账本
         try:
             out, _ = scan.scan(days=3650, use_cache=False)
         finally:
-            scan.SOURCES = orig
+            scan.SOURCES, scan.OTEL_ROOT = orig
         self.assertEqual(sorted(out), ["claude"])
         return out["claude"]
 

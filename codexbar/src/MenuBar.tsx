@@ -1,30 +1,42 @@
-import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { LogicalSize } from "@tauri-apps/api/dpi";
-import { THEMES, STATUS_COLORS } from "./theme";
+import { THEMES } from "./theme";
 import Toast from "./components/Toast";
 import AccountRow from "./components/AccountRow";
 import GrokRow from "./components/GrokRow";
 import AgyRow from "./components/AgyRow";
-import { agyAction } from "./agy";
-import PlatformChips from "./components/PlatformChips";
+import ClaudeRow from "./components/mb/ClaudeRow";
+import RunStrip from "./components/mb/RunStrip";
+import NoticeBar from "./components/mb/NoticeBar";
+import HoldProbe from "./components/mb/HoldProbe";
+import { useTodayTps } from "./components/mb/useTodayTps";
+import { mbVars, MONO } from "./components/mb/vars";
+import { agyAction, agyShown, agyTightest, agyWinRows, agyResetText } from "./agy";
+import PlatformChips, { LOGO_OF, type ChipItem, type MbPlat } from "./components/PlatformChips";
 import { useRotationBoard } from "./hooks/useRotationBoard";
 import { useAgyPool } from "./hooks/useAgyPool";
-import { POOL_PLATFORMS, platformOf, type PoolKey } from "./platforms";
-import ProbeButton from "./components/ProbeButton";
 import MenuBarToday from "./components/MenuBarToday";
 import { useStore } from "./hooks/useStore";
 import { useDawnProbe } from "./hooks/useDawnProbe";
 import { useTraffic } from "./hooks/useTraffic";
 import { useGrokQuota } from "./hooks/useGrokQuota";
 import { useAgyQuota } from "./hooks/useAgyQuota";
-import { fmtAgo, cardLeftText } from "./helpers";
+import { useClaudeQuota } from "./hooks/useClaudeQuota";
+import { useLive } from "./hooks/useLive";
+import { runningRows, type PlatformKey } from "./live";
+import { fmtAgo, fmtEta, cardLeftText } from "./helpers";
+import { grokRemPct } from "./grok";
 import { usePrivacy } from "./hooks/usePrivacy";
 import { useCardBannerDismiss } from "./hooks/useCardBannerDismiss";
 import { useIntegration } from "./hooks/useIntegration";
 import { presentIntegration } from "./components/IntegrationBanner";
 import { todayView, fmtTok, colorOf } from "./traffic";
+import {
+  SUB_WARN_DAYS, blockTitle, daysUntil, isLow, lowNotice, mergeNotices, nameColWidth, poolDry, poolDryNotice,
+  sortByAvailability, subNotice, tightestOf, type Notice, type SortKey,
+} from "./mbLogic";
 import "./App.css";
 import "./menubar.css";
 
@@ -88,10 +100,10 @@ const TAB_KEY = "codexbar_mb_tab";
 /** 菜单栏停留在哪个平台档。★ 与主窗那份**分开存** —— 两个 webview 是各自的使用场景，
  *  主窗在管 codex 时菜单栏想看 gemini 额度是完全正常的需求。 */
 const PLAT_KEY = "codexbar_mb_plat";
-function loadPlat(): PoolKey {
+function loadPlat(): MbPlat {
   try {
     const v = localStorage.getItem(PLAT_KEY);
-    if (v === "gemini" || v === "grok" || v === "codex") return v;
+    if (v === "gemini" || v === "grok" || v === "codex" || v === "claude") return v;
   } catch { /* 隐私模式下读不了 */ }
   return "codex";
 }
@@ -101,44 +113,119 @@ function loadTab(): Tab {
   try { return localStorage.getItem(TAB_KEY) === "today" ? "today" : "acc"; } catch { return "acc"; }
 }
 
-const IconBolt = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>;
-const IconRefresh = ({ size = 13 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>;
-const IconEye = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M1.6 12S5.3 5.5 12 5.5 22.4 12 22.4 12 18.7 18.5 12 18.5 1.6 12 1.6 12z"/><circle cx="12" cy="12" r="3"/></svg>;
-const IconEyeOff = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6.7 0 10.4 6.5 10.4 6.5a18 18 0 0 1-3.4 4.2M6.2 7.8A18 18 0 0 0 1.6 12S5.3 18.5 12 18.5c1.6 0 3-.4 4.3-.9M3 3l18 18"/></svg>;
+/** 在跑条展开与否（交接包 4f：「展开状态记住」）。 */
+const STRIP_KEY = "codexbar_mb_strip";
+function loadStrip(): boolean {
+  try { return localStorage.getItem(STRIP_KEY) === "1"; } catch { return false; }
+}
+
+/** 芯片顺序固定 Codex → Claude → Gemini → Grok（交接包「平台顺序与颜色」）。 */
+const MB_PLATS: readonly { key: MbPlat; label: string }[] = [
+  { key: "codex", label: "Codex" }, { key: "claude", label: "Claude" },
+  { key: "gemini", label: "Gemini" }, { key: "grok", label: "Grok" },
+];
+const MB_PLAT_LABEL: Record<MbPlat, string> = { codex: "Codex", claude: "Claude", gemini: "Gemini", grok: "Grok" };
+
+const IconBolt = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" fill="currentColor" />
+  </svg>
+);
+const IconRefresh = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v4.5h-4.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+const IconEye = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block" }}>
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" fill="none" stroke="currentColor" strokeWidth="1.7" />
+    <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+  </svg>
+);
+const IconEyeOff = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" style={{ display: "block" }}>
+    <path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6.7 0 10.4 6.5 10.4 6.5a18 18 0 0 1-3.4 4.2M6.2 7.8A18 18 0 0 0 1.6 12S5.3 18.5 12 18.5c1.6 0 3-.4 4.3-.9M3 3l18 18" />
+  </svg>
+);
+/**
+ * ★ 设置用**真齿轮**（ui.md：「侧栏设置用真齿轮，不是 circle + 8 条直射线」）。交接包画板这里画的是
+ * 圆 + 8 条射线，在 17px 下与太阳图标分不出 —— 本仓已判过一次，照项目规则偏离画板。
+ */
+const IconGear = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+    <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </svg>
+);
 const IconWarn = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm1 14h-2v2h2v-2zm0-7h-2v5h2V9z"/></svg>;
+const IconArrow = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+const IconMore = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block" }}>
+    <circle cx="5" cy="12" r="1.7" fill="currentColor" /><circle cx="12" cy="12" r="1.7" fill="currentColor" /><circle cx="19" cy="12" r="1.7" fill="currentColor" />
+  </svg>
+);
+
+/** harness 专用开关（`?probehold=1` 截「按住中途」那一帧）。生产里恒 false。 */
+const FORCE_HOLD = (() => { try { return localStorage.getItem("codexbar_mb_probehold") === "1"; } catch { return false; } })();
 
 export default function MenuBar() {
-  const { accounts, currentNode, inUseNode, counts, lastRefreshAt, cardAlert, loadingAction, toast, refresh, run, showToast } = useStore();
+  const { accounts, currentNode, inUseNode, lastRefreshAt, cardAlert, loadingAction, toast, refresh, run, showToast } = useStore();
   const { visible: bannerVisible, dismiss: bannerDismiss } = useCardBannerDismiss();
   const { integration } = useIntegration();
   const [theme, setTheme] = useState<"dark" | "light">(loadTheme);
   const [tab, setTabState] = useState<Tab>(loadTab);
-  const [plat, setPlatState] = useState<PoolKey>(loadPlat);
-  const setPlat = useCallback((v: PoolKey) => {
-    setPlatState(v);
+  const [plat, setPlatState] = useState<MbPlat>(loadPlat);
+  const [prevPlat, setPrevPlat] = useState<MbPlat>(plat);
+  const [stripOpen, setStripOpen] = useState<boolean>(loadStrip);
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const setPlat = useCallback((v: MbPlat) => {
+    setPlatState((cur) => { setPrevPlat(cur); return v; });
+    setNoticeOpen(false);
     try { localStorage.setItem(PLAT_KEY, v); } catch { /* 隐私模式下写不了 */ }
+  }, []);
+  const toggleStrip = useCallback(() => {
+    setStripOpen((v) => {
+      try { localStorage.setItem(STRIP_KEY, v ? "0" : "1"); } catch { /* 隐私模式下写不了 */ }
+      return !v;
+    });
   }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const { privacy, toggle: togglePrivacy } = usePrivacy();
   const t = THEMES[theme];
+  const isDark = theme === "dark";
+
+  // ★ 日夜切换已移到设置页（交接包 4f：「日夜切换移到设置」）。弹窗只**读** `codexbar_theme`：
+  //   另一个 webview 改了它会触发 `storage`；兜底再在每次弹出时重读一次（同源 localStorage 在两个
+  //   webview 之间是否推 `storage` 事件没验过，所以不只靠它）。设置页也可以直接发 `theme-changed`。
+  useEffect(() => {
+    const sync = () => setTheme(loadTheme());
+    window.addEventListener("storage", sync);
+    const uns = [listen("menubar-shown", sync), listen("theme-changed", sync)];
+    return () => { window.removeEventListener("storage", sync); uns.forEach((u) => { void u.then((f) => f()); }); };
+  }, []);
 
   // ★ 清晨探针的**补跑**路径。挂在菜单栏而不是主窗:这个 webview 在 app 启动时创建、
   //   从不卸载,是更稳的宿主。hook 内部还会再核一次窗口标签(见 `useDawnProbe`)。
   useDawnProbe();
 
-  // 交接稿 §5「弹窗只读缓存,不重复解析」。数据与主窗口共用同一份快照和同一条新鲜度规则,
-  // 谁扫完都会广播给对方 —— 所以这里不会和主窗口各扫一遍。要立刻要准数就点摘要行那个 ↻。
+  // 交接稿 §5「弹窗只读缓存,不重复解析」。数据与主窗口共用同一份快照和同一条新鲜度规则。
   const { data: traffic, cacheMode, prefs, busy: trafficBusy, refresh: refreshTraffic, refreshIfStale } =
     useTraffic();
   const today = useMemo(() => todayView(traffic), [traffic]);
-  // 平台色从 scan.py 下发的注册表取,前端不再各写一份色表(加平台只改 scan.py)
   const platColors = useMemo(
     () => Object.fromEntries(Object.keys(traffic?.platforms ?? {}).map((k) => [k, colorOf(traffic, k)])),
     [traffic]);
+  const tpsBy = useTodayTps(tab === "today");
 
-  // ★ 托盘弹出时按新鲜度重扫。`document.visibilityState` 那条定时器在弹窗隐藏时不跑,
-  //   所以刚点开的这一刻数据可能已经很旧了 —— 这个信号补的正是那一刻。
-  //   30s 的阈值比定时器的 2 分钟更紧:用户主动点开就是想看现在的数。
+  // 在跑条：`read_live` + `tps-live` 推送（与托盘胶囊 / 悬停面板 / 刘海同源同值）。
+  const { live } = useLive();
+  const running = useMemo(() => runningRows(live), [live]);
+
+  // ★ 托盘弹出时按新鲜度重扫。30s 的阈值比定时器的 2 分钟更紧:用户主动点开就是想看现在的数。
   useEffect(() => {
     const un = listen("menubar-shown", () => { refreshIfStale(30_000); });
     return () => { void un.then((f) => f()); };
@@ -146,13 +233,9 @@ export default function MenuBar() {
 
   const setTab = useCallback((v: Tab) => {
     setTabState(v);
+    setMenuOpen(false);
     try { localStorage.setItem(TAB_KEY, v); } catch { /* ignore */ }
   }, []);
-
-  const toggleTheme = (v: "dark" | "light") => {
-    setTheme(v);
-    try { localStorage.setItem("codexbar_theme", v); } catch { /* ignore */ }
-  };
 
   /** Reveal the main window and dismiss the popover. */
   const openMain = useCallback(async (navigateTo?: string, payload?: unknown) => {
@@ -177,6 +260,11 @@ export default function MenuBar() {
       getCurrentWindow().hide();
     } catch (e) { console.error(e); }
   }, []);
+
+  /** 点账号行内容 → 工作台 · 总览，定位到该 AI 档（交接包 4f，本轮新增）。键 = 请求账本那套。 */
+  const openOverview = useCallback((pf: PlatformKey) => {
+    void openMain("open-main-page", { page: "overview", platform: pf });
+  }, [openMain]);
 
   // The panel is content-sized in the design (`height: fit-content`), but a Tauri window has a fixed
   // frame — so measure and follow. Without this the popover keeps a 580px frame and paints dead space
@@ -265,181 +353,230 @@ export default function MenuBar() {
   }, [refresh]);
 
   // ★ grok **不进** `accounts`/`alive`:那两个数组同时驱动计数徽章、探针全池的号数、
-  //   自动切号。混进去会去"切"/"探"一个切不了的东西,且不报错。
-  //   视觉复用账号卡,数据走独立通路 —— 闸在 tests/test_grok_not_in_pool_ui.py。
+  //   自动切号。混进去会去"切"/"探"一个切不了的东西,且不报错。闸在 tests/test_grok_not_in_pool_ui.py。
   const { snap: grokSnap, busy: grokBusy, refresh: refreshGrok } = useGrokQuota();
   // ★ agy 同样不进 `accounts`/`alive`,理由与 grok 完全一致。
-  //   与 grok 的差别:这条**不联网**(本机 loopback),所以菜单栏常开也不产生外部请求。
   const { snap: agySnap, busy: agyBusy } = useAgyQuota();
   // ★ agy 账号池。只在 gemini 档打开时才读盘 —— 菜单栏常开，无谓的 IPC 不该常驻。
-  // ★★ 与总览**同一个真源**。此前这里的 `USE` 与总览一样由 `recommended()`（剩余最多、
-  //   不看置顶不看停用）算 —— 两个界面各挂一份作废逻辑，说的还是同一句假话。
-  //   §5c 页面统一性：同一类信息在两个界面必须来自同一处。
-  // ★ 只在**账号 Tab + codex 档**时启用：每次查询要起一个 python 子进程，
-  //   而今日 Tab 与 Gemini 档一个像素都用不到它（同总览那条 `provider === "codex"` 的理由）。
+  // ★★ 「下一个」与总览**同一个真源**（真挑号器的 board），只在账号 Tab + 对应档时启用。
   const { board: mbBoard } = useRotationBoard(tab === "acc" && plat === "codex");
   const agyPool = useAgyPool(tab === "acc" && plat === "gemini", { background: true });
   const { board: mbAgyBoard } = useRotationBoard(tab === "acc" && plat === "gemini",
                                                 { source: "agy", dep: agyPool.accounts });
-  const alive = accounts.filter(a => a.status !== "dead");
+  // ★ Claude 只有「本机」一个号，额度走状态栏转写（PLAN §2.2）。
+  const { quota: claudeQuota, refresh: refreshClaude } = useClaudeQuota(tab === "acc" && plat === "claude");
+
+  /** 「按可用排序」（`mbLogic.sortByAvailability`）：低额度置顶 → 在用 → 下一个 → 其余按最紧窗口 → 读不到。 */
+  const alive = useMemo(() => sortByAvailability(accounts.filter(a => a.status !== "dead").map((a) => ({
+    a, tight: a.tightest >= 0 ? a.tightest : null, inUse: a.aid === inUseNode,
+    next: mbBoard?.next?.aid === a.aid && a.aid !== inUseNode,
+  }))).map((x) => x.a), [accounts, inUseNode, mbBoard]);
   const dead = accounts.filter(a => a.status === "dead");
-  /** 芯片行的数据。★ 计数一律是**这一档渲染出来几行** —— 写"池里有几个"就是在说
-   *  界面上看不到的事（与主窗 `ProviderTab.count` 同一条定义）。 */
-  const chips = POOL_PLATFORMS.map(p => ({
+  const nowSec = Date.now() / 1000;
+
+  /** Gemini 各号（排序 + 通知条共用一份读数）。 */
+  const agyRows = useMemo(() => {
+    const out = agyPool.accounts.map((a) => {
+      const snap = agyPool.snapshotOf(a, agySnap);
+      const q = agyShown(snap)?.quota;
+      const tt = agyTightest(q);
+      return { a, snap, wins: agyWinRows(q), tight: tt?.b.remaining_percent ?? null,
+               inUse: a.sub === agyPool.liveSub, next: mbAgyBoard?.next?.aid === a.sub && a.sub !== agyPool.liveSub };
+    });
+    return sortByAvailability(out);
+  }, [agyPool, agySnap, mbAgyBoard]);
+
+  /** 芯片行的数据。★ 计数一律是**这一档渲染出来几行**。 */
+  const chips: ChipItem[] = MB_PLATS.map(p => ({
     ...p,
-    color: colorOf(traffic, p.colorKey),
     count: p.key === "codex" ? alive.length
       : p.key === "gemini" ? Math.max(1, agyPool.accounts.length)
       : 1,
-    // 死号红点只有 codex 这一档有数据来源；另两档没有"死号"这个状态，
-    // ★ 恒 false 不是偷懒：给一个永远不亮的灯也比给一个来路不明的灯好。
+    // 死号红点只有 codex 这一档有数据来源；恒 false 不是偷懒：永远不亮的灯也比来路不明的灯好。
     hasDead: p.key === "codex" && dead.length > 0,
+    readOnly: p.key === "grok",
   }));
 
-  const bestPct = alive.reduce((m, a) => Math.max(m, a.windows[0]?.pct ?? -1), -1);
+  const bestPct = alive.reduce((m, a) => Math.max(m, a.tightest), -1);
+
+  /** 这一档的排序键（表头文案 + 池见底判据）。 */
+  const sortKeys: SortKey[] = plat === "codex"
+    ? alive.map((a) => ({ tight: a.tightest >= 0 ? a.tightest : null, inUse: a.aid === inUseNode, next: false }))
+    : plat === "gemini" ? agyRows
+    : plat === "claude" ? [{ tight: claudeQuota ? tightestOf([claudeQuota.fiveH?.rem, claudeQuota.week?.rem]) : null, inUse: true, next: false }]
+    : [{ tight: grokRemPct(grokSnap?.accounts[0]), inUse: true, next: false }];
 
   /**
-   * 底部操作栏。★★ **随平台变**（v4 稿 §5）：
-   *   codex / grok → 刷新全池 ｜ 检查 token ｜ 探针
-   *   gemini       → 刷新全池 ｜ 打开 Antigravity（探针/检查 token 对它**没有意义**）
-   *
-   * ★★★ 「探针」是全 app 唯一会花钱的控件，它扣的是 **codex** 的额度。
-   *   挂在 gemini 档上 = 用户看着 gemini 的卡按下去、扣的是另一家的钱。
+   * 通知条（交接包 4f）：重置卡作废 / 订阅到期 / 池见底 / 低额度 合并成一条，只说当前这一档的事。
+   * ★ 重置卡是 **codex** 专属的；挂在别家档上说的是另一家的事。
    */
-  const codexActions = platformOf(plat).codexActions;
+  const notices: Notice[] = [];
+  if (plat === "codex" && cardAlert && bannerVisible(cardAlert)) {
+    notices.push({ id: "card", tone: "warn", urgency: cardAlert.cardDays ?? 0, dismissible: true,
+                   text: `${cardAlert.node} ${cardAlert.cardsExpiring || 1} 张重置卡 ${cardLeftText(cardAlert.cardDays ?? 0)}后作废` });
+  }
+  if (plat === "codex") {
+    for (const a of alive) {
+      for (const w of a.windows) if (isLow(w.pct)) notices.push(lowNotice(a.aid, a.node, w.label, w.pct, w.reset));
+      const left = a.expStale ? null : daysUntil(a.exp, Date.now());
+      if (left != null && left >= 0 && left <= SUB_WARN_DAYS) notices.push(subNotice(a.aid, a.node, left, a.exp));
+    }
+  } else if (plat === "gemini") {
+    for (const r of agyRows) {
+      for (const w of r.wins) {
+        if (w.remaining != null && isLow(w.remaining)) {
+          notices.push(lowNotice(r.a.sub, r.a.label, w.label, w.remaining, agyResetText(w).text));
+        }
+      }
+    }
+  } else if (plat === "claude" && claudeQuota) {
+    for (const [w, lb] of [[claudeQuota.fiveH, "5h"], [claudeQuota.week, "周"]] as const) {
+      if (w && isLow(w.rem)) notices.push(lowNotice("claude", "Claude", lb, w.rem, w.resetsAt ? fmtEta(w.resetsAt) : null));
+    }
+  } else if (plat === "grok") {
+    const rem = grokRemPct(grokSnap?.accounts[0]);
+    if (isLow(rem)) notices.push(lowNotice("grok", "Grok", "周", rem as number, fmtEta(grokSnap?.accounts[0]?.quota?.period_end ?? undefined)));
+  }
+  if ((plat === "codex" || plat === "gemini") && sortKeys.length > 1 && poolDry(sortKeys)) {
+    notices.push(poolDryNotice(MB_PLAT_LABEL[plat]));
+  }
+  const merged = mergeNotices(notices);
+  const dismissNotice = (n: Notice) => { if (n.id === "card" && cardAlert) bannerDismiss(cardAlert); };
+
+  /** 当前这一档上次刷新的时刻（芯片行右侧 `↻ HH:MM`）。 */
+  const refreshedAt: number | null = plat === "codex" ? lastRefreshAt ?? null
+    : plat === "gemini" ? agyPool.accounts.reduce<number | null>((m, a) => (a.quota_at && (m == null || a.quota_at > m) ? a.quota_at : m), null)
+    : plat === "grok" ? grokSnap?.fetched_at ?? null
+    : claudeQuota?.capturedAt ?? null;
+
   /**
-   * ★★★ **「刷新全池」必须刷当前这一档，不能永远刷 codex。**
-   *   原来它写死成 `codex-rotate refresh-all` —— 站在 Gemini 档上按下去，
-   *   刷的是另一家，而 toast 还说「已刷新全池」。按钮说的和做的不是一件事，
-   *   这是本仓那条「写入侧标志会撒谎」在 UI 上的形态。
-   *   三家的刷新成本都是零消耗：codex 走官方 usage GET、gemini 走云端 `fetchAvailableModels`、
-   *   grok 走它的 billing 端点 —— 所以「免费」那个徽章三档都成立。
+   * 「探针」（计费）只对 codex 档、且只在账号 Tab 出现（扣的是 **codex** 的额度：挂在别家档上 =
+   * 用户看着别家的行按下去、花的是另一家的钱）。其余档 / 今日 Tab 那一格是「工作台 →」。
+   */
+  const codexActions = tab === "acc" && plat === "codex";
+  /**
+   * ★★★ **「刷新全池」必须刷当前这一档，不能永远刷 codex。** 四家的刷新成本都是零消耗：
+   *   codex 走官方 usage GET、gemini 走云端 `fetchAvailableModels`、grok 走它的 billing 端点、
+   *   Claude 只重读本机的状态栏转写 —— 所以「免费」那个徽章四档都成立。
    */
   const refreshPool = () => {
     if (plat === "gemini") { agyPool.refresh(); showToast("已刷新 Gemini · 免费"); return; }
     if (plat === "grok") { refreshGrok(); showToast("已刷新 Grok · 免费"); return; }
+    if (plat === "claude") { refreshClaude(); showToast("已重读 Claude 额度 · 本机"); return; }
     run("refresh-all", ["refresh-all", "--notify"], "已刷新全池");
   };
 
+  /** 底栏「⋯」里的次要动作（交接包 4f：「⋯（检查 token 等）」）。 */
   const actions = [
-    { id: "refresh-all", label: "刷新全池", loadingLabel: "刷新中…", accent: true, badge: "免费",
-      icon: true,
-      hint: plat === "codex" ? "读取 Codex 官方额度接口(GET),不消耗额度"
-        : plat === "gemini" ? "按账号读云端额度(fetchAvailableModels),零消耗"
-        : "读 grok 的账单接口,零消耗",
-      action: refreshPool },
-    // 中键随 Tab / 平台变(稿 §3/§5)。
-    tab === "today"
-      ? { id: "open-traffic", label: "打开流量总览 ↗", loadingLabel: "", accent: false,
-          badge: undefined as string | undefined, icon: false,
-          hint: "在主窗口看分平台/分模型明细、切时间段、看费率卡",
-          action: () => void openMain("navigate-traffic") }
-      : codexActions
-        ? { id: "health", label: "检查 token", loadingLabel: "检查中…", accent: false,
-            badge: undefined as string | undefined, icon: true,
-            hint: "逐号问服务端 token 是否被作废(零消耗,不刷新 token);发现失效会记录。约 10s",
-            action: () => run("health", ["health"], "已检查 token") }
-        : plat === "gemini"
-          // ★ Gemini 现在有**自己的**检查 token（刷一次 token + 打一次 `fetchAvailableModels`，
-          //   零消耗）。与主窗那一档保持一致 —— 两个界面对同一档给不同的按钮，
-          //   正是用户这几轮反复在报的那类不一致。
-          ? { id: "agy-health", label: "检查 token", loadingLabel: "检查中…", accent: false,
-              badge: undefined as string | undefined, icon: true,
-              hint: "逐号刷一次 token 再打一次云端额度接口，两步都过才算这个号还能用。零消耗",
-              action: () => { agyPool.health(); showToast("正在检查 Gemini 各号…"); } }
-          : { id: "open-grok", label: "↗ 打开 Grok 详情", loadingLabel: "", accent: false,
-              badge: undefined as string | undefined, icon: false,
-              hint: "grok 是单号只读：没有池可切、也没有可探的号,只有用量与周额度可看",
-              action: () => void openMain("navigate-platform", "grok") },
+    ...(plat === "codex" ? [{ id: "health", label: "检查 token", loadingLabel: "检查中…",
+        hint: "逐号问服务端 token 是否被作废(零消耗,不刷新 token);发现失效会记录。约 10s",
+        action: () => run("health", ["health"], "已检查 token") }] : []),
+    // ★ Gemini 有**自己的**检查 token（刷一次 token + 打一次 `fetchAvailableModels`，零消耗）。
+    ...(plat === "gemini" ? [{ id: "agy-health", label: "检查 token", loadingLabel: "检查中…",
+        hint: "逐号刷一次 token 再打一次云端额度接口，两步都过才算这个号还能用。零消耗",
+        action: () => { agyPool.health(); showToast("正在检查 Gemini 各号…"); } }] : []),
+    ...(plat === "grok" ? [{ id: "open-grok", label: "打开 Grok 用量详情", loadingLabel: "",
+        hint: "grok 是单号只读：没有池可切、也没有可探的号,只有用量与周额度可看",
+        action: () => void openMain("navigate-platform", "grok") }] : []),
+    { id: "open-traffic", label: "打开 AI用量信息", loadingLabel: "",
+      hint: "在主窗口看分平台/分模型明细、切时间段、看费率卡",
+      action: () => void openMain("navigate-traffic") },
   ];
 
-  return (
-    <div ref={rootRef} className="mb-root" style={{ background: t.appBg, color: t.text, border: `1px solid ${t.chromeBorder}` }}>
+  const headerRun = running.length;
+  const accCount = String(chips.reduce((n, c) => n + c.count, 0));
+  const dir = MB_PLATS.findIndex((p) => p.key === plat) < MB_PLATS.findIndex((p) => p.key === prevPlat) ? -1 : 1;
+  const nameW = nameColWidth(plat === "codex" ? alive.map((a) => a.node)
+    : plat === "gemini" ? agyRows.map((r) => r.a.label) : plat === "claude" ? ["本机"] : ["grok"]);
+  const blockHead = plat === "grok" ? "当前号 · 只读" : plat === "claude" ? "本机 · 状态栏转写" : blockTitle(sortKeys);
+  const refreshing = loadingAction === "refresh-all";
 
-      {/* Header */}
-      <div className="mb-header" style={{ background: t.chromeBg, borderBottom: `1px solid ${t.chromeBorder}` }}>
-        <span style={{ color: t.accent, display: "grid", placeItems: "center" }}><IconBolt /></span>
-        <span className="mb-header-logo">CodexBar</span>
-        <div className="mb-status-dots">
-          <span className="mb-dot" style={{ background: STATUS_COLORS.live }} /><span className="mb-dot-count" style={{ color: STATUS_COLORS.live }}>{counts.live}</span>
-          {counts.cool > 0 && <><span className="mb-dot" style={{ background: STATUS_COLORS.cool }} /><span className="mb-dot-count" style={{ color: t.muted }}>{counts.cool}</span></>}
-          {counts.dead > 0 && <><span className="mb-dot" style={{ background: STATUS_COLORS.dead }} /><span className="mb-dot-count" style={{ color: t.muted }}>{counts.dead}</span></>}
-        </div>
-        <div className="mb-theme-toggle">
-          <div className="mb-theme-group" style={{ border: `1px solid ${t.ghostBorder}` }}>
-            <span className="mb-theme-btn" onClick={() => toggleTheme("light")} style={{ color: t.sunColor, background: t.sunBg }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9 17.7 6.3M6.3 17.7 4.9 19.1"/></svg>
-            </span>
-            <span className="mb-theme-btn" onClick={() => toggleTheme("dark")} style={{ color: t.moonColor, background: t.moonBg }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-            </span>
-          </div>
-          <span className="mb-settings-btn" onClick={togglePrivacy}
-            title={privacy ? "打码中 — 邮箱已遮蔽,可安全截图。点击恢复" : "打码:遮蔽邮箱,方便截图分享"}
-            style={{ color: privacy ? t.accent : t.muted }}>
+  return (
+    <div ref={rootRef} className={`mb-root ${isDark ? "th-dark" : "th-light"}`}
+         style={{ ...mbVars(isDark), background: "var(--pop)", color: "var(--tx)", border: "1px solid var(--line2)" }}>
+
+      {/* 头部 46：⚡ CodexBar · N 在跑 / 空闲 · 隐私 · 设置（日夜切换已移到设置页） */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 46,
+                    padding: "0 10px 0 14px", flexShrink: 0 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+          <span style={{ color: "var(--acc)" }}><IconBolt /></span>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>CodexBar</span>
+          <span data-mb-status={headerRun ? "running" : "idle"}
+                style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+                         color: headerRun ? "var(--acc)" : "var(--tx3)", transition: "color 300ms" }}>
+            <i style={{ display: "block", width: 6, height: 6, borderRadius: 3,
+                        background: headerRun ? "var(--acc)" : "var(--tx3)", transition: "background 300ms" }} />
+            {headerRun ? `${headerRun} 在跑` : "空闲"}
+          </span>
+        </span>
+        <span style={{ display: "flex", gap: 2, color: "var(--tx2)" }}>
+          <span className="mb-hbtn" onClick={togglePrivacy}
+                title={privacy ? "打码中 — 邮箱已遮蔽,可安全截图。点击恢复" : "打码:遮蔽邮箱,方便截图分享"}
+                style={{ color: privacy ? "var(--acc)" : undefined }}>
             {privacy ? <IconEyeOff /> : <IconEye />}
           </span>
-          <span className="mb-settings-btn" onClick={() => openMain("navigate-settings")} title="设置" style={{ color: t.muted }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span className="mb-hbtn" onClick={() => void openMain("navigate-settings")} title="设置（日夜切换在这里）">
+            <IconGear />
           </span>
-        </div>
+        </span>
       </div>
 
-      {/* Tab 行(v3 新增):全宽分段控件,带活值小字 */}
-      <div className="mb-tabs" style={{ border: `1px solid ${t.ghostBorder}` }}>
+      <RunStrip rows={running} todayTokens={live?.today.tokens ?? null}
+                open={stripOpen} onToggle={toggleStrip} isDark={isDark} />
+
+      {/* Tab 32：账号 N / 今日 415M；选中底块横滑 380 ms 临界阻尼 */}
+      <div style={{ position: "relative", display: "flex", height: 32, margin: "8px 12px 0", padding: 3,
+                    boxSizing: "border-box", borderRadius: 10, background: "var(--seg)", border: "1px solid var(--line)",
+                    flexShrink: 0 }}>
+        <i className="mb-tab-pill" style={{ position: "absolute", top: 3, bottom: 3, left: 3, width: "calc(50% - 3px)",
+                    borderRadius: 8, background: "var(--acc)", transform: `translateX(${tab === "acc" ? "0%" : "100%"})`,
+                    transition: "transform 380ms var(--sp)" }} />
         {([
           // ★★ 这个数是**全部平台的总数**（用户 2026-09-14：「账号 6 应该要改为账号 9」）。
-          //   ⚠️ v4 稿 §1 写的是"当前平台的账号数"，用户当面否了：
-          //     **每一档各自的数字芯片行上已经有了**（`6 / 2 / 1`），Tab 上再重复一遍
-          //     只是把同一个数说两遍；而"我一共有几个号"在别处一个地方都看不到。
-          ["acc", "账号", String(chips.reduce((n, c) => n + c.count, 0))],
+          ["acc", "账号", accCount],
           ["today", "今日", today ? fmtTok(today.totalTok) : "—"],
         ] as [Tab, string, string][]).map(([id, label, val]) => (
-          <span key={id} className="mb-tab" onClick={() => setTab(id)}
-                style={{ color: tab === id ? t.accentText : t.muted,
-                         background: tab === id ? t.accent : "transparent" }}>
-            {label} <span className="mb-tab-val">{val}</span>
-          </span>
+          <button key={id} type="button" data-mb-tab={id} onClick={() => setTab(id)}
+                  style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                           gap: 6, border: 0, background: "transparent", cursor: "pointer", fontFamily: "inherit",
+                           fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+                           color: tab === id ? "var(--accTx)" : "var(--tx2)", transition: "color 250ms" }}>
+            {label}<span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 11.5, opacity: .85 }}>{val}</span>
+          </button>
         ))}
       </div>
 
       {tab === "today" ? (
-        <div className="mb-pane">
-          <MenuBarToday t={t} view={today} colors={platColors} cacheMode={cacheMode}
+        <div className="mb-pane" style={{ marginTop: 4 }}>
+          <MenuBarToday view={today} colors={platColors} cacheMode={cacheMode} isDark={isDark} tpsBy={tpsBy}
                         refreshedAt={traffic?.generated_at ?? null}
                         busy={trafficBusy} onRefresh={refreshTraffic}
                         onOpenPlatform={(k) => void openMain("navigate-platform", k)}
                         onOpenOverview={() => void openMain("navigate-traffic")} />
         </div>
       ) : (
-      <div className="mb-pane">
-      {/* 平台 logo 芯片行（v4 稿 §2）—— 取代 v3 那条只重复 Tab 数字的「可用账号」标题行 */}
-      <PlatformChips t={t} cur={plat} on={setPlat} items={chips}
-                     right={lastRefreshAt
-                       // ★ 稿 §2 给的是 `↻ {时间}` 一个时刻。`fmtAgo` 还会缀「N 分钟前」，
-                       //   352px 的一行里那截尾巴会在平台名变长或多一个芯片时先被挤掉 ——
-                       //   所以只画时刻，**新旧程度放进 title**，一个字都没丢。
-                       ? <span title={`上次刷新 ${fmtAgo(lastRefreshAt)}`}>
-                           {platformOf(plat).label} · ↻ {new Date(lastRefreshAt * 1000)
-                             .toTimeString().slice(0, 5)}
+      <div className="mb-pane mb-slide" style={{ marginTop: 4, ["--dx" as string]: "-28px" }}>
+      {/* 平台芯片 28：Codex · Claude · Gemini · Grok🔒（官方 logo + 号数）；右侧 ↻ 这一档上次刷新的时刻 */}
+      <PlatformChips isDark={isDark} cur={plat} on={setPlat} items={chips}
+                     right={refreshedAt
+                       // ★ 只画时刻；平台名与「N 分钟前」进 title（352px 的一行放不下）。
+                       ? <span title={`${MB_PLAT_LABEL[plat]} · 上次刷新 ${fmtAgo(refreshedAt)}`}>
+                           ↻ {new Date(refreshedAt * 1000).toTimeString().slice(0, 5)}
                          </span>
-                       : <>{platformOf(plat).label}</>} />
+                       : <span title={`${MB_PLAT_LABEL[plat]} · 还没刷新过`}>↻ —</span>} />
 
-      {/* 接入闸 —— **不可关**，且排在重置卡横幅之前。
-          ★ 与重置卡那条的区别正是「该不该能关」的判据：重置卡是一条会自己过期的提醒
-            （3 天窗口一过就没了），所以连挂三天关不掉是噪音；而「这台机器没接上轮换」
-            **不会自己好**，关掉它等于把唯一的告警藏起来。本仓判过死刑的是前者，不是后者。
+      {/* 接入闸 —— **不可关**，且不并进通知条。
+          ★ 与通知条的区别正是「该不该能关 / 能不能截短」：「这台机器没接上轮换」**不会自己好**，
+            而它的下一步动作是一整句话，压进 32px 的单行会被省略号切掉 —— 本仓披露铁律要求告警必须说下一步。
           ★ 只挂 codex 档：gemini/grok 的接入机制完全不同，这道闸判不了它们。 */}
       {plat === "codex" && (() => {
         const p = presentIntegration(integration);
         if (!p) return null;
-        // ★ 只有「没装」和「断了」才可点去接入。`unknown` 不给 —— 我们根本不知道缺什么,
-        //   给一个「去接入」等于把「判定不了」说成「你没装」(同主窗那条)。
         const canConnect = integration?.state === "not_installed"
                         || integration?.state === "broken";
         return (
           <div className="mb-banner mb-banner-slim mb-banner-wrap"
-               style={{ background: `${p.color}1a`, border: `1px solid ${p.color}73`,
+               style={{ background: `${p.color}1a`, border: `1px solid ${p.color}73`, margin: "0 12px 8px",
                         cursor: canConnect ? "pointer" : "default" }}
                onClick={canConnect ? () => void openMain("navigate-settings") : undefined}
                title={canConnect
@@ -447,11 +584,6 @@ export default function MenuBar() {
                  : integration?.lines.join("\n")}>
             <span className="mb-banner-icon" style={{ color: p.color }}><IconWarn /></span>
             <div className="mb-banner-body">
-              {/* ★ 两行：徽章一行、**该做什么**一行。
-                  352px 下挤成一行会被省略号从尾部切掉，而被切掉的恰好是动作那半 ——
-                  本仓披露铁律要求告警必须说下一步，切掉它等于只剩「反正坏了」。
-                  实测：harness 352×640 截图里整句跑出右边界，而 overflow 探针报 0
-                  （`text-overflow` 只改渲染、DOM 文本仍完整，结构闸抓不到这一类）。 */}
               <div className="mb-banner-title" style={{ color: p.color }}>{p.badge}</div>
               <div className="mb-banner-sub" style={{ color: t.text2 }}>{p.text}</div>
             </div>
@@ -459,59 +591,35 @@ export default function MenuBar() {
         );
       })()}
 
-      {/* Expiring reset-card banner —— **单行、可关**（用户 2026-09-18：「太过了，喧宾夺主，
-          并且无法取消」）。
-          ★ 原来是 60px 三行 + 一颗大按钮，`CARD_WARN_DAYS = 3` 意味着它**连挂三天**且无关闭入口。
-            那颗「用卡: /usage」还**点了并不用卡**（服务端要求窗口"需要重置"才放行），只弹 toast。
-            ⇒ 一盏连亮三天、关不掉、又不能真正执行的灯 —— 本仓判过死刑的形态。
-          ★ 常驻那一半交给**卡上的 `CardBadge`**（琥珀 + 光晕 + `×3·1张3天`，本来就有），
-            横幅只在这张卡**刚进入 3 天窗口**时提醒一次；关掉之后只剩角标。
-            「怎么用卡」那句已补进角标的悬浮说明 —— 关掉横幅不丢任何信息。
-          ★ 重置卡是 **codex** 专属的东西。挂在别家档上说的是另一家的事（同主窗那条纪律）。 */}
-      {plat === "codex" && cardAlert && bannerVisible(cardAlert) && (
-        <div className="mb-banner mb-banner-slim"
-             style={{ background: "rgba(224,144,28,.1)", border: "1px solid rgba(224,144,28,.45)" }}>
-          <span className="mb-banner-icon" style={{ color: "#f2b45c" }}><IconWarn /></span>
-          <div className="mb-banner-body">
-            <div className="mb-banner-title" style={{ color: "#f2b45c" }}
-                 title={`${cardAlert.node} 共 ${cardAlert.cards} 张 · 用卡可立即把周额度重置为 100%\n`
-                        + "用法：终端运行 codex → 输入 /usage → Redeem usage limit reset\n"
-                        + "（只能在交互式 TUI 里用，且服务端要求当前周窗口“需要重置”才放行）"}>
-              {cardAlert.node} {cardAlert.cardsExpiring || 1} 张重置卡 {cardLeftText(cardAlert.cardDays ?? 0)}后作废
-            </div>
-          </div>
-          {/* ★ 关闭按钮。按**这张卡的身份**记忆（节点 + 最早到期日），
-              换了新卡会重新提醒一次 —— 「关掉这一条」≠「以后都别提醒我」。 */}
-          <span className="mb-banner-x" role="button" aria-label="关闭这条提醒"
-                title="关掉这条提醒。卡上的角标仍会常驻；换了新卡会重新提醒一次"
-                onClick={() => bannerDismiss(cardAlert)}>×</span>
-        </div>
-      )}
-
-      {/* 点行 = 弹出主界面(既有行为);hover 行尾的「切换」= 直接换号,不开主窗口(用户 2026-08-11) */}
+      {/* 点行内容 = 跳工作台总览对应 AI 档；悬停最右列长出的「切换」= 直接换号,不开主窗口 */}
       <div className="mb-list">
-        {/* ★★ 一档一份列表。三家的账号语义根本不同（逐请求换号 / 启动前换凭证 / 单号只读），
-            堆在一起时读者会拿同一套直觉去理解它们 —— 这正是分档的理由（同主窗 ProviderTabs）。 */}
+        <div key={plat} className="mb-slide" style={{ ["--dx" as string]: `${dir * 24}px`, display: "flex",
+                                                      flexDirection: "column", gap: 8 }}>
+        {merged.head && <NoticeBar head={merged.head} rest={merged.rest} open={noticeOpen}
+                                   onToggle={() => setNoticeOpen((v) => !v)} onDismiss={dismissNotice} />}
+        <div data-mb-block={plat} style={{ ["--nameW" as string]: `${nameW}px`, borderRadius: 12, background: "var(--card)",
+                      border: "1px solid var(--line)", overflow: "hidden", flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", height: 26, padding: "0 12px",
+                        fontSize: 10.5, color: "var(--tx3)", whiteSpace: "nowrap" }}>
+            <span>{blockHead}</span><span>5h · 周 · ↻ 回满</span>
+          </div>
+        {/* ★★ 一档一份列表。四家的账号语义根本不同（逐请求换号 / 只读本机 / 启动前换凭证 / 单号只读）。 */}
         {plat === "codex" && alive.map(a => (
-          /* ★★ 高亮跟着**代理**走（`last_aid`），不跟 `active`（上次 CLI 切换）——
-             逐请求轮换下 `active` 可以几天不变，而代理每个请求都在挑。
-             「下一个」与「在用」是同一个号时只标「在用」，免得一行挂两个意思重叠的角标。 */
+          /* ★★ 「在用」跟着**代理**走（`last_aid`），不跟 `active`（上次 CLI 切换）。
+             「下一个」与「在用」是同一个号时只标「在用」。 */
           <AccountRow key={a.aid} a={a} isCurrent={a.aid === inUseNode}
             isBest={mbBoard?.next?.aid === a.aid && a.aid !== inUseNode}
-            bestPct={bestPct} privacy={privacy} t={t} onSelect={() => void openMain("navigate-overview", "codex")}
-            // 当前号不给按钮:切到自己是空操作,画出来只会让人以为点了没反应。
-            // 失效号在下面那个折叠区,本来就不传。
-            onSwitch={a.aid === currentNode ? undefined
+            bestPct={bestPct} isDark={isDark} onSelect={() => openOverview("codex")}
+            // 当前号 / 在用的号不给按钮（交接包：在用的号只提亮不出按钮；切到自己是空操作）。
+            onSwitch={a.aid === currentNode || a.aid === inUseNode ? undefined
               : () => run(`switch-${a.aid}`, ["switch", a.node], `已切到 ${a.node}`)}
             switching={loadingAction === `switch-${a.aid}`} />
         ))}
 
-        {/* Gemini：一号一行、可点切换。
-            ⚠️ v4 稿这一档写的是「只读·点卡不切号」，用户 2026-09-13 明确**淘汰**了那个方式
-               （「可以切号的，按照目前 codex 的方式」），所以这里与 codex 档同构。 */}
+        {/* Gemini：一号一行、可切换（用户 2026-09-13：「可以切号的，按照目前 codex 的方式」）。 */}
         {plat === "gemini" && (agyPool.accounts.length > 0
-          ? agyPool.accounts.map(a => (
-              <AgyRow key={a.sub} t={t} color={colorOf(traffic, "agy")}
+          ? agyRows.map(({ a }) => (
+              <AgyRow key={a.sub} t={t}
                       snap={agyPool.snapshotOf(a, agySnap)} label={a.label}
                       action={agyAction(a.quota_err_reason, a.quota_err_url)}
                       plan={a.plan}
@@ -522,75 +630,105 @@ export default function MenuBar() {
                                   showToast(`已切到 ${a.label} · 下次启动 agy 生效`); }}
                       switching={agyPool.switching === a.label}
                       disabled={!!prefs.by?.agy?.off} busy={agyBusy}
-                      // ★ 点行 = 弹主界面的**总览**并停在 Gemini 档，与 codex 行同一条语义
-                      //   （用户 2026-08-11 定的方案 A：点行开主界面、换号走行上的「切换」）。
-                      //   ⚠️ 这里曾是 `navigate-platform` ⇒ 跳到 **AI 用量**的平台详情页，
-                      //      用户 2026-09-14 直接问「怎么跳到 ai 用量那里了」。
-                      onOpen={() => void openMain("navigate-overview", "gemini")} />
+                      onOpen={() => openOverview("agy")} />
             ))
-          // 池还没建起来 —— 退回原来那张只读行（`agy-rotate login --current` 之前就是这个状态）
-          : <AgyRow t={t} color={colorOf(traffic, "agy")} disabled={!!prefs.by?.agy?.off}
+          // 池还没建起来 —— 退回只读的那一行（`agy-rotate login --current` 之前就是这个状态）
+          : <AgyRow t={t} disabled={!!prefs.by?.agy?.off}
                     snap={agySnap} busy={agyBusy}
-                    // ★ 池空那一路也走总览的 Gemini 档 —— 同一档里两种点击行为
-                    //   正是用户 2026-09-14 报的那个跳转的来源。
-                    onOpen={() => void openMain("navigate-overview", "gemini")} />)}
+                    onOpen={() => openOverview("agy")} />)}
 
-        {/* grok:同款卡片、紫色左轨、无「切换」按钮。点行 = 弹主界面的 Grok 详情页。 */}
+        {/* Grok：只读，无「切换」。 */}
         {plat === "grok" && (
-          <GrokRow t={t} color={colorOf(traffic, "grok")} disabled={!!prefs.by?.grok?.off}
-                   snap={grokSnap} privacy={privacy} busy={grokBusy}
-                   // ★ 同上：点行去总览的 Grok 档，不是 AI 用量的平台详情页。
-                   onOpen={() => void openMain("navigate-overview", "grok")} />
+          <GrokRow t={t} snap={grokSnap} disabled={!!prefs.by?.grok?.off} busy={grokBusy}
+                   onOpen={() => openOverview("grok")} />
         )}
+
+        {/* Claude：一个号「本机」，不出「切换」（PLAN §4 偏离：没有 Claude 账号池后端）。 */}
+        {plat === "claude" && (
+          <ClaudeRow quota={claudeQuota} isDark={isDark} nowSec={nowSec} onOpen={() => openOverview("claude")} />
+        )}
+        </div>
 
         {plat === "codex" && dead.length > 0 && (
           <details className="mb-dead-fold">
-            <summary className="mb-dead-summary" style={{ color: t.muted, borderTop: `1px solid ${t.chromeBorder}` }}>
-              <span className="mb-dead-dot" style={{ background: STATUS_COLORS.dead }} />
+            <summary className="mb-dead-summary" style={{ color: "var(--tx3)" }}>
+              <span className="mb-dead-dot" style={{ background: "var(--bad)" }} />
               {dead.length} 个失效账号
               <span className="mb-dead-chevron">▸</span>
             </summary>
-            <div className="mb-dead-list">
+            <div style={{ ["--nameW" as string]: `${nameW}px`, borderRadius: 12, background: "var(--card)",
+                          border: "1px solid var(--line)", overflow: "hidden" }}>
               {dead.map(a => (
-                <AccountRow key={a.aid} a={a} isCurrent={a.aid === inUseNode} isBest={false} bestPct={bestPct} privacy={privacy} t={t} onSelect={() => void openMain("navigate-overview", "codex")} />
+                <AccountRow key={a.aid} a={a} isCurrent={a.aid === inUseNode} isBest={false} bestPct={bestPct} isDark={isDark} onSelect={() => openOverview("codex")} />
               ))}
             </div>
           </details>
         )}
+        </div>
       </div>
       </div>
       )}
 
-      {/* Bottom actions — 三格。第三格是唯一会花额度的,靠 ProbeButton 的琥珀+两段确认与前两格区分 */}
-      <div className="mb-actions" style={{ borderTop: `1px solid ${t.chromeBorder}` }}>
-        {actions.map((btn, i) => {
-          const isLoading = loadingAction === btn.id;
-          return (
-            <Fragment key={btn.id}>
-              {i > 0 && <span className="mb-action-divider" style={{ background: t.chromeBorder }} />}
-              <span title={btn.hint}
-                className={`mb-action-btn${isLoading ? " loading" : ""}`}
-                onClick={isLoading ? undefined : btn.action}
-                style={{ color: btn.accent ? t.accent : t.ghostText, background: btn.accent ? "rgba(45,212,191,.07)" : "transparent" }}>
-                {isLoading ? <><span className="mb-spinner" />{btn.loadingLabel}</> : <>
-                  {btn.icon && <IconRefresh />}
-                  {btn.label}
-                  {btn.badge && <span className="mb-action-badge" style={{ color: t.accentText, background: t.accent }}>{btn.badge}</span>}
-                </>}
-              </span>
-            </Fragment>
-          );
-        })}
-        {/* ★★★ 探针扣的是 **codex** 的额度。挂在 gemini 档上 = 用户看着 gemini 的卡
-            按下去、花的是另一家的钱（v4 稿 §5 明确要求只读平台隐藏它）。 */}
-        {codexActions && <span className="mb-action-divider" style={{ background: t.chromeBorder }} />}
-        {codexActions && <ProbeButton t={t} variant="menubar" label="探针"
-          hint={`对 ${alive.length} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"——token 有效但订阅到期/模型权限被撤/被限流,只有这个测得出来。⚠️ 消耗周额度(实测单次 <1%)`}
-          loading={loadingAction === "probe-all"} loadingText="探测中…"
-          onConfirm={() => run("probe-all", ["probe", "--all"], "探针 全池")} />}
+      {/* 底栏：刷新全池（免费）· 探针（计费，按住 0.6 s）/ 工作台 → · ⋯ */}
+      <div className="mb-actions" style={{ position: "relative", display: "flex", gap: 8, padding: "10px 12px",
+                                           borderTop: "1px solid var(--line)", flexShrink: 0 }}>
+        <span className="mb-foot-btn" data-mb-refresh="" onClick={refreshing ? undefined : refreshPool}
+              title={plat === "codex" ? "读取 Codex 官方额度接口(GET),不消耗额度"
+                : plat === "gemini" ? "按账号读云端额度(fetchAvailableModels),零消耗"
+                : plat === "claude" ? "重读本机的 Claude 状态栏转写,不联网"
+                : "读 grok 的账单接口,零消耗"}
+              style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                       height: 34, borderRadius: 9, background: "var(--acc)", color: "var(--accTx)", fontSize: 13,
+                       fontWeight: 600, opacity: refreshing ? .75 : 1 }}>
+          {refreshing ? <><span className="mb-spinner" />刷新中…</> : <>
+            <IconRefresh />刷新全池
+            <span style={{ fontSize: 10.5, padding: "0 5px", borderRadius: 4, background: "rgba(0,0,0,.14)" }}>免费</span>
+          </>}
+        </span>
+        <span style={{ position: "relative", width: 132, height: 34, flexShrink: 0 }}>
+          {/* ★★★ 探针扣的是 **codex** 的额度。只在 codex 档的账号 Tab 出现。 */}
+          {codexActions && <HoldProbe forceHolding={FORCE_HOLD}
+            hint={`对 ${alive.length} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"——token 有效但订阅到期/模型权限被撤/被限流,只有这个测得出来。⚠️ 消耗周额度(实测单次 <1%)`}
+            loading={loadingAction === "probe-all"}
+            onFire={() => run("probe-all", ["probe", "--all"], "探针 全池")} />}
+          {!codexActions && (
+            <span className="mb-foot-btn" data-mb-workbench=""
+                  onClick={() => tab === "today" ? void openMain("navigate-traffic") : openOverview(LOGO_OF[plat])}
+                  title={tab === "today" ? "打开工作台 · AI用量信息" : `打开工作台 · 总览的 ${MB_PLAT_LABEL[plat]} 档`}
+                  style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                           gap: 6, borderRadius: 9, border: "1px solid var(--line2)", color: "var(--tx)", fontSize: 13,
+                           fontWeight: 500 }}>
+              工作台<IconArrow />
+            </span>
+          )}
+        </span>
+        <span className="mb-foot-btn" data-mb-more="" onClick={() => setMenuOpen((v) => !v)} title="更多操作"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34,
+                       borderRadius: 9, border: "1px solid var(--line2)", color: "var(--tx2)", flexShrink: 0,
+                       background: menuOpen ? "var(--hov2)" : "transparent" }}>
+          <IconMore />
+        </span>
+        {/* ⋯ 菜单：一直在 DOM 里，只靠可见性开合（ui.md §5c）。 */}
+        <div data-mb-menu={menuOpen ? "open" : "closed"}
+             style={{ position: "absolute", right: 12, bottom: 52, minWidth: 168, padding: 4, borderRadius: 10,
+                      background: "var(--pop)", border: "1px solid var(--line2)", boxShadow: "var(--shadow)", zIndex: 40,
+                      opacity: menuOpen ? 1 : 0, transform: `translateY(${menuOpen ? 0 : 6}px)`,
+                      pointerEvents: menuOpen ? "auto" : "none", transition: "opacity 160ms, transform 220ms var(--sp)" }}>
+          {actions.map((btn) => {
+            const isLoading = !!btn.loadingLabel && loadingAction === btn.id;
+            return (
+              <div key={btn.id} className="mb-menu-item" title={btn.hint}
+                   onClick={isLoading ? undefined : () => { setMenuOpen(false); btn.action(); }}
+                   style={{ color: "var(--tx)", opacity: isLoading ? .6 : 1 }}>
+                {isLoading ? <><span className="mb-spinner" />{btn.loadingLabel}</> : btn.label}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {toast && <Toast msg={toast} t={t} />}
     </div>
   );
 }
+

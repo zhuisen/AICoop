@@ -108,7 +108,8 @@ class TheCardsRenderFromTheOrderedList(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        raw = (SRC / "App.tsx").read_text(encoding="utf-8")
+        # ★ 2026-10-19 总览重做：卡片网格从 App.tsx 搬进 `components/ov/Overview.tsx`。
+        raw = (SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
         # 剥注释 —— 本仓记过：断言撞上解释这条规则的注释会假绿/假红
         cls.code = "\n".join(
             l for l in raw.splitlines()
@@ -116,8 +117,12 @@ class TheCardsRenderFromTheOrderedList(unittest.TestCase):
             and not l.strip().startswith("/*"))
 
     def test_the_cards_render_from_the_same_list(self):
-        self.assertIn("const alive = orderedAlive", self.code,
+        self.assertIn("grid = grid0(codexShown.map((a, i) => codexCard(a, i, true)))", self.code,
                       "★★ 卡片没走排序后的列表 —— 拖完不生效")
+        self.assertIn("const codexShown = p.preview ? applyOrder(codexSorted, p.preview", self.code,
+                      "★★ 拖动中的预览顺序没接进网格")
+        self.assertRegex(self.code, r"const codexSorted = ovSort\(cMain,[\s\S]{0,200}codexMode === \"custom\" \? savedCodex : null\)",
+                         "★★ 网格没用存下来的顺序")
 
 
 class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
@@ -129,12 +134,14 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        raw = (SRC / "App.tsx").read_text(encoding="utf-8")
+        raw = (SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
         cls.code = "\n".join(l for l in raw.splitlines()
                               if not l.strip().startswith(("//", "*", "/*")))
+        app = (SRC / "App.tsx").read_text(encoding="utf-8")
+        cls.app = "\n".join(l for l in app.splitlines() if not l.strip().startswith(("//", "*", "/*")))
 
     def test_gemini_cards_render_from_the_ordered_list(self):
-        self.assertIn("orderedAgy.map(", self.code,
+        self.assertIn("agyShownList.map((a, i) => agyCard(a, i, true))", self.code,
                       "★ Gemini 卡片没走排序后的列表")
 
     def test_grok_gets_no_handle(self):
@@ -154,11 +161,14 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
         """
         self.assertIn('"priority", "--set"', self.code,
                       "★★★ codex 档没把顺序写进 state.json —— 拖了不影响轮换")
-        self.assertIn('applyOrder(aliveByLabel, state.pick_order', self.code,
+        # ★ 读 `card_order`（`priority --set` 写的键，codex-rotate 里 2026-09 改过名），旧键 `pick_order` 兜底。
+        #   2026-10-19 前这里只读 `pick_order` ⇒ 拖完写进了 `card_order`，重开 app 又按旧顺序画。
+        self.assertIn('const savedCodex = p.state.card_order ?? p.state.pick_order', self.code,
                       "★★★ codex 档没从 state.json 读顺序 —— 会与代理分叉")
-        self.assertIn('setOrderFor("gemini"', self.code,
+        self.assertIn('p.setAgyOrder(next)', self.code, "★ gemini 档的拖拽没写顺序")
+        self.assertIn('setAgyOrder={(ids) => setOrderFor("gemini", ids)}', self.app,
                       "★ gemini 档仍该留在 localStorage")
-        self.assertNotIn('setOrderFor("codex"', self.code,
+        self.assertNotIn('setOrderFor("codex"', self.app,
                          "★★ codex 档不该再写 localStorage —— 那会变成第二个真源")
 
 
@@ -179,8 +189,10 @@ class DraggingDoesNotBreakClickToSelect(unittest.TestCase):
         self.assertIn("onClick={(e) => e.stopPropagation()}", self.handle)
 
     def test_without_the_drag_prop_no_handle_is_rendered(self):
+        # 2026-10-19：手柄画在共用的 `ov/OvCard`（两种卡同一个），AccountCard 只把 `drag` 透传下去。
+        ov = (SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
         self.assertIn("drag?: DragWiring", self.card, "drag 必须是可选 prop")
-        self.assertIn("{drag && <DragHandle", self.card, "没有 drag 时不该渲染手柄")
+        self.assertIn("{p.drag && (\n        <span className=\"ov-drag\">\n          <DragHandle", ov, "没有 drag 时不该渲染手柄")
 
 
 class ItUsesPointerEventsNotHtml5Dnd(unittest.TestCase):
@@ -232,8 +244,9 @@ class ItUsesPointerEventsNotHtml5Dnd(unittest.TestCase):
                       "★★ Esc 没接通 —— 自定义 pointer 拖拽不会自动收到 pointercancel")
 
     def test_cards_expose_an_aid_for_hit_testing(self):
-        self.assertIn("data-aid={a.aid}", self.card,
-                      "★ 没有 data-aid，命中测试找不到落点")
+        ov = (SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
+        self.assertIn("data-aid={p.id}", ov, "★ 没有 data-aid，命中测试找不到落点")
+        self.assertIn("<OvCard id={a.aid}", self.card, "★ codex 卡的 data-aid 不是 aid")
 
 
 class TheDragIsSmooth(unittest.TestCase):
@@ -296,9 +309,15 @@ class TheDragIsSmooth(unittest.TestCase):
 
     def test_transform_is_not_in_the_css_transition_of_the_card(self):
         """★★★ 留着它，「清空后立刻量位置」会量到过渡中间值（实测 1437 vs 685）。"""
-        i = self.card.index("transition: \"background")
-        self.assertNotIn("transform", self.card[i:i + 160],
-                         "★★★ transform 回到了卡片的 CSS transition 里")
+        # 2026-10-19：卡片外壳的过渡在 `ov/overview.css` 的 `.ov-card { … }` 规则里。
+        css = (SRC / "components" / "ov" / "overview.css").read_text(encoding="utf-8")
+        i = css.index(".ov-card {")
+        rule = css[i:css.index("}", i)]
+        self.assertIn("transition:", rule, "★ 已知阳性：.ov-card 规则里应有 transition（找错规则了）")
+        self.assertNotIn("transform", rule, "★★★ transform 回到了卡片的 CSS transition 里")
+        self.assertNotIn("transform", (SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
+                         .split("export function OvCard(")[1].split("data-ov-foot")[0],
+                         "★★★ React 在卡片外壳上写 transform")
 
     def test_the_shift_animation_is_a_css_transition(self):
         self.assertIn("transform ${FLIP_MS}ms ${EASING}", self.code,

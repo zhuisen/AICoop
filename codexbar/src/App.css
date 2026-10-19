@@ -34,41 +34,6 @@ body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-se
    ★ 触发靠调用方给 wrapper 传 `key={数据集身份}`（同图表 key 的判据）。**不能用数据当身份** ——
      `useTraffic` 每 2 分钟自动刷新，那样会让你正在读的时候突然重播一次。
    ★ 关掉动效的人要的是「没有」，不是「快一点」。 */
-/* 卡片动作条的入场（用户 2026-09-21：「弹出动态效果要好看自然贴切 codexbar 风格」）。
-   ★ 它**从卡片底边升起来** —— 所以是 `translateY(+8px)` 而不是复用 `cbFadeIn`
-     那条从上方落下的（方向与浮层实际出现的位置相反，看着像"掉进来"而不是"升起来"）。
-   ★ 时长与缓动**沿用仓里既有的那套**，不新发明：`.18s` 落在本仓 `.15s`(hover) 与
-     `.2s`(页面淡入) 之间；缓动与 `cbWipe` 同一条 `cubic-bezier(.22,.61,.36,1)`
-     —— 前快后缓，收尾不回弹，与"仪表"的克制一致（弹性/回弹属于另一种语言）。
-   ★ `scale(.985)` 而不是更小：浮层贴着卡片边缘，缩太多会先"缩进卡里"再撑开，
-     那是两段运动；只要一点点就够读出"它是新出现的"。 */
-@keyframes cbRise { from { opacity:0; transform: translateY(6px) scale(.99); }
-                    to   { opacity:1; transform: none; } }
-/* ★ `transform-origin: bottom` 是这次微调里**唯一有实质差别**的一条：浮层贴着卡片
-   底边，缩放却从中心长开 ⇒ 顶边和底边同时往外推，看着像"膨胀"而不是"从底边升起"。
-   把原点钉在底边之后，底边不动、只有上沿抬起来，与它实际锚定的位置一致。
-   ★ 另两处是收敛：位移 8→6px、缩放 .985→.99 —— 原来的幅度在 45px 高的条上偏大，
-     眼睛会先看见"动"再看见"内容"。 */
-.cb-actions { animation: cbRise .16s cubic-bezier(.22,.61,.36,1) both;
-              transform-origin: bottom; }
-/* ★ 本仓每条动画都带这一行：系统开了「减弱动态效果」就必须直接到位。 */
-@media (prefers-reduced-motion: reduce) { .cb-actions { animation: none; } }
-/* ★ 收回 = 入场倒放（用户 2026-09-23 从 demo 选 A）：往下沉 6px、缩到 .99、淡出。
-   ease-in（先慢后快）—— 退场要「干脆地走」，与入场的 ease-out（快进慢停）正好镜像。
-   时长不写在这里：由 AccountCard 从 `CARD_ACTIONS_EXIT_MS` 内联注入（一个数一个家）。 */
-@keyframes cbSink { from { opacity:1; transform: none; }
-                    to   { opacity:0; transform: translateY(6px) scale(.99); } }
-.cb-actions.cb-actions-leaving { animation-name: cbSink;
-                                 animation-timing-function: cubic-bezier(.4,0,1,1); }
-@media (prefers-reduced-motion: reduce) { .cb-actions.cb-actions-leaving { animation: none; } }
-/* 倒计时细线。时长同样由组件从 `CARD_ACTIONS_LIFE_MS` 注入。
-   ★ 「减弱动态效果」下**保留**：它是进度指示不是装饰（WCAG 2.3.3 对表达必要信息的动效
-     是豁免的），关掉它就等于把「要收了」这条信息关掉。它也只是匀速缩短，没有位移与缩放。 */
-@keyframes cbTick { from { transform: scaleX(1); } to { transform: scaleX(0); } }
-.cb-actions-tick { position: absolute; left: 9px; right: 9px; bottom: 0; height: 2px;
-                   border-radius: 1px; opacity: .55; transform-origin: left;
-                   animation-name: cbTick; animation-timing-function: linear;
-                   animation-fill-mode: both; pointer-events: none; }
 @keyframes cbWipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 .cb-wipe { animation: cbWipe .7s cubic-bezier(.22,.61,.36,1) both; }
 @media (prefers-reduced-motion: reduce) { .cb-wipe { animation: none; } }

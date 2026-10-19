@@ -128,11 +128,19 @@ class TheFrontendKeepsTheBucket(unittest.TestCase):
                          "★ 没有数的桶要落成 null（读不到），不是默认值")
 
     def test_both_surfaces_render_a_dash_with_the_shared_reason(self):
-        for f in ("components/AgyCard.tsx", "components/AgyRow.tsx"):
+        # ★ 2026-10-19（交接包 4f）：菜单栏行的外形搬进 `mb/QuotaRow`，AgyRow 只把这句原因作为格子的
+        #   `title` 交下去（对象字段 `title:`），QuotaRow 负责画 `—` 并挂上 `title={w.title}`。
+        # 总览卡 2026-10-19 起也是把原因作为格子的 `title:` 交给 `ov/OvCard::OvWinRow`（它挂 `title={w.title}`、画 `—`）。
+        for f, needle in (("components/AgyCard.tsx", "title: row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE"),
+                          ("components/AgyRow.tsx", "title: row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE)")):
             with self.subTest(f=f):
-                code = ts_code(f)
-                self.assertIn("title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE)", code,
-                              "★ 读不到的那一行没说出原因（两个 surface 共用一句）")
+                self.assertIn(needle, ts_code(f), "★ 读不到的那一行没说出原因（两个 surface 共用一句）")
+        q = ts_code("components/mb/QuotaRow.tsx")
+        self.assertIn("title={w.title}", q, "★ QuotaRow 没把原因挂到那一格上")
+        self.assertRegex(q, r'w\.pct == null \? "—"', "★ QuotaRow 读不到时没画 —")
+        ov = ts_code("components/ov/OvCard.tsx")
+        self.assertIn("title={w.title}", ov, "★ 总览卡的窗口行没把原因挂到那一格上")
+        self.assertRegex(ov, r'w\.pct == null \? "—"', "★ 总览卡读不到时没画 —")
 
 
 if __name__ == "__main__":

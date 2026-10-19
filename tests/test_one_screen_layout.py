@@ -50,7 +50,9 @@ CARDS_JS = """() => {
   const top = sc.getBoundingClientRect().top;
   const rs = [...g.children].map(c => c.getBoundingClientRect());
   const rowBottoms = [...new Set(rs.map(r => Math.round(r.bottom - top)))].sort((a, b) => a - b);
-  return {n: rs.length, h: Math.round(rs[0].height), visible: sc.clientHeight,
+  const root = document.querySelector('.ov-root');
+  return {n: rs.length, h: Math.round(rs[0].height), visible: sc.clientHeight, oy: getComputedStyle(sc).overflowY,
+          rows: rowBottoms.length, root: root ? root.scrollHeight - root.clientHeight : null,
           fullRows: rowBottoms.filter(b => b <= sc.clientHeight + 1).length,
           name: g.querySelector('[data-card-name]') && parseFloat(getComputedStyle(g.querySelector('[data-card-name]')).fontSize)};
 }"""
@@ -149,14 +151,25 @@ class OneScreenDashboard(unittest.TestCase):
         self.assertEqual(set(k["sub"]), {11}, "★ 小字 11px 是定稿（9px 时用户报过「没看到」）")
         self.assertEqual(set(self._kpi("traffic:big")["value"]), {29}, "大窗口下应保持原字号")
 
-    def test_overview_cards_shrink_only_in_small_windows(self):
-        """用户 2026-10-14：「最小尺寸下，总览页面里面的账号卡片要缩小」。"""
+    def test_overview_cards_stay_148_and_the_box_scrolls(self):
+        """★ 2026-10-19 **作废并改写**（PLAN §4 F5 · 需用户确认）。
+
+        原判据（用户 2026-10-14「最小尺寸下，总览页面里面的账号卡片要缩小」）：860×560 下
+        卡片换紧凑型、完整露出两排。交接包 page5 改成**卡片定高 148、任何宽度不变**（§5「卡片等高 148」），
+        `useCardType` / `CARD_TYPE_COMPACT` 随旧卡一起删除。两者不能同时成立：
+        实测 860×560 卡片区可见 270px，两排要 308px —— 第二排露出 110/148（74%）。
+
+        守的仍是「一屏仪表盘」那条底线：页面根不滚、卡片区自己滚、第二排至少露出 2/3（看得出下面还有）；
+        大窗口一屏放得下全部。"""
         lo, hi = self.r["home:min"]["cards"], self.r["home:big"]["cards"]
         self.assertIsNotNone(lo, "总览卡片没渲染")
         self.assertGreaterEqual(lo["n"], 4, "夹具卡片太少，证不到两排")
-        self.assertGreaterEqual(lo["fullRows"], 2, f"860×560 下只完整露出 {lo['fullRows']} 排（卡高 {lo['h']}px）")
-        self.assertLess(lo["h"], hi["h"])
-        self.assertEqual(hi["name"], 16.5, "大窗口下卡片仍是 D 档字号")
+        self.assertEqual({lo["h"], hi["h"]}, {148}, "★★ 卡片不是定高 148（交接包 §5）")
+        self.assertGreaterEqual(lo["fullRows"], 1)
+        self.assertGreaterEqual(lo["visible"] - 148 - 12, 148 * 2 / 3, "★ 860×560 下第二排露出不到 2/3 —— 看不出下面还有")
+        self.assertIn(lo["oy"], ("auto", "scroll"), "★★ 卡片区不滚 —— 装不下的那排被裁掉")
+        self.assertLessEqual(lo["root"], 1, "★★ 总览页面根在滚")
+        self.assertEqual(hi["fullRows"], hi["rows"], "大窗口下应一屏放下全部卡片")
 
     def test_below_the_minimum_it_wraps_instead_of_clipping(self):
         k = self._kpi("traffic:narrow")

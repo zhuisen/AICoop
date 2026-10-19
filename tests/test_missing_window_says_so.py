@@ -49,7 +49,8 @@ class NoWindowRowIsSilentlyBlank(unittest.TestCase):
     #: 窗口行的渲染入口。判据要切到**这一段**，不能整文件扫 ——
     #: `AgyCard` 的**动作条**也用 `visibility: hidden` 占位（那是对的：兄弟卡要等高），
     #: 整文件断言会把它一起判红（实测假红一次）。
-    ROW_ENTRY = {"AgyCard": "slotRows.map", "AgyRow": "MB_WIN_SLOTS.map",
+    # 2026-10-19：总览卡的窗口行由 `toWin()` 生成、交给共用外壳 `ov/OvCard::OvWinRow` 画。
+    ROW_ENTRY = {"AgyCard": "const toWin = ", "AgyRow": "MB_WIN_SLOTS.map",
                  "GrokCard": "slotRows.map", "GrokRow": "className=\"mb-row-meta\""}
 
     def _rows_region(self, name):
@@ -69,7 +70,9 @@ class NoWindowRowIsSilentlyBlank(unittest.TestCase):
     #: ★ 判据因此改成「**这一行上有没有一个能读的结论**」，而不是某个字符。
     #:   上一版钉的是字面 `↻—`，于是把 `—` 换成更清楚的中文时**闸自己红了**，
     #:   而语义是变好的 —— 逐字匹配守的是"代码长什么样"，不是"用户看不看得懂"。
-    SAYS = {"AgyCard": ("这次没读到",), "AgyRow": ("↻—",)}
+    #: ★ 2026-10-19（交接包 4f）：菜单栏行的外形搬进 `mb/QuotaRow`。AgyRow 给缺失格 `refill: "—"`，
+    #:   QuotaRow 统一画成 `—` + `↻—` 并**照样画条槽**（高度判据见下面那条测试的 AgyRow 分支）。
+    SAYS = {"AgyCard": ("这次没读到",), "AgyRow": ('refill: "—"',)}
 
     def test_every_component_can_render_a_dash(self):
         """★ 正面：四处都必须有那个缺失行。只验"没有隐藏行"的话，
@@ -86,6 +89,32 @@ class NoWindowRowIsSilentlyBlank(unittest.TestCase):
         判据：缺失分支里仍然画着**标签 + 条槽**。★ 条槽是高度的来源，所以它是这条闸的核心；
         2026-09-14 我一度把它删掉（想给中文腾地方），这条闸当场红 —— 红得对。"""
         for name, p in TARGETS.items():
+            if name == "AgyRow":
+                # ★ 条槽现在由 QuotaRow 的 `Cell` 画：读不到（`pct == null`）的格子走的是**同一段 JSX**，
+                #   条槽那个 span 不受 `pct` 条件控制。判据打在 `Cell` 函数体上：过了「这家没有这个窗口」
+                #   那条 early-return 之后，条槽必须无条件出现，且读不到时只是把填充宽度算成 0。
+                with self.subTest(component=name):
+                    q = code(C / "mb" / "QuotaRow.tsx")
+                    body = q[q.index("function Cell("):]
+                    after = body[body.index("if (!w) {"):]
+                    after = after[after.index("}\n") + 2:]
+                    self.assertIn('background: "var(--track)"', after, "★★ 缺失格没有条槽 —— 高度对不齐")
+                    self.assertIn("w.pct == null ? 0", after, "★★ 缺失格的条槽不是空槽")
+                    self.assertIn("↻{w.refill}", after, "★ 缺失格没写 ↻—")
+                continue
+            if name == "AgyCard":
+                # ★ 2026-10-19：缺失格交给 `OvWinRow` 画：条槽那个 span **不受 pct 条件控制**，填充才受。
+                with self.subTest(component=name):
+                    c = code(p)
+                    self.assertRegex(c, r'if \(!row\) return \{ label: lbl, pct: null, reset: "", kind, absent: true, note: "没读到"',
+                                     "★★ 缺失格没有交给窗口行去画（或没写「没读到」）")
+                    ov = code(C / "ov" / "OvCard.tsx")
+                    body = ov[ov.index("export function OvWinRow("):]
+                    body = body[:body.index("\n}\n")]
+                    i = body.index('background: "var(--track)"')
+                    self.assertNotIn("w.pct != null", body[max(0, i - 200):i], "★★ 条槽被 pct 条件包住了 —— 缺失格没有槽")
+                    self.assertIn("{w.pct != null && (", body[i:], "★ 填充应只在有数时画")
+                continue
             with self.subTest(component=name):
                 c = code(p)
                 # ⚠️ 锚点要落在**渲染那一段**里。文案同时出现在 `missTitle` 里，
@@ -134,6 +163,10 @@ class GrokShowsOnlyItsOwnWindow(unittest.TestCase):
     三版都是在给**一件根本不存在的东西**找一种体面的画法，而它每一版都让用户
     再问一次「我的 5h 额度呢」。**最后的答案是不画。**
 
+    ⚠️ **2026-10-19 被交接包 page5 改写**：「只有周额度的平台 5h 显示 — 占位」（总览卡 148 定高，
+      五个槽位固定，空着一槽反而不齐）。所以总览卡的 5h 槽现在画「—」+ 悬浮「xAI 只有周额度」；
+      菜单栏行仍不画。不变的是这条闸守的那半：**不按 winSlots 去补别家的窗口**（PLAN §4）。
+
     ⚠️ 对齐**不靠这条闸保证** —— 条形区由 `flex:1` 的留白压在卡片底边，末行对齐。
       那是像素问题，判据在 `sweep.py` 的跨卡对齐检查（`data-cards-grid` 按排比较），
       不是这里。**别在这个文件里用静态断言去"证明"对齐。**
@@ -148,7 +181,7 @@ class GrokShowsOnlyItsOwnWindow(unittest.TestCase):
 
     def test_grok_card_takes_no_winslots_prop(self):
         """★ 连 prop 一起删，不留骨架（本仓规矩：删版块就连组件本体一起删）。"""
-        app = code(ROOT / "codexbar" / "src" / "App.tsx")
+        app = code(ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx")   # 2026-10-19 起调用点在这
         i = app.index("<GrokCard")
         self.assertNotIn("winSlots", app[i:i + 400],
                          "★ 调用点还在传 winSlots —— 死 prop 会让下一个人以为它还有用")
@@ -158,7 +191,8 @@ class GrokShowsOnlyItsOwnWindow(unittest.TestCase):
         只验"没有 winSlots"的话，把整块条形区删掉也能变绿。"""
         for name, path in GROK.items():
             with self.subTest(component=name):
-                self.assertIn("GROK_WIN" if name == "GrokCard" else "周", code(path),
+                # 2026-10-19：GrokCard 的周行是外壳的 ⑤ 槽 `ww`（5h 槽按交接包画 — 占位，见 PLAN §4）。
+                self.assertIn('ww={{ label: "周", pct: rem' if name == "GrokCard" else "周", code(path),
                               f"★★ {name} 连周窗口都不画了")
 
 

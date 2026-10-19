@@ -1,48 +1,40 @@
-"""卡片动作条的 macOS 半透明磨砂材质 —— **按它盖住了什么**量对比度（真实渲染、真实像素）。
+"""卡片操作栏看得清（真实渲染，两套主题）。
 
-## 起因（用户 2026-09-23）
+## 历史（为什么这个文件名还叫 action_bar）
 
-「结合 macOS 的风格，弹出的功能样式加个透明度会比较好」。动作条从 .97 近乎不透明，
-改成 macOS 菜单/弹层那种半透明 + 大半径模糊 + 提饱和。
+2026-09-23 用户要「macOS 风格的半透明弹出动作条」，这里原来量的是**半透明 + 背景模糊**的浮层
+压在卡片上之后的像素对比度（模糊让色值算法失效，所以必须量像素；量出来深色 4.08 / 浅色 4.93）。
 
-## ★★ 为什么必须量像素，不能拿色值算
+2026-10-19 总览照交接包 page5 重做：**动作条浮层整个删除**，换成「悬停时底栏原位换成操作」
+（`ov/OvCard` 的 `.ov-fact`）。新底栏是**不透明**的（卡片悬停底色 `--ovCardH`），所以那套像素量法
+失去了存在理由 —— 不透明底上 computed 颜色直接算对比度就是对的。`-webkit-backdrop-filter` 那条
+也随之作废（没有模糊了）。守的仍是同一件事：**操作里的每一个字在两套主题下都看得清**。
 
-本仓规矩：「半透明浮层的对比度取决于它盖住了什么，不取决于它自己的颜色」。
-但**把 alpha 合成一下**也不够 —— 那个模型不计模糊：一条 5px 高的进度条经 20px 高斯模糊后
-只剩约 1/10 的强度，按「整片都是那条青色」算出来的 1.92 是个毫无意义的上界。
-反过来，**完全不透明的对照组也只有 3.90** —— 最差的像素 `(46,51,58)` 是按钮描边的抗锯齿，
-不是背景。两种错法都会让判据指向错误的原因。所以这里：
-  · 用真浏览器渲染（含 backdrop 模糊），逐张卡打开动作条，截图；
-  · 只取**动作条背景**的像素（子元素外扩 3px、四边内缩 3px，排除描边与抗锯齿）；
-  · 取第 1 百分位（去孤点），8 张卡里最差的那张。
+## 判据
 
-## 判据与实测（2026-09-23，`scratch/measure_action_bar_material_20260923.py`）
-
-| | 完全不透明（对照） | 选定材质 @.66 | 门槛 |
-|---|---|---|---|
-| 深色 · 卡同色 · 灰色图标（muted） | 4.55 | **4.08** | 3.0（非文字） |
-| 浅色 · 白     · 灰色图标（muted） | 5.43 | **4.93** | 3.0（非文字） |
-
-深色下灰色**文字**（门槛 4.5）在任何有意义的透明度下都压不住（.80 也只有 4.29），
-所以动作条里唯一一段灰字「取消」改用二级文字色 `text2`（深 7.42 / 浅 7.01）。
-
-⚠️ **第一轮浅色数字是错的**（.68 → 2.64、.80 → 3.55）：切主题用了 `localStorage.codexbar_theme`
-—— 那是**菜单栏**的键，主窗口主题不持久化、只认点太阳图标 ⇒ 浅色那列量的是「白条压在深色界面上」。
-数字看着合理（浅色掉得比深色多，还能编出「透出来的是深色字」的解释），所以没人怀疑前提。
-现在 `test_the_theme_really_switched` 先核实卡片底色真的变白，再量。
-
-★ 双向：既要**够透**（否则就是悄悄把用户要的效果退回去），又要**看得清**。
+- 普通按钮文字、琥珀「探针」、红色删除类：对悬停底色 ≥ 4.5（文字）。
+- 主按钮（「切换」，实心 accent）：反白文字对 accent ≥ 4.5。
+- 先正面证明主题真的切了、按钮真的看得见（零渲染会让所有对比度断言空转）。
 """
-import io
+try:
+    from . import _isolation  # noqa: F401
+except ImportError:
+    import _isolation  # noqa: F401
+import re
 import unittest
+import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-HARNESS = "http://127.0.0.1:3304/harness.html?nav=home"
+BASE = "http://127.0.0.1:3304/harness.html?nav=home&notrans=1&ovhover=1"
 
-MUTED = {"dark": (0x79, 0x83, 0x90), "light": (0x60, 0x6B, 0x77)}
-TEXT2 = {"dark": (0xAA, 0xB3, 0xC0), "light": (0x4D, 0x56, 0x63)}
+
+def _rgb(s):
+    m = re.match(r"rgba?\(([^)]*)\)", s or "")
+    if not m:
+        return None
+    v = [float(x) for x in m.group(1).split(",")]
+    return v[:3], (v[3] if len(v) == 4 else 1.0)
 
 
 def _lum(c):
@@ -56,144 +48,72 @@ def _cr(a, b):
 
 
 def _measure():
-    """→ {theme: {"muted": 最差, "text2": 最差, "alpha": 背景 alpha, "blur": 有无模糊, "cards": n}}"""
     try:
         from playwright.sync_api import sync_playwright
-        from PIL import Image
-    except ImportError:
-        return None
-    import urllib.request
-    try:
-        urllib.request.urlopen(HARNESS, timeout=2).read(1)
+        urllib.request.urlopen("http://127.0.0.1:3304/harness.html", timeout=2).read(1)
     except Exception:
         return None
     out = {}
     with sync_playwright() as p:
-        br = p.chromium.launch(executable_path=CHROME, headless=True)
+        br = p.chromium.launch(executable_path=CHROME, headless=True, args=["--use-mock-keychain"])
         for theme in ("dark", "light"):
-            ctx = br.new_context(viewport={"width": 1300, "height": 900}, device_scale_factor=2)
-            pg = ctx.new_page()
-            pg.goto(HARNESS)
+            pg = br.new_page(viewport={"width": 1300, "height": 900})
+            pg.goto(BASE + ("&theme=light" if theme == "light" else ""), timeout=30000)
             pg.wait_for_timeout(2600)
-            # ★★ 主窗口的主题**不持久化**（`useState("dark")`），只能点标题栏的太阳图标。
-            #   第一版写的是 `localStorage.codexbar_theme` —— 那是**菜单栏**的键，主窗口不认 ⇒
-            #   「浅色」那一档量的其实是深色界面（背景 alpha 读出来是 .66 而不是 .80，
-            #   text2 只有 2.11），整列数字作废。所以切完**先正面核实卡片真的变白了**再量。
-            if theme == "light":
-                pg.evaluate("""() => { const c=[...document.querySelectorAll('svg circle[r="4.2"]')]
-                    .map(e=>e.closest('span')).find(Boolean); if (c) c.click(); }""")
-                pg.wait_for_timeout(500)
-            # ★ 取**全部**卡片：第一张常是「当前 / 下一个」，带青色底（两档都是），只看它会随数据假红（2026-10-16）。
-            card_bg = " | ".join(pg.evaluate(
-                "[...document.querySelectorAll('[data-aid]')].map(e => getComputedStyle(e).backgroundColor)"))
-            out.setdefault("_card_bg", {})[theme] = card_bg
-            n = pg.evaluate("document.querySelectorAll('[data-aid]').length")
-            worst = {"muted": 99.0, "text2": 99.0}
-            meta = {}
-            for i in range(n):
-                pg.evaluate(f"document.querySelectorAll('[data-aid]')[{i}].click()")
-                pg.wait_for_timeout(450)       # 入场 160ms 放完
-                geo = pg.evaluate("""() => { const b=document.querySelector('[data-actions]'); if(!b) return null;
-                    const r=b.getBoundingClientRect(), cs=getComputedStyle(b);
-                    return {r:[r.left,r.top,r.right,r.bottom], bg:cs.backgroundColor,
-                            blur:(cs.backdropFilter||cs.webkitBackdropFilter||''),
-                            kids:[...b.children].map(e=>{const q=e.getBoundingClientRect();
-                                                         return [q.left,q.top,q.right,q.bottom]})} }""")
-                if not geo:
-                    continue
-                meta = {"bg": geo["bg"], "blur": geo["blur"]}
-                L, T, R, B = geo["r"]
-                img = Image.open(io.BytesIO(pg.screenshot(
-                    clip={"x": L, "y": T, "width": R - L, "height": B - T}))).convert("RGB")
-                px = []
-                for y in range(6, img.height - 6):
-                    for x in range(6, img.width - 6):
-                        gx, gy = L + x / 2, T + y / 2
-                        if any(k[0] - 3 <= gx <= k[2] + 3 and k[1] - 3 <= gy <= k[3] + 3
-                               for k in geo["kids"]):
-                            continue
-                        px.append(img.getpixel((x, y)))
-                for key, col in (("muted", MUTED[theme]), ("text2", TEXT2[theme])):
-                    s = sorted(_cr(col, c) for c in px)
-                    if s:
-                        worst[key] = min(worst[key], s[len(s) // 100])
-                pg.evaluate(f"document.querySelectorAll('[data-aid]')[{i}].click()")
-                pg.wait_for_timeout(250)
-            import re
-            m = re.match(r"rgba?\(([^)]*)\)", meta.get("bg", ""))
-            parts = [float(v) for v in m.group(1).split(",")] if m else []
-            out[theme] = {**worst, "alpha": parts[3] if len(parts) == 4 else 1.0,
-                          "blur": meta.get("blur", ""), "cards": n}
-            ctx.close()
+            out[theme] = pg.evaluate("""() => {
+              const card = document.querySelector('.ov-card.ov-hov');
+              if (!card) return null;
+              const fact = card.querySelector('[data-ov-actions]');
+              const bg = getComputedStyle(card).backgroundColor;
+              const btns = [...fact.querySelectorAll('.ov-ab')].map(b => {
+                const cs = getComputedStyle(b);
+                return { t: b.textContent.trim(), cls: b.className, color: cs.color, bg: cs.backgroundColor,
+                         op: +getComputedStyle(fact).opacity, w: b.getBoundingClientRect().width };
+              });
+              return { bg, btns, pageBg: getComputedStyle(document.querySelector('.ov-root')).color };
+            }""")
+            pg.close()
         br.close()
     return out
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
-class TheTranslucentBarStaysReadable(unittest.TestCase):
+class TheHoverFooterStaysReadable(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.r = _measure()
         if cls.r is None:
-            raise unittest.SkipTest("没有 playwright/PIL，或 harness 静态服务（3304）没在跑")
-        cls._bg = cls.r.pop("_card_bg", {})
-
-    def test_the_theme_really_switched(self):
-        """★★★ 前提：两档真的是两个主题。第一版切主题的方法是错的，「浅色」量的是深色界面。"""
-        bg = self.r.pop("_card_bg", {}) if "_card_bg" in self.r else self.__class__._bg
-        self.assertIn("255, 255, 255", bg.get("light", ""), f"★★★ 浅色档的卡片不是白的：{bg}")
-        self.assertNotIn("255, 255, 255", bg.get("dark", ""), f"★★ 深色档的卡片是白的：{bg}")
+            raise unittest.SkipTest("没有 playwright 或 harness 3304 没起 —— skip 不是绿")
 
     def test_it_measured_something(self):
-        """★★ 先证它**量到了** —— 0 张卡时下面的「最差值」恒为初值 99，白绿。"""
-        for theme, d in self.r.items():
+        for theme in ("dark", "light"):
             with self.subTest(theme=theme):
-                self.assertGreaterEqual(d["cards"], 3, f"★★ {theme} 只找到 {d['cards']} 张卡")
-                self.assertLess(d["muted"], 99, "★★ 一个像素都没量到")
+                d = self.r[theme]
+                self.assertIsNotNone(d, "★★ 没有悬停态的卡（ovhover 没生效）")
+                self.assertGreaterEqual(len(d["btns"]), 3, "★★ 底栏操作没渲染出来：%s" % d)
+                self.assertTrue(all(b["op"] > .9 and b["w"] > 0 for b in d["btns"]), "★★ 操作看不见")
 
-    def test_it_is_actually_translucent(self):
-        """★★ 反向：必须**真的半透明且带模糊** —— 为了过对比度把它悄悄改回不透明，
-        等于撤销用户要的效果，而页面一切「正常」。"""
-        for theme, d in self.r.items():
-            with self.subTest(theme=theme):
-                self.assertLessEqual(d["alpha"], .85, f"★★ {theme} 背景 alpha={d['alpha']}，不透明了")
-                self.assertIn("blur(", d["blur"], f"★★ {theme} 没有背景模糊：{d['blur']!r}")
+    def test_the_theme_really_switched(self):
+        dark, light = _rgb(self.r["dark"]["bg"])[0], _rgb(self.r["light"]["bg"])[0]
+        self.assertLess(_lum(dark), .1, "深色主题的卡片底不是深色")
+        self.assertGreater(_lum(light), .7, "★★ 浅色主题没切过去 —— 下面量的浅色是假的")
 
-    def test_icons_clear_the_non_text_floor(self):
-        """★★★ 灰色图标描边在最差的那张卡上 ≥ 3.0（WCAG 非文字元素）。"""
-        for theme, d in self.r.items():
-            with self.subTest(theme=theme):
-                self.assertGreaterEqual(d["muted"], 3.0,
-                                        f"★★★ {theme} 灰色图标对比度 {d['muted']:.2f} < 3.0")
+    def test_the_footer_is_opaque(self):
+        """★ 新底栏不透明 —— 这是下面「直接拿 computed 颜色算」成立的前提，所以单独守。"""
+        for theme in ("dark", "light"):
+            self.assertEqual(_rgb(self.r[theme]["bg"])[1], 1.0, "★★ %s 卡片底是半透明的，色值算法不再成立" % theme)
 
-    def test_the_only_grey_text_uses_text2_and_clears_4_5(self):
-        """★★ 动作条里唯一一段灰字「取消」必须用 `text2`，且 ≥ 4.5。
-
-        muted 在深色透明材质下压不住 4.5（.80 也只有 4.29），所以换了一级；
-        这里双向守：换回 muted 的源码要红，text2 本身在最差底色上也要过线。
-        """
-        for name in ("AccountCard.tsx", "AgyCard.tsx"):
-            src = (ROOT / "codexbar" / "src" / "components" / name).read_text(encoding="utf-8")
-            # ★ 取到**这个 span 自己的开标签**为止，不用定长切片（2026-10-16：样式一变长，
-            #   160 字的窗口就够不到 `color` 那一段，闸假红；反过来也可能滑进上一个元素假绿）。
-            #   确认态多了一段灰字「删除 X？」（`data-confirm-delete`），同一条要求。
-            i = src.index(">取消</span>")
-            tag = src[src.rindex("<span", 0, i):i]
-            j = src.index("data-confirm-delete")
-            prompt = src[j:src.index(">", src.index("}}", j))]
-            with self.subTest(card=name):
-                self.assertIn("color: t.text2", tag, f"★★ {name} 的「取消」不是 text2 —— 半透明下灰字压不住 4.5")
-                self.assertIn("color: t.text2", prompt, f"★★ {name} 的「删除 X？」不是 text2")
-        for theme, d in self.r.items():
-            with self.subTest(theme=theme):
-                self.assertGreaterEqual(d["text2"], 4.5,
-                                        f"★★ {theme} text2 在最差底色上只有 {d['text2']:.2f}")
-
-    def test_webkit_prefix_is_there_for_wkwebview(self):
-        """★ CodexBar 跑在 WKWebView 里；只写标准属性在较老的 macOS 上整条被忽略，
-        而 harness 用 Chrome、两种都认 —— 这个缺口在渲染闸里**看不出来**，只能静态守。"""
-        src = (ROOT / "codexbar" / "src" / "components" / "CardActionBar.tsx").read_text(encoding="utf-8")
-        self.assertIn("WebkitBackdropFilter:", src, "★ 少了 WebkitBackdropFilter —— 真机上可能不模糊")
+    def test_every_label_clears_4_5(self):
+        for theme in ("dark", "light"):
+            bg = _rgb(self.r[theme]["bg"])[0]
+            for b in self.r[theme]["btns"]:
+                if not b["t"]:
+                    continue                      # 纯图标（⋯）
+                with self.subTest(theme=theme, btn=b["t"]):
+                    fg, a = _rgb(b["color"])
+                    own, oa = _rgb(b["bg"])
+                    under = own if oa >= .99 else bg
+                    self.assertGreaterEqual(_cr(fg, under), 4.5, "★★ %s 下「%s」对比度不足" % (theme, b["t"]))
 
 
 if __name__ == "__main__":

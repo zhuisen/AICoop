@@ -30,20 +30,24 @@ def code(p):
     return re.sub(r"(?<![:/])//.*", "", s)
 
 
-def gemini_block():
-    """总览里**所有** `provider === "gemini"` 的段落拼起来。
+OV = SRC / "components" / "ov" / "Overview.tsx"
+OVCARD = SRC / "components" / "ov" / "OvCard.tsx"
 
-    ⚠️ 不能只取 `(<>` 那一段：**动作条与卡片网格不在同一处** ——
-    动作条在顶栏右侧、网格在下面。只切一段会让「有没有探针/检查 token」
-    这类断言对着半页源码判，而那种假红/假绿两个方向都出现过。
+
+def gemini_block():
+    """总览里 **Gemini 档**的头部动作 + 三栏 + 网格拼起来。
+
+    ★ 2026-10-19：总览从 App 搬进 `ov/Overview.tsx`（交接包 page5），分档从 JSX 里的
+      `{provider === "gemini" && …}` 换成 `if (codexOn) … else if (agyOn) …` 的分支 ——
+      判据跟着取 `agyOn` 那几个分支，守的东西不变。
+    ⚠️ 不能只取一段：**动作与网格不在同一处**，只切一段会让「有没有探针/检查 token」对着半页源码判。
     """
-    c = code(APP)
-    marks = [i for i in range(len(c)) if c.startswith('{provider === "gemini" &&', i)]
-    assert marks, "★ 解析不到 Gemini 档 —— 判据看不懂了，先修闸"
+    c = code(OV)
     out = []
-    for i in marks:
-        j = c.find('{provider === "', i + 10)
-        out.append(c[i:j if j > 0 else len(c)])
+    for start in ("} else if (agyOn) {\n    actions", "} else if (agyOn) {\n    const c = ovCounts"):
+        i = c.find(start)
+        assert i >= 0, "★ 解析不到 Gemini 档 —— 判据看不懂了，先修闸：%r" % start
+        out.append(c[i:c.index("} else if (prov === \"claude\")", i)])
     return "\n".join(out)
 
 
@@ -54,8 +58,16 @@ def gemini_block():
 
 class TheGeminiCardHasTheSameActionBar(unittest.TestCase):
 
-    def test_the_card_can_be_selected(self):
-        self.assertIn("isSelected", code(CARD), "★★ agy 卡不能选中 ⇒ 没有动作条")
+    def test_the_card_has_the_same_hover_footer(self):
+        """★ 2026-10-19 改写：「选中后出动作条」换成交接包的「悬停时底栏原位换成操作」——
+        两张卡都把操作交给共用的 `OvCard`（`actions=` + ⋯ 菜单），谁也不自己画一份。"""
+        for f in (CARD, ACC):
+            c = code(f)
+            with self.subTest(f=f.name):
+                i = c.index("<OvCard ")
+                self.assertIn("actions={actions}", c[i:c.index("/>", c.index("footRight=", i))],
+                              "★★ %s 的操作不是交给共用卡片画的" % f.name)
+                self.assertIn("<OvMenu ", c, "★★ %s 没有 ⋯ 菜单" % f.name)
 
     def test_the_action_bar_is_the_same_floating_overlay(self):
         """★★ 与账号卡**同款浮层**（§5c 页面统一性）。
@@ -68,17 +80,18 @@ class TheGeminiCardHasTheSameActionBar(unittest.TestCase):
         ★ 真正的行为闸在 `test_card_uniformity.SelectingACardNeverChangesAnyHeight`
           （量真实高度）；这里只守「两张卡用的是同一套」。
         """
-        # ★ 2026-09-23：外壳收进共用组件 `CardActionBar` —— 「同款」从「两处长得像」
-        #   升级成「只有一份」。第一版收回动画就栽在两处各写一套上：只改了账号卡。
-        c = code(CARD)
-        self.assertIn("<CardActionBar open=", c, "★★ Gemini 卡的动作条不是与账号卡同款的浮层")
-        self.assertIn("<CardActionBar open=", code(SRC / "components" / "AccountCard.tsx"),
-                      "★★ 账号卡没用共用外壳 —— 两边又分叉了")
-        bar = code(SRC / "components" / "CardActionBar.tsx")
-        self.assertIn('position: "absolute"', bar[bar.index("data-actions"):],
-                      "★★ 动作条又回到文档流里 —— 展开会把同排的卡顶高")
-        self.assertNotIn("reserveActions", c,
-                         "★★ 预留逻辑又回来了 —— 它守的行为已经不存在了")
+        # ★ 2026-10-19：`CardActionBar` 浮层随交接包 page5 删除，操作改成「底栏原位换成操作」：
+        #   `.ov-fact` 与事实底栏叠在**同一个 28 高的槽**里（绝对定位），换的是透明度不是布局 ⇒ 卡片仍定高。
+        #   行为闸在 `test_overview_5b::CardsAreFixedAndNothingWraps`（悬停前后量真实高度）。
+        ov = code(OVCARD)
+        for cls in ("ov-fdef", "ov-fact"):
+            with self.subTest(layer=cls):
+                i = ov.index('<div className="%s"' % cls)
+                tag = ov[i:ov.index(">", ov.index("style={{", i))]
+                self.assertIn('position: "absolute", inset: 0', tag, "★★ %s 回到文档流里 —— 悬停会把卡顶高" % cls)
+        for f in (CARD, ACC):
+            self.assertNotIn("CardActionBar", code(f), "★ 删掉的浮层又被引用了")
+            self.assertNotIn("reserveActions", code(f), "★★ 预留逻辑又回来了 —— 它守的行为已经不存在了")
 
     def test_it_has_switch_rename_and_remove(self):
         c = code(CARD)
@@ -88,15 +101,16 @@ class TheGeminiCardHasTheSameActionBar(unittest.TestCase):
 
     def test_remove_asks_twice(self):
         """★★★ 移除不可逆。把「确认删除」也压成图标等于让人凭记忆点。"""
+        # ★ 2026-10-19：删除收进 ⋯ 菜单，二段确认由共用的 `OvMenu` 做（第一次点只换文字，再点才执行）。
+        #   判据仍打在**分支条件**和**按钮做什么**上，不是「有没有确认两个字」。行为闸在
+        #   `test_delete_confirm_one_row`（真 bundle、两池：第一次点零命令）。
         c = code(CARD)
-        # ⚠️ 判据不能只是「源码里有 confirmDelete / 确认删除」：把三元条件改成
-        #    `false ? …` 之后那两个字符串**仍然在源码里**，闸照样绿（实测）。
-        #    要打在**分支条件**和**按钮做什么**上。
-        self.assertIn("!(onRemove && confirmDelete) ? (", c, "★★★ 删除按钮不再走二次确认的分支")
-        self.assertIn("onClick={() => setConfirmDelete(true)}", c,
-                      "★★★ 垃圾桶按钮直接删了 —— 不可逆操作一键就走")
-        self.assertIn("setConfirmDelete(false); onRemove?.();", c,
-                      "★★★ 真正的删除不是从确认态发出的")
+        self.assertIn('{ key: "remove", label: "从池里移除", bad: true, confirm: "再点一次确认移除", onClick: onRemove', c,
+                      "★★★ agy 卡的移除没挂二段确认")
+        m = code(OVCARD)
+        self.assertIn("if (it.confirm && arm !== it.key) { setArm(it.key); return; }", m,
+                      "★★★ 第一次点就执行了 —— 不可逆操作一键就走")
+        self.assertIn('{ key: "remove", label: "删除这个号"', code(ACC), "★ 账号卡的删除不在 ⋯ 里")
 
     def test_rename_does_not_submit_on_blur(self):
         """★ 与账号卡同一条：`onBlur` 一律放弃，不静默提交。"""
@@ -196,28 +210,39 @@ class ClickingARowGoesToTheOverviewNotTheUsagePage(unittest.TestCase):
     def test_every_row_carries_its_own_tab(self):
         """★ 不带档的话主窗会停在**上次那一档** —— 点 Gemini 的行落在 Codex 档上。
         「打开主窗口」和「去哪一档」是两件事，前者不该顺带决定后者。"""
+        # ★ 2026-10-19（交接包 4f）：行点击统一走 `openOverview(<请求账本的平台键>)` →
+        #   `open-main-page {page:"overview", platform}`；四档各带自己的键（Gemini 的键是 `agy`）。
         c = code(self.MB)
-        for k in ('"navigate-overview", "codex"', '"navigate-overview", "gemini"',
-                  '"navigate-overview", "grok"'):
+        for k in ('openOverview("codex")', 'openOverview("agy")', 'openOverview("grok")',
+                  'openOverview("claude")'):
             with self.subTest(tab=k):
                 self.assertIn(k, c, f"★ 缺 {k}")
 
     def test_the_main_window_honours_the_tab(self):
         """★★ 只发不收等于没发。判据打在**监听那一侧**。"""
+        # ★ 2026-10-19：`navigate-overview` 删除，统一走 `main-open-page {page, platform}`（PLAN §2.3）。
         c = code(APP)
-        i = c.index('listen<string | undefined>("navigate-overview"')
-        seg = c[i:i + 420]
-        self.assertIn("setProvider(e.payload)", seg, "★★ 主窗收到了档位却不切")
-        # ★ 缺省必须不动 provider —— 老的调用点（不带档）行为一个字不变
-        self.assertIn('e.payload === "codex"', seg, "★ 没有校验载荷 ⇒ 脏值能改档")
+        i = c.index('listen<{ page?: string; platform?: string | null }>("main-open-page"')
+        seg = c[i:c.index("}),", i)]
+        self.assertIn('} else if (pg === "overview") {', seg)
+        self.assertIn('const pk = pf === "agy" ? "gemini" : pf;', seg, "★★ Gemini 行（键 agy）落不到 Gemini 档")
+        self.assertIn("setProvider(pk)", seg, "★★ 主窗收到了档位却不切")
+        # ★ 缺省必须不动 provider —— 不带档 / 脏值都不改档
+        self.assertIn('if (pk === "codex" || pk === "claude" || pk === "gemini" || pk === "grok") setProvider(pk);', seg,
+                      "★ 没有校验载荷 ⇒ 脏值能改档")
+        self.assertNotIn('"navigate-overview"', c, "★ 旧事件的监听又回来了 —— 一次点击会跳两回")
 
     def test_clicking_an_agy_row_does_not_switch(self):
         """★★ 换号走名字旁边那个「切换」徽章，点行只开主界面 ——
         与账号行同一条语义。混着来的症状就是用户报的那个跳转。"""
-        c = code(self.ROW)
-        i = c.index('<div className="mb-row" onClick=')
-        self.assertIn("onClick={switching ? undefined : onOpen}", c[i:i + 120],
+        # ★ 2026-10-19：四家共用 `mb/QuotaRow` 的外形；点击语义在那里，AgyRow 只负责把 onOpen 交下去。
+        q = code(self.ROW.parent / "mb" / "QuotaRow.tsx")
+        i = q.index('<div className={`qrow')
+        self.assertIn("onClick={switching ? undefined : onOpen}", q[i:i + 220],
                       "★★ 点行又变回切号了")
+        c = code(self.ROW)
+        self.assertNotRegex(c, r"onOpen=\{\s*onSwitch", "★★ AgyRow 把切号塞进了点行")
+        self.assertGreaterEqual(c.count("onOpen={onOpen}"), 2, "★ AgyRow 有一种形态没把 onOpen 交下去")
 
 
 # ⚠️ `TheShortcutBadgeOnlyAppearsWhereItWorks`（2026-09-14：⌘N 按档切号 + 角标只在接了线的档画）

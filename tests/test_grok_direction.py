@@ -39,54 +39,45 @@ def strip_comments(src: str) -> str:
 class GrokQuotaDirectionAndColor(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # ★ 2026-10-19（交接包 4f）：菜单栏的 GrokRow 不再有环、也不再整行染平台紫 —— 四家行共用
+        #   `mb/QuotaRow`（5h 青 / 周 绿 / <10% 橙红，平台由 logo 表明）。所以「环 / 平台色 / glow」
+        #   这几条只对总览卡 `GrokCard` 成立；GrokRow 改由下面 `TheMenubarRow` 守**方向与降级**那两半，
+        #   一条不少（方向、不手算换向、读不到不画 0、旧读数要说出来、低额度要报警）。
         cls.files = {}
-        for p in (CARD, ROW):
+        for p in (CARD,):
             raw = p.read_text(encoding="utf-8")
             cls.files[p.name] = (raw, strip_comments(raw))
+
+    # ★ 2026-10-19（交接包 page5）：总览卡换成共用外壳 `ov/OvCard`（环 = `OvRing`、条 = `OvWinRow`），
+    #   GrokCard 只往外壳里**喂值**：`ringPct` / `ww.pct` / `platColor`。所以①③④的判据改成打在
+    #   这几个接口上；外壳那一半（读不到画 —、低于 10% 染红）由 OvCard 自己的源码守。
+    OVCARD = COMPONENTS / "ov" / "OvCard.tsx"
 
     def test_anchors_exist(self):
         """★ 先证明被测目标还在。组件被删/改名后断言会静默打空 —— 那是最坏的假绿。"""
         self.assertTrue(CARD.exists() and ROW.exists())
         for name, (_, code) in self.files.items():
             with self.subTest(f=name):
-                self.assertIn("<Ring", code, "{} 里没有环 —— 断言打空了".format(name))
-                # ★ 允许降级分支覆盖(`degraded ? "#E0901C" : color`),但**平台色必须仍在表达式里** ——
-                #   健康态的条永远是平台色。放松成 `background:` 就成了空守卫。
-                self.assertRegex(code, r"background:\s*[^,;\n]*\bcolor\b",
-                                 "{} 的条没用平台色".format(name))
+                self.assertIn("<OvCard ", code, "{} 里没有卡片外壳 —— 断言打空了".format(name))
+                # 健康态的环与条永远是平台色（降级分支可以覆盖成琥珀，但 `color` 必须仍在表达式里）。
+                self.assertRegex(code, r"platColor=\{[^}]*\bcolor\}", "{} 的环没用平台色".format(name))
+        ov = strip_comments(self.OVCARD.read_text(encoding="utf-8"))
+        self.assertIn("return platColor ?? \"var(--acc)\"", ov, "★ 外壳没把平台色用在环上")
 
     # ---- ① 方向 ------------------------------------------------------------
-
     def test_ring_and_bar_are_fed_remaining(self):
-        """★ 占位环(`pct={0}` + track 色)要与真数据环分开判 —— 否则要么误报,
-        要么为了放过它把断言放宽到"0 也算合格",那样真数据填 0 就再也拦不住了。
-        判据是**颜色**:占位环用 `t.ringTrack`,真数据环用平台色 `color`。"""
+        """环与条吃**剩余**，且变量名带方向（裸 `pct` 不算）。"""
         for name, (_, code) in self.files.items():
-            rings = re.findall(r"<Ring\b[^>]*>", code, re.S)
-            bars = re.findall(r"width:\s*`\$\{([^}]*)\}%`", code)
+            ring = re.search(r"ringPct=\{([^}]*)\}", code)
+            bar = re.search(r'ww=\{\{ label: "周", pct: ([^,]+),', code)
             with self.subTest(f=name):
-                self.assertTrue(rings, "{}:没抓到 <Ring>".format(name))
-                self.assertTrue(bars, "{}:没抓到细条的 width".format(name))
-            for tag in rings:
-                m = re.search(r"pct=\{([^}]*)\}", tag)
-                self.assertIsNotNone(m, "{}:<Ring> 没有 pct".format(name))
-                expr = m.group(1).strip()
-                placeholder = "ringTrack" in tag and expr == "0"
-                with self.subTest(f=name, expr=expr):
-                    if placeholder:
-                        continue          # 占位环:没有数据,画空环是对的
-                    self.assertNotIn("used", expr,
-                                     "{}:环填了已用,与同屏账号卡反向".format(name))
-                    self.assertRegex(expr, r"[rR]em",
-                                     "{}:环必须吃剩余,且变量名要带方向(裸 `pct` 不算):{!r}"
-                                     .format(name, expr))
-            for expr in bars:
-                with self.subTest(f=name, expr=expr):
-                    self.assertNotIn("used", expr,
-                                     "{}:条填了已用,与同屏账号卡反向".format(name))
-                    self.assertRegex(expr, r"[rR]em",
-                                     "{}:条必须吃剩余,且变量名要带方向(裸 `pct` 不算):{!r}"
-                                     .format(name, expr))
+                self.assertIsNotNone(ring, "{}:没抓到环的 ringPct".format(name))
+                self.assertIsNotNone(bar, "{}:没抓到周条的 pct".format(name))
+                for expr in (ring.group(1), bar.group(1)):
+                    self.assertNotIn("used", expr, "{}:填了已用,与同屏账号卡反向".format(name))
+                    self.assertRegex(expr, r"[rR]em", "{}:必须吃剩余,且变量名要带方向:{!r}".format(name, expr))
+                self.assertRegex(code, r"const rem = degraded \? grokLastGoodRemPct\(a\) : grokRemPct\(a\)",
+                                 "{}:rem 不是从 grok.ts 的剩余函数来的".format(name))
 
     # ---- ② 换向只在 grok.ts ---------------------------------------------------
 
@@ -153,35 +144,64 @@ class GrokQuotaDirectionAndColor(unittest.TestCase):
         标记可以小到一个字符,但读数必须自己说明它是旧的 —— 否则用户看到一个正常的
         百分比,没有任何办法知道它是 3 小时前的。**省掉的是解释,不是披露。**
         """
+        ov = strip_comments(self.OVCARD.read_text(encoding="utf-8"))
         for name, (_, code) in self.files.items():
             with self.subTest(f=name):
-                # ★ 琥珀必须**绑在降级分支上**。只查 `'"#E0901C"' in code` 会被
-                #   `numColor` / `glow` 里的同一个色值满足 ⇒ 把底注那处改成 `t.muted`
-                #   照样绿(变异测试第 N 次抓到同款:**同一个字面量出现在别处 ≠ 这一处还在**)。
-                self.assertRegex(code, r'(degraded|stale)[^;\n]{0,48}"#E0901C"',
+                # ★ 琥珀必须**绑在降级分支上**（同一个字面量出现在别处 ≠ 这一处还在）。
+                self.assertRegex(code, r'platColor=\{degraded \? "var\(--warn\)" : color\}',
                                  "{}:旧读数没有强制琥珀,会和当前读数长得一样".format(name))
-                # 没有旧读数时画 `—`,不画 0
-                self.assertIn('"—"', code,
-                              "{}:没有旧读数时没画占位符 —— 可能画成了 0".format(name))
+                self.assertRegex(code, r"dim: degraded", "{}:旧读数的条没降不透明度".format(name))
                 self.assertRegex(code, r"上次读数|的读数|暂时读不到",
                                  "{}:降级态没有一句话说明这个数是旧的".format(name))
+        # 没有旧读数时画 `—`,不画 0（外壳那一半）
+        self.assertIn('{w.pct == null ? "—"', ov, "★★ 读不到时没画占位符 —— 可能画成了 0")
+        self.assertIn('{pct == null ? "—" : Math.round(p)}', ov, "★★ 环读不到时没画 —")
 
     def test_low_quota_still_warns_somewhere(self):
-        """环恒紫之后,低额度不能变成完全无声 —— 数字阈值色 + glow 是仅剩的两个报警口。
-
-        ★ 同样断言**接线**:`const glow = …` 留着但不传给 `<Ring>`,光晕就永远不亮,
-        而"glow 这个词出现过"照样成立(第一版就是这么假绿的)。"""
+        """环恒紫之后,低额度不能变成完全无声：环、条、数字、动态行四处都要报警。"""
+        ov = strip_comments(self.OVCARD.read_text(encoding="utf-8"))
+        self.assertIn('if (state === "dead" || ovIsLow(pct)) return "var(--bad)";', ov, "★★ 低额度时环没变红")
+        self.assertRegex(ov, r'const bar = off \? "var\(--tx3\)" : low \? "var\(--bad\)"', "★★ 低额度时条没变红")
+        self.assertIn('low ? "var(--badTx)" : "var(--tx)"', ov, "★★ 低额度时数字没变红")
         for name, (_, code) in self.files.items():
             with self.subTest(f=name):
-                # 两种写法都要认:JSX prop `color={numColor(x)}` 与样式对象 `color: numColor`。
-                # 只认其中一种就会在另一个组件上假绿 —— 第一版正是如此。
-                # 同上:降级分支可以覆盖成琥珀,但**健康态的阈值色必须仍接着** ——
-                # 那是环恒紫之后仅剩的两个报警口之一。
-                self.assertRegex(code, r"color[:=]\s*\{?\s*[^,;\n]*numColor",
-                                 "{}:数字没有接上阈值色".format(name))
-                self.assertRegex(code, r"<Ring\b[^>]*glow=\{",
-                                 "{}:glow 没有传给 <Ring>,低额度时不会亮".format(name))
-                self.assertIn("#E0524D", code, "{}:没有危险色阈值".format(name))
+                self.assertRegex(code, r'tone=\{rem != null && Math\.round\(rem\) < 10 \? "bad"',
+                                 "{}:动态行没在低额度时报警".format(name))
+
+
+
+class TheMenubarRow(unittest.TestCase):
+    """菜单栏 GrokRow（2026-10-19 起走 `mb/QuotaRow`）：方向与降级两半照守。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.code = strip_comments(ROW.read_text(encoding="utf-8"))
+        cls.qrow = strip_comments((ROW.parent / "mb" / "QuotaRow.tsx").read_text(encoding="utf-8"))
+
+    def test_cells_are_fed_remaining(self):
+        pcts = re.findall(r"\bpct:\s*([^,}]+)", self.code)
+        self.assertGreaterEqual(len(pcts), 2, "★ 没抓到周格的 pct（健康 + 降级两种形态）—— 断言打空了")
+        for expr in pcts:
+            with self.subTest(expr=expr.strip()):
+                self.assertNotIn("used", expr, "★★ 格子填了已用，与同屏其它行反向")
+                self.assertRegex(expr, r"[rR]em", "★★ 格子必须吃剩余，且变量名要带方向")
+        self.assertIn("grokRemPct(", self.code)
+        self.assertIn("grokLastGoodRemPct(", self.code)
+        self.assertNotIn("100 -", self.code, "★ 手算了换向 —— 应走 grokRemPct / grokLastGoodRemPct")
+        self.assertNotIn("quotaColor", self.code)
+
+    def test_degraded_never_looks_live(self):
+        self.assertRegex(self.code, r"<GrokStaleMark[^>]*a=\{a\}", "★★ 失败态没有标记 / 标记没拿到账号数据")
+        self.assertRegex(self.code, r"pct:\s*stale \? lgRem : null", "★★ 没有旧读数时没留成「读不到」—— 可能画成了 0")
+        self.assertRegex(self.code, r"dim:\s*stale", "★★ 旧读数没有降不透明度，会和当前读数长得一样")
+        self.assertRegex(self.code, r"上次读数|暂时读不到", "★ 降级态没有一句话说明这个数是旧的")
+        self.assertIn('w.pct == null ? "—"', self.qrow, "★★ QuotaRow 读不到时没画 —")
+        self.assertIn("opacity: w.dim ? .62 : 1", self.qrow, "★★ QuotaRow 没把旧读数降下来")
+
+    def test_low_quota_still_warns(self):
+        self.assertIn("isLow(", self.qrow, "★★ 低额度判据不是 mbLogic.isLow")
+        self.assertRegex(self.qrow, r'low \? "var\(--bad\)"', "★★ 低额度没有染橙红")
+        self.assertEqual(HEX.findall(self.code), [], "★ GrokRow 写死了颜色 —— 颜色一律走 CSS 变量")
 
 
 if __name__ == "__main__":

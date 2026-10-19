@@ -48,35 +48,47 @@ class TheChipRowReplacedTheIdleTitleRow(unittest.TestCase):
     def test_the_chip_row_is_rendered(self):
         self.assertIn("<PlatformChips", code(MB), "★★ 芯片行没渲染")
 
-    def test_one_mask_image_covers_both_states(self):
-        """★★ 稿 §2：同一张白 glyph + 透明底的蒙版图，靠 `mask-image` 上色覆盖选中/未选中。
-        备两套彩色图的话，下次调品牌色会漏掉其中一套，而那**不会报任何错**。"""
+    def test_the_chips_use_the_official_logos(self):
+        """★★ 2026-10-19（交接包 4f「平台芯片 28」）：芯片换成**官方彩色 logo**（`PlatformLogo`），
+        取代 v4 稿的蒙版单色图（原闸 `test_one_mask_image_covers_both_states` 守的就是那张蒙版）。
+        ⚠️ 前提被取代，不是规则被放弃：v4 的担心是「备两套彩色图，调品牌色会漏一套」——
+        官方 logo 不随品牌色变，变的只是芯片底色 / 描边 / 数字色，而那三样都从**一个**平台数字色
+        （`live.ts::numColor`）派生。交接包另有一条硬规则：**logo 任何状态都不变暗**。"""
         c = code(CHIPS)
-        self.assertIn("WebkitMaskImage", c, "★★ 没用蒙版 —— 多半是备了两套图")
-        self.assertIn("maskImage", c)
-        # 正面：蒙版自己那一段里必须按选中态取色。
-        # ⚠️ 判据**必须切到 `mb-chip-mask` 那个元素**：`on_ ? t.appBg : p.color` 在
-        #   外层 `.mb-chip-logo` 上也有一份，整文件断言时把蒙版那处删掉照样绿（实测）。
-        i = c.index('className="mb-chip-mask"')
-        seg = c[i:c.index("/>", i)]
-        self.assertIn("on_ ? t.appBg : p.color", seg, "★ 蒙版没跟着选中态变色")
+        self.assertIn("<PlatformLogo", c, "★★ 芯片没用官方 logo")
+        self.assertNotIn("maskImage", c, "★ 蒙版那一套还留着 —— 两套画法并存")
+        self.assertRegex(c, r"const pc = numColor\(", "★★ 选中态的颜色不是从平台数字色派生")
+        for k in ("`${pc}22`", "`${pc}99`"):
+            with self.subTest(derived=k):
+                self.assertIn(k, c, f"★ 选中态没从同一个色派生：缺 {k}")
+        self.assertNotRegex(c, r"opacity:\s*(?:sel|on_)", "★★ logo 跟着选中态变暗了（交接包：任何状态都不变暗）")
 
     def test_the_assets_are_bundled_not_fetched(self):
         """★★ 稿 §9.2：资产必须内置。运行时远程加载 = 离线就没有 logo，
         而这个 app 的全部卖点就是本机可用。"""
-        c = code(CHIPS)
-        self.assertNotIn("http", c, "★★ 有远程地址 —— 离线就没 logo")
-        for f in ("logo-openai.png", "logo-grok.png"):
+        for p in (CHIPS, SRC / "components" / "PlatformLogo.tsx"):
+            with self.subTest(file=p.name):
+                self.assertNotIn("http", code(p), "★★ 有远程地址 —— 离线就没 logo")
+        for f in ("codex-on-dark.svg", "codex-brand.svg", "claudecode-color-eyes.svg",
+                  "gemini-color.svg", "grok-on-dark.svg", "grok-on-light.svg"):
             with self.subTest(asset=f):
-                self.assertTrue((SRC / "assets" / f).exists(), f"★★ 缺资产 {f}")
+                self.assertTrue((SRC / "assets" / "logos" / f).exists(), f"★★ 缺资产 {f}")
 
     def test_the_dead_dot_only_lights_when_there_are_dead_accounts(self):
         """★ 常亮的灯会被学会忽略 —— 本仓判过死刑的形态。"""
         self.assertIn("p.hasDead &&", code(CHIPS), "★ 死号红点不是按条件出现的")
 
     def test_the_right_hand_text_names_the_platform(self):
-        """★ 稿 §2：右侧小字回显当前平台名，**只有 logo 时用来防认错**。"""
-        self.assertIn("platformOf(plat).label", code(MB), "★ 右侧没有回显平台名")
+        """★ 稿 §2：右侧小字回显当前平台名，**只有 logo 时用来防认错**。
+
+        ⚠️ 2026-10-19（交接包 4f）：右侧只画 `↻ HH:MM`（画板如此；352 宽一行放不下
+        「Codex · ↻ 23:08」再加四颗芯片）。平台名进 `title` —— 选中芯片已有平台色底 + 描边，
+        防认错那一半由芯片本身承担。判据：右侧那段的 `title` 必须带当前档的名字。"""
+        c = code(MB)
+        i = c.index("right={")
+        seg = c[i:c.index("/>", i)]
+        self.assertGreaterEqual(seg.count("${MB_PLAT_LABEL[plat]}"), 2, "★ 右侧（含读不到那一支）没有回显平台名")
+        self.assertIn("↻", seg, "★ 右侧没有刷新时刻")
 
 
 class TheFooterCannotSpendAnotherPlatformsQuota(unittest.TestCase):
@@ -84,8 +96,11 @@ class TheFooterCannotSpendAnotherPlatformsQuota(unittest.TestCase):
 
     def test_the_probe_button_is_gated(self):
         c = code(MB)
-        self.assertIn("{codexActions && <ProbeButton", c,
+        # ★ 2026-10-19（交接包 4f）：菜单栏探针改成「按住 0.6 s」（`mb/HoldProbe`），取代两段确认。
+        self.assertIn("{codexActions && <HoldProbe", c,
                       "★★★ 探针没有按档收起 —— 它扣的是 codex 的额度")
+        self.assertRegex(c, r'const codexActions = tab === "acc" && plat === "codex";',
+                         "★★★ 探针的出现条件不再是「codex 档 + 账号 Tab」")
 
     def test_only_codex_gets_the_codex_only_actions(self):
         """★ 判据从**真源**解析，不手列：只有 codex 那条 `codexActions: true`。"""
@@ -117,8 +132,9 @@ class TheFooterCannotSpendAnotherPlatformsQuota(unittest.TestCase):
         改成钉前缀：多加一条守卫仍绿，**删掉 `plat === "codex"` 或 `cardAlert` 立刻红**。
         可关闭那一维由 `tests/test_card_banner_is_dismissible.py` 独立守着。
         """
-        self.assertIn('{plat === "codex" && cardAlert &&', code(MB),
-                      "★ 重置卡横幅没有按档收起")
+        # ★ 2026-10-19：重置卡并进通知条，条件从 JSX `{… && (` 变成 `if (… )` 里的同一串前缀。
+        self.assertIn('if (plat === "codex" && cardAlert &&', code(MB),
+                      "★ 重置卡提醒没有按档收起")
 
 
 class EachPlatformShowsItsOwnAccounts(unittest.TestCase):

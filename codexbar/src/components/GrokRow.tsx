@@ -1,63 +1,44 @@
-import Ring from "./Ring";
 import GrokStaleMark from "./GrokStaleMark";
+import QuotaRow, { type WinCell } from "./mb/QuotaRow";
 import type { Theme } from "../theme";
 import type { GrokSnapshot, GrokAccount } from "../grok";
 import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible, grokBadgePlan } from "../grok";
-import PlanBadge from "./PlanBadge";
-import { fmtEta, maskId } from "../helpers";
+import { fmtEta } from "../helpers";
 
-const MONO = "'JetBrains Mono'";
+const Lock = () => (
+  <svg width="9" height="9" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+  </svg>
+);
 
 /**
- * 菜单栏里的 grok 额度行（用户 2026-08-24 从三版 demo 之外自己定的：
- * 「我还是喜欢目前的菜单栏样式，不如直接保留现在的新增紫色的 grok」）。
+ * 菜单栏里的 Grok 行（交接包 2026-10-19 · 4f「当前号 · 只读」）。外形在 `mb/QuotaRow`。
  *
- * ★★ **复用账号卡的样式，但走完全独立的数据通路** —— 这两件事必须同时成立：
- * - 视觉复用（`mb-row` 那套 class + `Ring`）：环形和细条是这个 app 表达额度的固有语言，
- *   grok 的额度就是额度，没理由换一种画法。
- * - 数据**绝不**混进 `accounts` / `alive` / `aliveByLabel`：那几个数组同时驱动
- *   计数徽章、探针全池的号数、自动切号。grok 混进去，自动切号就可能"切"到一个根本切不了的
- *   东西上，**而且不报错**。
- *   闸在 `tests/test_grok_not_in_pool_ui.py`。
- *
- * ★★ **环、条、左轨、名字全部走 grok 识别色**（用户 2026-08-24 定稿：「grok 的所有颜色
- * 包括条形图和圆形图都是紫色的」）。我先前主张"紫色只给身份、环按额度染绿/琥珀"，被否掉了。
- * 代价与补偿见 `GrokCard.tsx` 的头注释（同一套决定，那里写全了）：数字仍按阈值变色、
- * `glow` 在低额度时点亮、**失败态仍走语义色**（琥珀=旧读数，红=需处理）。
- * ★ 颜色**由调用方传入**（`colorOf(traffic, "grok")`），不写死 —— 用户能在设置页改平台色。
- *
- * ★ **不给「切换」按钮**：卡片这个形状本身在说"这是能切的号"，而 grok 不在池里。
- * 少一个按钮 + 一枚「只读」徽章，是它与旁边三张卡唯一需要的区别。
+ * ★★ **走完全独立的数据通路**：数据**绝不**混进 `accounts` / `alive` / `aliveByLabel`（计数徽章、
+ *   探针全池、自动切号都读它们）。闸在 `tests/test_grok_not_in_pool_ui.py`。
+ * ★ **只读**：grok 不在池里，这一行永远不出按钮（交接包：只有 Grok 只读）。
+ * ★★ **grok 不画 5h 那一格的条**（用户 2026-09-15「取消 5h 窗口」）：xAI 只回 WEEKLY。
+ *   固定槽位下那格写「5h —」（画板同款），说的是"这家没有这个窗口"，不是"读不到"。
+ * ★ 方向：接口给的是**已用**，这里一律换成**剩余**再画（`grokRemPct`，见 `tests/test_grok_direction.py`）。
+ * ★ 失败态：读不到 ⇒ 写 —，绝不画 0%；有上次读数 ⇒ 照画但降不透明度，并挂 `GrokStaleMark` 说明原因。
  */
-export default function GrokRow({ t, color, snap, privacy, busy, disabled, onOpen }: {
+export default function GrokRow({ t, snap, busy, disabled, onOpen }: {
   t: Theme;
-  /** grok 平台识别色，来自 `colorOf(data, "grok")`（已折进用户偏好）。 */
-  color: string;
   snap: GrokSnapshot | null;
-  privacy: boolean;
   busy?: boolean;
   /** 用户在设置页停用了 grok。停用 = 一个像素都不画。 */
   disabled?: boolean;
-  /** 点行 = 弹出主界面的 Grok 详情页（与账号行「点行弹主窗」同一手势）。 */
+  /** 点行内容 = 跳工作台总览的 Grok 档。 */
   onOpen?: () => void;
 }) {
   // ★ 与总览卡**共用同一个判据** —— 两边各写一份迟早出现「主窗有、菜单栏没有」。
   if (!grokQuotaVisible(snap, { disabled })) return null;
+  const isDark = t.isDark;
   if (!snap || snap.accounts.length === 0) {
     return (
-      <Shell t={t} color={color} onOpen={onOpen}>
-        <Ring pct={0} r={18} sw={4.5} color={t.ringTrack} track={t.ringTrack} size={46}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: t.muted, lineHeight: 1 }}>—</span>
-        </Ring>
-        <div className="mb-row-info">
-          <NameLine t={t} color={color} />
-          <div className="mb-row-sub">
-            <span className="mb-row-email" style={{ color: t.muted }}>
-              {busy ? "正在取额度…" : "未探测"}
-            </span>
-          </div>
-        </div>
-      </Shell>
+      <QuotaRow platform="grok" isDark={isDark} name="grok" sub={<Sub />} readOnly onOpen={onOpen}
+                note={busy ? "正在取额度…" : "未探测 · 刷新一次后显示额度"} data={{ "data-mb-grok": "none" }} />
     );
   }
 
@@ -65,110 +46,34 @@ export default function GrokRow({ t, color, snap, privacy, busy, disabled, onOpe
   const rem = grokRemPct(a);
   const lgRem = grokLastGoodRemPct(a);
 
-  // ---- 降级态 --------------------------------------------------------------
-  // ★ 绝不画 0%。`0` 在环里和"这周一点没用"长得一模一样,而这里的真相是"读不到"。
-  // ---- 降级态 --------------------------------------------------------------
-  // ★ 与总览卡同一套:一个感叹号 + 悬浮说明,读数如实标「旧」。**不弹横幅** ——
-  //   token 6 小时一过期,横幅按设计每天要弹几次,那是噪音不是警报(见 GrokStaleMark 文件头)。
-  // ★ 绝不画 0%:`0` 在环里和"这周一点没用"长得一模一样,而这里的真相是"读不到"。
   if (!a.available) {
+    // ★ 降级：有上次读数就画上次的（降不透明度 + 「上次读数」），没有就写 —。
     const stale = lgRem != null;
+    const week: WinCell = { label: "周", pct: stale ? lgRem : null, dim: stale,
+                            refill: fmtEta(a.last_good?.period_end ?? undefined),
+                            title: stale ? "上次读数 —— 这次额度暂时读不到" : "额度暂时读不到" };
     return (
-      <Shell t={t} color={color} onOpen={onOpen}>
-        <Ring pct={stale ? lgRem : 0} r={18} sw={4.5}
-              color={stale ? "#E0901C" : t.ringTrack} track={t.ringTrack} size={46}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: stale ? t.text : t.muted,
-                         fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
-            {stale ? Math.round(lgRem) : "—"}
-          </span>
-        </Ring>
-        <div className="mb-row-info">
-          <NameLine t={t} color={color} email={a.email} privacy={privacy} plan={grokBadgePlan(a)} mark={<GrokStaleMark t={t} a={a} size={10} />} />
-          <div className="mb-row-meta">
-            <span style={{ fontSize: 9, color: "#E0901C", fontFamily: MONO }}>
-              {stale ? "上次读数" : "额度暂时读不到"}
-            </span>
-          </div>
-        </div>
-      </Shell>
+      <QuotaRow platform="grok" isDark={isDark} name="grok" readOnly onOpen={onOpen}
+                sub={<Sub plan={grokBadgePlan(a)} mark={<GrokStaleMark t={t} a={a} size={10} />} />}
+                wins={[null, week]} data={{ "data-mb-grok": stale ? "stale" : "unread" }} />
     );
   }
 
   const q = a.quota!;
-  const remPct = rem ?? 0;   // ★ 名字带方向:裸 `remPct` 正是这类反相 bug 的温床
-  // 与账号卡同一把尺:`quotaColor` 吃的是**剩余**,环、条、数字三处同向。
-  // 环与条恒紫(用户定稿);数字仍按阈值变色 —— 那是这张卡唯一还能报警的地方。
-  const numColor = remPct <= 10 ? "#E0524D" : remPct < 50 ? "#E0901C" : t.text2;
-  const glow = remPct <= 20 ? (remPct <= 10 ? "#E0524D" : "#E0901C") : undefined;
+  const week: WinCell = { label: "周", pct: rem, refill: fmtEta(q.period_end ?? undefined) };
   return (
-    <Shell t={t} color={color} onOpen={onOpen}>
-      <Ring pct={remPct} r={18} sw={4.5} color={color} track={t.ringTrack} size={46} glow={glow}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: t.text,
-                       fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{Math.round(remPct)}</span>
-      </Ring>
-      <div className="mb-row-info">
-        <NameLine t={t} color={color} email={a.email} privacy={privacy} plan={grokBadgePlan(a)} />
-        {/* ★★ **grok 不画 5h 那一格**（用户 2026-09-15：「grok 修改，取消 5h 窗口」）。
-            xAI 只回 WEEKLY（实测 `window_minutes = 10080`，27 个模型 2 个桶，没有 5h）——
-            那一格**永远不会有数**。此前补过三版（隐藏行 → `—` → 「无此窗口」），
-            三版都是在给一件根本不存在的东西找一种体面的画法，而它只会让人反复问
-            「我的 5h 额度呢」。★ 与主窗的 `GrokCard` 同步删除（§5c 页面统一性）。 */}
-        <div className="mb-row-meta">
-          <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>周</span>
-          <div className="mb-row-bar" style={{ background: t.barTrack }}>
-            <div style={{ height: "100%", width: `${remPct}%`, background: color, borderRadius: 2,
-                          transition: "width .55s cubic-bezier(.4,0,.2,1)" }} />
-          </div>
-          <span style={{ fontSize: 9.5, fontWeight: 600, color: numColor,
-                         fontVariantNumeric: "tabular-nums" }}>{remPct.toFixed(0)}%</span>
-          <span style={{ fontSize: 9, color: t.muted, fontFamily: MONO }}>
-            ↻{fmtEta(q.period_end ?? undefined)}
-          </span>
-        </div>
-      </div>
-    </Shell>
+    <QuotaRow platform="grok" isDark={isDark} name="grok" readOnly onOpen={onOpen}
+              sub={<Sub plan={grokBadgePlan(a)} />} wins={[null, week]} data={{ "data-mb-grok": "ok" }} />
   );
 }
 
-/** 卡片外壳。左轨用 grok 紫 —— 账号卡那条轨编码的是「临期 > 当前 > 额度」,
- *  这里编码的是「不是池成员」,所以刻意不参与那套优先级。 */
-function Shell({ t, color, onOpen, children }: { t: Theme; color: string; onOpen?: () => void; children: React.ReactNode }) {
+function Sub({ plan, mark }: { plan?: string; mark?: React.ReactNode }) {
   return (
-    <div className="mb-row" onClick={onOpen} style={{
-      background: t.cardBg,
-      border: `1px solid ${t.cardBorder}`,
-      borderLeft: `3px solid ${color}`,
-      cursor: onOpen ? "pointer" : "default",
-    }}>
-      {children}
-    </div>
+    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 2, color: "var(--tx3)" }}
+            title="grok 不在轮换池，只显示额度，不参与切号"><Lock />只读</span>
+      {plan ? <span style={{ color: "var(--gr)", fontWeight: 700 }}>{plan}</span> : null}
+      {mark}
+    </span>
   );
-}
-
-function NameLine({ t, color, email, privacy, mark, plan }: { t: Theme; color: string; email?: string | null; privacy?: boolean; mark?: React.ReactNode; plan?: string }) {
-  return (
-    <>
-      <div className="mb-row-name-line">
-        <span className="mb-row-name" style={{ color }}>grok</span>
-        <PlanBadge plan={plan ?? ""} t={t} />
-        {/* 「只读」是这张卡与旁边三张唯一需要的区别 —— 那三张 hover 出「切换」,这张永远不会。 */}
-        <span className="mb-row-badge-cur"
-              title="grok 不在轮换池,只显示额度,不参与切号"
-              style={{ color, border: `1px solid ${hexA(color, .45)}` }}>只读</span>
-        {mark}
-      </div>
-      {email !== undefined && (
-        <div className="mb-row-sub">
-          <span className="mb-row-email" style={{ color: t.text2 }}>{maskId(email ?? "", !!privacy)}</span>
-        </div>
-      )}
-    </>
-  );
-}
-
-/** `#rrggbb` → `rgba(...)`。徽章描边要跟着平台色走，写死就无法响应用户改色。 */
-function hexA(hex: string, alpha: number): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h.length === 3 ? h.split("").map((x) => x + x).join("") : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }

@@ -35,6 +35,7 @@ CLI = (ROOT / "agy-rotate").read_text(encoding="utf-8")
 SRC = ROOT / "codexbar" / "src"
 APP = SRC / "App.tsx"
 CARD = SRC / "components" / "AgyCard.tsx"
+OVERVIEW = SRC / "components" / "ov" / "Overview.tsx"
 HOOK = SRC / "hooks" / "useAgyPool.ts"
 RS = ROOT / "codexbar" / "src-tauri" / "src" / "lib.rs"
 
@@ -170,10 +171,14 @@ class TheUiWiresAllThree(unittest.TestCase):
                 self.assertIn(c, allowed, f"★★ `{c}` 不在白名单 ⇒ 前端那次 invoke 必被拒")
         self.assertNotIn("login", allowed, "★★★ GUI 能跑 login —— 必然挂死")
 
+    def _gemini_head(self):
+        """Gemini 档的头部动作（2026-10-19 起在 `components/ov/Overview.tsx`，`App.tsx` 只挂 `<Overview>`）。"""
+        c = code(OVERVIEW)
+        i = c.index("} else if (agyOn) {")
+        return c[i:c.index('} else if (prov === "claude") {', i)]
+
     def test_the_gemini_tab_has_all_three(self):
-        c = code(APP)
-        i = c.index('{provider === "gemini" && (')
-        seg = c[i:c.index('{provider === "codex" && (', i)]
+        seg = self._gemini_head()
         self.assertIn("agyPool.health()", seg, "★★ 没有「检查 token」")
         self.assertIn("agyPool.probe()", seg, "★★ 没有「探针 全池」")
         self.assertIn("agyPool.setAuto(", seg, "★★ 没有自动切号开关")
@@ -186,11 +191,13 @@ class TheUiWiresAllThree(unittest.TestCase):
         因为那时探针只有 codex 一套、扣的是 codex 的额度。现在 agy 有了自己的探针、
         花的是自己的额度，旧闸锁死的是一个**已经不成立的前提**。
         """
-        c = code(APP)
-        i = c.index('{provider === "gemini" && (')
-        seg = c[i:c.index('{provider === "codex" && (', i)]
-        self.assertIn("<ProbeButton", seg, "★★★ 探针不是 ProbeButton ⇒ 与免费按钮混在一起")
-        self.assertIn("<ProbeButton", code(CARD), "★★★ 卡上的探针不是 ProbeButton")
+        seg = self._gemini_head()
+        # ★ 2026-10-19 总览重做（交接包 page5）：琥珀 + ⚡ 的「两段确认」换成「按住 0.6 s」，
+        #   头部是 `ProbeHold`（包菜单栏同一颗 `HoldProbe`），卡上是 `HoldAb`（同一个 `holdReduce` 状态机）。
+        #   守的仍是同一件事：花钱的控件长得和免费按钮不一样、且不能一碰就发。
+        self.assertIn("<ProbeHold", seg, "★★★ 头部探针不是按住才发的计费按钮 ⇒ 与免费按钮混在一起")
+        self.assertIn("<HoldAb", code(CARD), "★★★ 卡上的探针不是按住才发的 HoldAb")
+        self.assertNotIn("<Ab title=\"探针", code(CARD), "★★★ 卡上又出现了一碰就发的探针")
 
     def test_a_failed_read_does_not_report_the_switch_as_off(self):
         """★★ 读不到开关状态时保持 `null`（界面显示 `—`），**不写成"关着"** ——

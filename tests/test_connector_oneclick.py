@@ -147,17 +147,29 @@ class AnAccountOutOfRotationSaysSoOnTheOverview(unittest.TestCase):
     """★★★ 「排第一但不参与」必须在总览一眼可见，不能只在展开的动作条里。"""
 
     def test_the_badge_is_driven_by_rotates_not_by_something_else(self):
+        # 2026-10-19 总览重做：停用的号是 `state === "off"`（Overview 里 `off: !a.rotates`）⇒「已停用」标签
+        #   （`OvTag` kind "off" 挂 `data-rotate-off`）；在用但停了轮换的号另挂一枚同样的标签。
         code = _code(CARD)
-        self.assertIn("{!a.rotates && (", code,
-                      "★★★ 角标不是由 `rotates` 驱动的 —— 它会和真实状态分叉")
-        self.assertIn("data-rotate-off", code, "★ 角标没有可供闸定位的标记")
+        ov = _code(CARD.parent / "ov" / "Overview.tsx")
+        tag = _code(CARD.parent / "ov" / "OvCard.tsx")
+        self.assertIn("off: !a.rotates", ov, "★★★ 停用状态不是由 `rotates` 驱动的 —— 它会和真实状态分叉")
+        self.assertIn(': state === "off" ? { text: "已停用", kind: "off" as const }', code)
+        self.assertIn('{!a.rotates && state === "inuse" && <OvTag tag={{ text: "已停用", kind: "off" }}', code,
+                      "★★ 在用但停了轮换的号没说出「已停用」")
+        self.assertIn('data-rotate-off={tag.kind === "off" ? "" : undefined}', tag, "★ 角标没有可供闸定位的标记")
 
     def test_it_is_amber_not_red(self):
-        """★ 主动停用 ≠ 坏了。红留给凭证失效，混用会让两种状态读不出区别。"""
-        code = _code(CARD)
-        i = code.index("data-rotate-off")
-        self.assertIn("#E0901C", code[i:i + 220],
-                      "★ 停轮换的角标用了非琥珀色 —— 与「凭证失效」撞色")
+        """★ 主动停用 ≠ 坏了。红留给凭证失效，混用会让两种状态读不出区别。
+
+        2026-10-19：交接包 page5 把「已停用」画成**灰**（12_disabled_expanded），琥珀留给「冷却中」。
+        守的仍是原意：停用与失效不同色，且都不是红色那一档。"""
+        tag = _code(CARD.parent / "ov" / "OvCard.tsx")
+        off = re.search(r'\boff: \{ color: "([^"]+)", bg: "([^"]+)" \}', tag)
+        dead = re.search(r'\bdead: \{ color: "([^"]+)", bg: "([^"]+)" \}', tag)
+        self.assertIsNotNone(off, "★ 找不到「已停用」标签的配色")
+        self.assertIsNotNone(dead, "★ 找不到「失效」标签的配色")
+        self.assertNotEqual(off.groups(), dead.groups(), "★★ 停用与失效同色")
+        self.assertNotIn("bad", off.group(1) + off.group(2), "★ 停轮换的标签用了红色那一档 —— 与「凭证失效」撞色")
 
     def test_it_really_renders_on_the_overview(self):
         """★★ 行为闸：夹具里有 rotate_off 的号，总览上就必须有对应数量的角标。

@@ -1,4 +1,4 @@
-"""设置页「刘海额度条」那一行 —— 真 bundle 端到端（B87 · 四方评审 2026-10-17）。
+"""设置页「刘海屏版本」那一行（2026-10-19 前叫「刘海额度条」） —— 真 bundle 端到端（B87 · 四方评审 2026-10-17）。
 
 ## 守的
 1. 没有刘海屏的 Mac（`notch_status` 回 `no_notch`）：行照样在、开关默认关，说明里写「这台 Mac 现在没有刘海屏」。
@@ -76,7 +76,7 @@ class TheNotchRowSaysWhatIsOnScreen(unittest.TestCase):
         if r == "skip":
             self.skipTest("harness 3304 没起 —— skip 不是绿")
         before, after = r
-        self.assertIsNotNone(before, "★ 前提：设置页里真的有「刘海额度条」那一行")
+        self.assertIsNotNone(before, "★ 前提：设置页里真的有「刘海屏版本」那一行")
         return before, after
 
     def test_a_mac_without_a_notch_sees_the_row_off_and_told_why(self):

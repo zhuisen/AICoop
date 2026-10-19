@@ -1,119 +1,70 @@
-import Ring from "./Ring";
-import DragHandle, { type DragWiring } from "./DragHandle";
-import StaleMark from "./StaleMark";
-import { CardBadgeGhost } from "./CardBadge";
-import { type Theme } from "../theme";
-import { useCardType } from "../hooks/useCardType";
-import type { AgySnapshot } from "../agy";
+import { useState } from "react";
+import type { Theme } from "../theme";
+import type { AgySnapshot, AgyAction } from "../agy";
 import {
-  AGY_EXPIRED_TITLE, AGY_UNKNOWN_TITLE, type AgyAction, agyBadgePlan, agyShown, agyTightest, agyWinRows, agyQuotaVisible, agyReasonNote, agyReasonTone, agyResetText,
+  AGY_EXPIRED_TITLE, AGY_UNKNOWN_TITLE, agyResetText, agyShown, agyTightest, agyWinRows, agyQuotaVisible,
+  agyBadgePlan, agyReasonNote, agyReasonTone,
 } from "../agy";
-import { fmtAgo, fmtResetDate, winNumColor } from "../helpers";
-import { IconBtn, IcPen, IcTrash, IcRotate, IcPin } from "./CardIcons";
-import ProbeButton from "./ProbeButton";
+import { fmtAgo, fmtResetDate, maskId } from "../helpers";
+import type { OvState } from "../overview";
+import { deltaText, fmtClock, fmtDur } from "../overview";
+import { fmtTokens, fmtTps } from "../live";
+import type { DragWiring } from "./DragHandle";
+import StaleMark from "./StaleMark";
 import AgyActionLink from "./AgyActionLink";
-import PlanBadge from "./PlanBadge";
-import CardActionBar from "./CardActionBar";
-import { useRef, useState } from "react";
-
-const MONO = "'JetBrains Mono'";
+import { Ab, DynText, HoldAb, IcRefresh, IcSwap, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
+import type { LiveLine } from "./AccountCard";
 
 /**
- * 总览九宫格里的 agy(Antigravity)额度卡。与 `GrokCard` 同款外形 —— 同样的圆环、
- * 细条、卡片外框，理由见那份文件（细长条用户读不出来）。
+ * Gemini（agy）账号卡 —— 与 Codex 卡**同一个外壳**（交接包 page5 §3：「Codex 和 Gemini 同结构」）。
  *
- * ★★ 与 grok 卡的**三处本质差别**，改这个文件前先读：
- *
- * ① **方向相反。** grok 接口给「已用」，agy 给「剩余」。这里全程直接用剩余，
- *    不做任何 `100 - x` —— 换向知识只存在于 `agy.ts` 的函数名里（`remaining_percent`）。
- *    在这个文件里写一次减法，就等于把方向复制了一份出来。
- *
- * ② **4 个桶挤进 2 行。** agy 是 2 组（Gemini / Claude+GPT）× 2 窗口（5h / 周）。
- *    环取**最紧的那个桶**（任何一个见底 agy 就用不了，所以"还剩多少"只能取最小值，
- *    不是平均）；每个窗口一行，取该窗口下最紧的那组，具体是哪组放进 `title`。
- *    全 4 行铺开会撑高卡片，破坏与账号卡的像素级对齐。
- *
- * ③ **「没在跑」是常态，不是故障。** agy 不常驻。所以 `no_process` 走 muted 而非警告色，
- *    并且**照常显示上次读数** —— 那是关于一份真实额度的真实数字。
- *    只有 `not_installed`（本机根本没有 agy）才整卡隐藏，那是**确定的否定**。
- *
- * ★ 颜色由调用方传入（`colorOf(traffic, "agy")`），不写死：用户在设置页能改平台色。
+ * ★ 机制差别只体现在**说法**上（照搬 codex 的原话在这几处都是假话）：
+ *   · 「切换」= 把这个号写进钥匙串，**只对下一次启动的 agy 生效**（已开着的会话不受影响）；
+ *   · 「冷却」= 额度见底（agy 没有 429 冷却这回事）；
+ *   · 页脚左格是**最紧那个窗口的重置日**，不是「到期」—— agy 不提供订阅到期日（2026-09-16 三个探针一致）。
+ * ★ 池里没有号时退回那张**只读卡**（`agy-rotate login --current` 之前的形态）：只有「刷新」。
+ * ★ 旧卡上的每个操作都还在（CLAUDE.md §6）：切换 · 探针 · 刷新在底栏；置顶 · 轮换 · 改名 · 查看用量 · 移除在 ⋯。
  */
-/** 窗口标签的最小宽度：「5h」是两个等宽字（1.2em），「周」是一个汉字（~1em）。
- *  不给下限的话两条细条起点差 ~2.4px（2026-10-16 用户截图里看得出来）。 */
-const WIN_LABEL_W = "1.25em";
-
-export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots, onOpen, onRefresh,
-                                 isSelected, isBest, bestPct,
-                                 onSelect, onRename, onRemove, onProbe, probing,
-                                 rotates, onToggleRotate, pinRank = null, onTogglePin, bestTitle,
-                                  label, email, isCurrent, onSwitch, switching, drag, aid, action, plan }: {
-  /** 档位（`ultra` / `pro` / `free`，`agy-rotate quota` 写）。只有 ULTRA 画徽章，见 `agyBadgePlan`。 */
-  plan?: string | null;
-  /** 取额度被 Google 拒绝时的下一步动作（`agyAction`）。null = 没有可说的。 */
-  action?: AgyAction | null;
-  /** 置顶位次（0 起）；未置顶 null。与 codex 账号卡同一套语义（2026-09-24 对齐）。 */
-  pinRank?: number | null;
-  onTogglePin?: () => void;
-  /** 「下一个」角标的解释。 */
-  bestTitle?: string;
+export default function AgyCard({ t, color, snap, busy, err, disabled, state, hov, drag, aid, action, plan, label, email,
+  bestPct, privacy, live, lastUse, rotLoaded, coolMin, pinRank = null, rotates,
+  onSwitch, switching, onProbe, probing, onRefresh, onTogglePin, onToggleRotate, onRename, onRemove, onOpen }: {
   t: Theme;
-  /** 拖拽排序接线。与账号卡**同一份** `DragWiring` —— 两处各写一份迟早分叉。
-   *  不传时这张卡行为与以前完全一致。 */
-  drag?: DragWiring;
-  /**
-   * 这张卡的**排序身份**（agy 的 `sub`）。
-   *
-   * ★★★ 必须与调用方传给 `makeDrag` 的键**完全一致**。原来 `data-aid` 写的是 `label`、
-   *   而 `makeDrag` 用的是 `sub` —— label 是可改的昵称、sub 是 ID，两者从不相等 ⇒
-   *   命中测试 `indexOf(over)` 永远找不到目标，**Gemini 档的拖拽整个不工作**。
-   *   2026-09-20 由 codex 评审读代码抓出来，闸在 `TheGeminiLaneFollowsTheSameRule`。
-   */
-  aid?: string;
-  /** 与账号卡**同一份**窗口槽位表。agy 没有的窗口画一行隐藏等高行 —— 不占槽的话
-   *  它的「5h」会和别人的「周」画在同一条线上。 */
-  winSlots: string[];
+  /** 平台识别色（App 用 `colorOf(traffic, "agy")` 算好传下来）。 */
   color: string;
   snap: AgySnapshot | null;
   busy?: boolean;
-  /** 读**本机 sidecar** 失败（IO 层）。★ 与"额度读不到"是两回事：后者在 `snap.reason` 里，
-   *  是正常返回的降级数据。两者文案必须不同。 */
   err?: string | null;
   disabled?: boolean;
-  onOpen?: () => void;
-  onRefresh?: () => void;
-  // ── 账号池（2026-09-13 起 agy 可轮换；没有这些 prop 时退回原来的只读形态）──
-  /** 池里的显示名。缺省 `agy` —— 池还没建起来时就是这个。 */
+  state: OvState;
+  hov?: boolean;
+  drag?: DragWiring;
+  aid?: string;
+  action?: AgyAction | null;
+  plan?: string | null;
   label?: string;
   email?: string;
-  /** 这个号是不是 agy 当前的登录态。 */
-  isCurrent?: boolean;
-  /** 切到这个号。★ **只对下一次启动的 agy 生效** —— agy 只在启动时读凭证，
-   *  已经开着的会话不受影响。这条必须写进 `title`，否则用户会以为点一下就切走了正在跑的那个。 */
+  bestPct?: number | null;
+  privacy: boolean;
+  live?: LiveLine | null;
+  lastUse?: { last: number; today: number } | null;
+  rotLoaded?: boolean;
+  /** `read_agy_board` 给的「额度见底，约几分钟后回来」。 */
+  coolMin?: number;
+  pinRank?: number | null;
+  rotates?: boolean;
   onSwitch?: () => void;
   switching?: boolean;
-  // ── 与 codex 账号卡对齐（用户 2026-09-13：「gemini 的功能也没有 1:1 同步上 codex」）──
-  /** 卡被选中 ⇒ 展开动作条。 */
-  isSelected?: boolean;
-  /** 全池里余量最多的那个号 ⇒ 画 `最优` / `USE`。 */
-  isBest?: boolean;
-  /** 最优号的余量，用来算本卡的差值角标 `-N%`。 */
-  bestPct?: number;
-    onSelect?: () => void;
-  /** 改显示名。★ label 只是昵称，身份始终是 `sub`（同 codex 的 aid）。 */
-  onRename?: (next: string) => void;
-  /** 从池里移除。★ **不可逆** —— 这里有两段确认，CLI 侧另有一道拒绝删当值号的守卫。 */
-  onRemove?: () => void;
-  /** ★★★ 计费探针 —— **花的是 agy 自己的额度**（起一次 `agy -p`，实测约 15k token）。
-   *  与 codex 的探针是两套机制：那边直接打 `/responses`，agy 只在启动时读凭证。 */
   onProbe?: () => void;
   probing?: boolean;
-  /** 这个号参不参与自动轮换。缺省 = 参与（池里存的是反向的 `rotate_off`）。 */
-  rotates?: boolean;
+  onRefresh?: () => void;
+  onTogglePin?: () => void;
   onToggleRotate?: (on: boolean) => void;
+  onRename?: (next: string) => void;
+  onRemove?: () => void;
+  onOpen?: () => void;
 }) {
-  const Z = useCardType();
-  // 本机没有 agy / 已停用 ⇒ **零像素**。见 `agyQuotaVisible` 的注释。
+  const [editing, setEditing] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   if (!agyQuotaVisible(snap, { disabled })) return null;
 
   const shown = agyShown(snap);
@@ -122,417 +73,143 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, winSlots,
   const rem = tight ? tight.b.remaining_percent : null;
   const rows = agyWinRows(shown?.quota);
   const tone = snap ? agyReasonTone(snap) : "muted";
-  // ★ 「没在跑」是常态,不该染成警告色。只有真正异常的降级才上琥珀。
-  const alarmed = degraded && tone !== "muted";
-  const stateColor = alarmed ? "#E0901C" : color;
+  const readOnly = label === undefined;
 
-  // 槽位表里必须有 agy 自己那几格：池里一个账号都没有时 winSlots 是空的，
-  // 不兜的话 agy 的条会**一整条消失**——「读不到 ≠ 确实没有」的另一种形态。
-  const mine = rows.map(r => r.label);
-  const slotRows = [...winSlots, ...mine.filter(l => !winSlots.includes(l))];
-  const glow = rem != null && rem <= 20 ? (rem <= 10 ? "#E0524D" : "#E0901C") : undefined;
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
-  /** 与最优号的差值角标。★ 与账号卡同一套口径：**只在落后时画**，
-   *  领先/持平不画 —— 画一个 `+0%` 只是噪音。 */
-  const gap = rem != null && bestPct != null && bestPct - rem >= 1
-    ? -Math.round(bestPct - rem) : null;
+  const toWin = (lbl: "5h" | "周", kind: "5h" | "w"): OvWin => {
+    const row = rows.find((r) => r.label === lbl);
+    // 看得见的字也要说「这次没读到」（不许只留一个 —）：下一步是点刷新，不是干等。
+    if (!row) return { label: lbl, pct: null, reset: "", kind, absent: true, note: "没读到",
+                       title: `${lbl} 窗口这次没读到 —— 点「刷新」重取一次。` };
+    // 看得见的那几个字也要分开两种「—」：旧读数过期了 vs 上游这次没给（格子 48px，只放得下 3 个字，全句在 title）。
+    if (row.remaining == null) return { label: lbl, pct: null, reset: "", kind, note: row.seen_at ? "已过期" : "没给数",
+                                        title: row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE };
+    const rt = agyResetText(row);
+    return { label: lbl, pct: row.remaining, kind, reset: rt.text, dim: !!row.seen_at,
+             title: row.seen_at
+               ? `${row.group ?? "?"} · 剩 ${row.remaining.toFixed(1)}% —— 这是 ${fmtAgo(row.seen_at)}的读数：最近一次云端没返回这一组，沿用上次的数。`
+               : `${row.group ?? "?"} · 剩 ${row.remaining.toFixed(1)}%${rt.title ? `\n${rt.title}` : ""}` };
+  };
 
-  /** 这一格为什么读不到 —— 说清楚**原因**和**怎么才能看到**，不是只说"没有"。 */
-  /**
-   * ★★ 文案 2026-09-15 从「非当值号」改成「用过才有」（用户：「还存在什么非当值号，
-   *   一次性找办法根治啊」）。「非当值号」说的是**我们的内部状态**，而用户要知道的是
-   *   **他能做什么**。本仓 §5d：披露要说"做什么"，不是只说"坏了"。
-   * ★ 而且它现在是**会自己消失**的：这个号下次当值时 `agy-quota` 会把周额度记进
-   *   `weekly_seen`（B49），此后这一格显示的是那次的真实读数（带 `~` 标龄）。
-   *   所以这句话描述的是一个**有终点**的状态，不是一条永久免责。
-   */
-  /** 这一格为什么读不到。★ 说清**原因**和**下一步**，不是只说"没有"。 */
-  const missTitle = (label: string, _cur?: boolean) =>
-    // ⚠️ 这句话在 2026-09-20 之前写的是「点右上角 ↻ 重取一次」，而那个按钮当天被删了 ——
-    //    披露层说旧事实就是一句关于事实的假陈述，且正好会让人去点一个不存在的东西。
-    `${label} 窗口这次没读到 —— 点档头的「刷新全池」重取一次。`
-    + `（2026-09-15 起每个号都按账号直接读完整摘要，含周窗口；`
-    + `所以这里为空**不再是"非当值号"那种结构性缺失**，就是这一次没取到。）`;
+  const tag = state === "inuse" ? { text: "在用", kind: "inuse" as const }
+    : state === "next" ? { text: "下一个", kind: "next" as const }
+    : state === "cool" ? { text: "冷却中", kind: "cool" as const }
+    : state === "unprobed" ? { text: "未探测", kind: "unprobed" as const }
+    : state === "low" ? { text: "额度低", kind: "low" as const }
+    : state === "off" ? { text: "已停用", kind: "off" as const }
+    : state === "readonly" ? { text: "只读", kind: "readonly" as const }
+    : null;
+  const delta = state === "ok" || state === "next" || state === "low" ? deltaText(rem, bestPct ?? null) : "";
 
-  const cardRef = useRef<HTMLDivElement | null>(null);   // 拖拽影像要用整张卡
+  const head = (
+    <>
+      {editing !== null ? (
+        <input autoFocus value={editing} data-ov-rename=""
+               onClick={(e) => e.stopPropagation()}
+               onChange={(e) => setEditing(e.target.value)}
+               onKeyDown={(e) => {
+                 e.stopPropagation();
+                 if (e.key === "Enter" && editing.trim()) { onRename?.(editing.trim()); setEditing(null); }
+                 if (e.key === "Escape") setEditing(null);
+               }}
+               onBlur={() => setEditing(null)}
+               style={{ fontSize: 14, fontWeight: 700, color: "var(--tx)", minWidth: 0, width: 110, background: "transparent",
+                        border: "1px solid var(--accLine)", borderRadius: 5, padding: "0 4px", fontFamily: "inherit", height: 20 }} />
+      ) : (
+        <b data-card-name="" data-hero-acct={state === "inuse" ? "" : undefined}
+           style={{ fontSize: 15, minWidth: 24, overflow: "hidden", textOverflow: "ellipsis" }}>{label ?? "agy"}</b>
+      )}
+      {pinRank !== null && (
+        <span data-pin-badge="" title={`已置顶（第 ${pinRank + 1} 位）—— 下次启动 agy 优先用它`}
+              style={{ fontSize: 10.5, fontWeight: 700, color: "var(--acc)", flexShrink: 0 }}>▲{pinRank + 1}</span>
+      )}
+      {tag && <OvTag tag={tag} title={state === "next" ? "下次启动 agy 会装进这个号（与顶部续航条同一个真源：agy-rotate next）"
+                                     : state === "readonly" ? "Antigravity 还没建账号池 —— `agy-rotate login --current` 收编当前号"
+                                     : state === "off" ? "已停用自动轮换 —— 启动 agy 时不会挑它（池子空且开着借用时除外）" : undefined} />}
+      {/* 在用但停了轮换（被借用 / 被别的 agy 写回）：「在用」压过了「已停用」，这枚补上另一半事实。 */}
+      {rotates === false && state === "inuse" && <OvTag tag={{ text: "已停用", kind: "off" }} title="这个号停了自动轮换，此刻钥匙串里是它" />}
+      {agyBadgePlan(plan) === "ultra" && <OvTag tag={{ text: "ULTRA", kind: "ultra" }} title="Google AI Ultra" />}
+      {degraded && snap && <StaleMark t={t} note={action ? action.note : agyReasonNote(snap)} tone={tone} size={11} />}
+      {!!err && <StaleMark t={t} note={`读不到本机的额度快照：${err}`} tone="red" size={11} />}
+    </>
+  );
+  const right = delta === "最优" ? <OvTag tag={{ text: "最优", kind: "best" }} title="全池可用号里余量最多的" />
+    : delta ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--tx3)" }}>{delta}</span>
+    : null;
+
+  const lastLine = lastUse && lastUse.last > 0
+    ? `上次用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
+    : rotLoaded ? "24 小时内没启动过它" : "上次用 —";
+  const dyn = state === "inuse" && live && live.sessions > 0 ? (
+    <DynText tone="live" title="Gemini 此刻在跑的会话合计（与托盘 / 刘海同源）">
+      <i style={{ display: "inline-block", verticalAlign: 1, margin: "0 7px 0 3px", width: 6, height: 6, borderRadius: 3,
+                  background: "var(--acc)", boxShadow: "0 0 0 3px rgba(45,212,191,.2)" }} />
+      {fmtTps(live.tps)} t/s · {live.sessions} 会话 · 今日 {fmtTokens(live.today)}
+    </DynText>
+  ) : tight == null && action ? (
+    <AgyActionLink t={t} action={action} fontSize={11.5} />
+  ) : state === "cool" ? (
+    <DynText tone="warn">额度见底 · {coolMin ? `约 ${fmtDur(coolMin)} 后回来` : "等它回满"}</DynText>
+  ) : state === "unprobed" ? (
+    <DynText tone="bad">{busy ? "正在取额度…" : "未读到额度 · 点刷新再取一次"}</DynText>
+  ) : state === "low" ? (
+    <DynText tone="bad">额度低 · 最紧一格剩 {Math.round(rem ?? 0)}%</DynText>
+  ) : state === "readonly" ? (
+    <DynText tone="muted">本机 agy 正在用的号 · 未建池</DynText>
+  ) : state === "off" ? (
+    <DynText tone="muted">已停用轮换 · {lastLine}</DynText>
+  ) : (
+    <DynText tone="muted">{lastLine}</DynText>
+  );
+
+  const footLeft = (
+    <span data-agy-footer="" title={(tight?.group
+      ? `${tight.group} 是 4 个桶里最紧的，它在 ${fmtResetDate(tight.b.reset_at)} 重置。⚠️ 这不是订阅到期日 —— agy 不提供订阅期。`
+      : "还没读到任何窗口的重置时刻") + `\n${readOnly ? "Google 订阅 · 不在轮换池" : "Google 订阅 · 在轮换池"}`}>
+      {shown?.stale ? `${fmtAgo(shown.at ?? undefined)}的读数`
+        : tight ? `重置 ${fmtResetDate(tight.b.reset_at)}`
+        : shown ? "重置 —" : "额度暂时读不到"}
+    </span>
+  );
+  const footRight = plan === "ultra" || plan === "pro" ? (
+    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--tx3)", flexShrink: 0 }}>
+      {plan === "ultra" ? "Google AI Ultra" : "Google AI Pro"}
+    </span>
+  ) : null;
+
+  const actions = readOnly ? (
+    <Ab onClick={onRefresh} disabled={busy} data="refresh" title="重新取一次额度（本机 / 云端读数，零消耗）">
+      <IcRefresh spin={busy} />刷新
+    </Ab>
+  ) : (
+    <>
+      {state !== "inuse" && onSwitch && (
+        <Ab primary onClick={onSwitch} disabled={switching} data="switch"
+            title={`${state === "off" ? "借用" : "切到"} ${label} —— ★ 只对**下一次启动的** agy 生效，已开着的会话不受影响`}>
+          <IcSwap />{switching ? "切换中…" : state === "off" ? "借用" : "切换"}
+        </Ab>
+      )}
+      {onProbe && state !== "off" && (
+        <HoldAb loading={!!probing} onFire={onProbe}
+                hint={`起一次 agy 让 ${label} 真跑一句，验它是否真能干活。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token、约 30s）`} />
+      )}
+      <Ab onClick={onRefresh} disabled={busy} data="refresh" title="重新取一次这一池的额度（云端按账号读，零消耗）">
+        <IcRefresh spin={busy} />刷新
+      </Ab>
+      <OvMenu onOpenChange={setMenuOpen} items={[
+        { key: "pin", label: pinRank !== null ? `取消置顶（第 ${pinRank + 1} 位）` : "置顶 —— 下次启动优先用它", onClick: onTogglePin, hidden: !onTogglePin },
+        { key: "rotate", label: rotates ? "停用自动轮换" : "恢复自动轮换", onClick: () => onToggleRotate?.(!rotates), hidden: !onToggleRotate },
+        { key: "rename", label: "重命名", onClick: () => setEditing(label ?? ""), hidden: !onRename },
+        { key: "usage", label: "查看用量 →", onClick: onOpen, hidden: !onOpen },
+        { key: "remove", label: "从池里移除", bad: true, confirm: "再点一次确认移除", onClick: onRemove, hidden: !onRemove },
+      ]} />
+    </>
+  );
 
   return (
-    <div ref={cardRef}
-         data-aid={aid ?? label}
-         onClick={onSelect ?? onOpen}
-         style={{
-      position: "relative", background: isSelected ? t.heroBg : t.cardBg,
-      // 落点用描边、被拖的变淡 —— 与账号卡同一套反馈（理由见 AccountCard 那处注释）
-      border: `1px solid ${drag?.isDragging ? t.accent : (isSelected ? t.accent : hexA(color, .30))}`,
-      borderRadius: 12,
-      padding: Z.pad, display: "flex", flexDirection: "column",
-      cursor: (onSelect ?? onOpen) ? "pointer" : "default", userSelect: "none",
-      zIndex: drag?.isDragging ? 5 : undefined,
-      boxShadow: drag?.isDragging ? "0 8px 24px rgba(0,0,0,.45)" : undefined,
-      // ★★★ **`transform` 归拖拽 hook 独占，React 一个字都不许写。**
-        //   两边都写同一个属性时，React 的每次重渲染都会把 hook 直接写进 DOM 的
-        //   位移**整个抹掉** —— 实测症状：卡片只剩 `scale(1.03)`，完全不跟手。
-        //   浮起的缩放也一并交给 hook（它在 `paint()` 里和位移合成一条 transform）。
-      // ★★★ **`transform` 不许出现在 transition 里。** 它归拖拽 hook 独占，
-        //   而留着过渡会让「清空 transform 后立刻量位置」量到**过渡中间值** ——
-        //   实测症状：量到 1437 而真实槽位是 685，跟手补偿整个算错、卡片离指针 600px。
-        //   让位动画由 hook 用 Web Animations API 显式播放，不靠 CSS 过渡。
-        transition: "background .2s ease, border-color .2s ease, box-shadow .15s ease",
-    }}>
-      {drag && <DragHandle t={t} dragging={drag.isDragging} hint={drag.hint}
-                           onStart={drag.onStart} onMove={drag.onMove} onEnd={drag.onEnd} />}
-      {/* ★ 池里的号左上角不写字（同 codex 账号卡；原来的 `⌘N` 切号角标 2026-10-16 随快捷键改切档撤掉）；
-          没建池时的只读卡写 `CLI` —— 回答"这张卡怎么来的"。 */}
-      <span style={{ position: "absolute", top: 6, left: 10, color,
-                     fontFamily: MONO, letterSpacing: ".04em", fontSize: Z.shortcut }}>
-        {label === undefined ? "CLI" : ""}
-        {/* ★ 置顶角标收起态就看得见，带队列位次 —— 与 codex 账号卡同位同义。 */}
-        {pinRank !== null && (
-          <span data-pin-badge style={{ display: "inline-flex", alignItems: "center", gap: 1,
-                                        marginLeft: 4, color: t.accent, fontWeight: 700 }}>
-            <IcPin on />{pinRank + 1}
-          </span>
-        )}
-        {/* ★ 停用轮换角标 —— 与账号卡同位同色同义（琥珀 = 主动停用，不是坏了）。 */}
-        {rotates === false && (
-          <span data-rotate-off title="已停用自动轮换 —— 启动 agy 时不会挑它（池子空且开着借用时除外）。展开卡片点循环图标可放回"
-                style={{ marginLeft: 4, color: "#E0901C", fontWeight: 700 }}>⊘</span>
-        )}</span>
-      {/* ★ 右上角**只许有拖拽手柄**（用户 2026-09-20：「卡片统一一下」）。
-          原来这里还有一个 ↻ 手动重取，坐标 `top:4 right:8` —— 与上面那个 `DragHandle`
-          **字面上同一个位置**，两个控件叠在同一个角上。手动重取的能力没丢：
-          档头的「刷新全池」做同一件事，而且一次刷完整池而不是一张卡。 */}
-
-      <div style={{ display: "flex", gap: 11, alignItems: "center", flex: 1, minHeight: 0 }}>
-        {/* ★ 降级时环与条走状态色,与菜单栏行同口径 —— 同一个状态两种画法正是这套闸在防的。
-            ★ 但 `no_process` 不算异常(常态),所以它仍用平台色,只是数字旁边挂一个 `!`。 */}
-        <Ring pct={rem ?? 0} r={Z.ringR} sw={Z.ringSw}
-              color={rem == null ? t.ringTrack : stateColor}
-              track={t.ringTrack} size={Z.ring} glow={glow}>
-          <span style={{ fontSize: Z.ringNum, fontWeight: 700, color: t.text,
-                         fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
-            {rem == null ? "—" : Math.round(rem)}
-          </span>
-        </Ring>
-
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            {editing !== null ? (
-              // ★ `onKeyDown` 必须 `stopPropagation`：全局 ⌘1~⌘3 是切档快捷键，
-              //   不拦的话在框里按 ⌘+数字会切走这一档、编辑态随卡片一起消失（与账号卡同一条教训）。
-              <input autoFocus value={editing}
-                     onClick={(e) => e.stopPropagation()}
-                     onChange={(e) => setEditing(e.target.value)}
-                     onKeyDown={(e) => {
-                       e.stopPropagation();
-                       if (e.key === "Enter" && editing.trim()) {
-                         onRename?.(editing.trim()); setEditing(null);
-                       }
-                       if (e.key === "Escape") setEditing(null);
-                     }}
-                     // ★ `onBlur` 一律**放弃**，不静默提交 —— 与账号卡同一条。
-                     onBlur={() => setEditing(null)}
-                     style={{ fontSize: Z.name, fontWeight: 700, color, minWidth: 0, flex: 1,
-                              background: "transparent", border: `1px solid ${hexA(color, .45)}`,
-                              borderRadius: 5, padding: "0 4px", fontFamily: "inherit" }} />
-            ) : (
-              /* ★ `data-hero-acct` 只挂在**当值号**这张卡的名字上：uishot 的 `trails` 探针按时间采
-                 「界面说当前是谁」。2026-09-24 Hero 换成 `RunwayHero`（数据来自后端现读，不经种子）之后，
-                 仍然会闪回种子的只剩卡片「当前」徽章这一路（`liveSub`），所以标记跟着搬到这里。 */
-              /* ★ 名字是这一行**唯一让位者**（同账号卡）：徽章一个不压，名字截省略号、留 40px 下限。
-                 2026-10-16 用户截图：`tomyhuo… ULTRA 当前 下一个` 里「当前」被挤成两行 ——
-                 它和「切换 / 只读」没有 `flexShrink: 0`，「下一个」有，所以只有它们会被压。 */
-              <span data-hero-acct={isCurrent ? "" : undefined}
-                    style={{ fontSize: Z.name, fontWeight: 700, color, minWidth: 40,
-                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label ?? "agy"}</span>
-            )}
-            <PlanBadge plan={agyBadgePlan(plan)} t={t} size={Z.planBadge} />
-            {/* ★★ 徽章三态，**别合并**：
-                · 在池里且当值  → 「当前」（青底，与账号卡同一套语义）
-                · 在池里不当值  → 「切换」（可点）
-                · 不在池里      → 「只读」——这是 2026-09-13 之前的形态，没建池时仍然成立。
-                把后两者合并成一个灰标签，就等于回到用户问的那个问题：「不是解决了吗」。 */}
-            {isCurrent ? (
-              <span style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", flexShrink: 0, whiteSpace: "nowrap",
-                             borderRadius: 5, color: t.accentText, background: t.accent }}>当前</span>
-            ) : onSwitch ? (
-              <span onClick={(e) => { e.stopPropagation(); if (!switching) onSwitch(); }}
-                    title="切到这个号 —— ★ 只对下一次启动的 agy 生效，已经开着的会话不受影响"
-                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", flexShrink: 0, whiteSpace: "nowrap",
-                             borderRadius: 5, cursor: switching ? "default" : "pointer",
-                             color, border: `1px solid ${hexA(color, .45)}`,
-                             opacity: switching ? .5 : 1 }}>{switching ? "切换中…" : "切换"}</span>
-            ) : (
-              <span title="Antigravity 还没建账号池 —— `agy-rotate login --current` 收编当前号"
-                    style={{ fontSize: Z.curBadge, fontWeight: 700, padding: "1px 5px", borderRadius: 5, flexShrink: 0, whiteSpace: "nowrap",
-                             color, border: `1px solid ${hexA(color, .45)}` }}>只读</span>
-            )}
-            {/* ★ 降级说明**只在这里**,一个字符 + 悬浮。理由见 StaleMark 的文件头。 */}
-            {degraded && snap && <StaleMark t={t} note={action ? action.note : agyReasonNote(snap)}
-                                            tone={tone} size={11} />}
-            {/* 读**本机 sidecar** 失败(IO 层),与"额度读不到"是两回事,所以文案不同。 */}
-            {!!err && <StaleMark t={t} note={`读不到本机的额度快照：${err}`} tone="red" size={11} />}
-            {/* ★ 与账号卡同一套语义：`最优` = 全池余量最多；`USE` = 最优**且不是当前号**
-                （已经在用最优号时再喊一句"用这个"只是噪音）。 */}
-            {/* ★ `title` 如实说出这次比较的**基础**。少看了窗口就直说少看了哪些 ——
-                不说的话 `USE` 会被读成"全面最优"，而事实只是"在都量到的那部分上最优"。 */}
-            {/* ★★ 2026-09-24：与 codex 账号卡对齐（用户：「按照 codex 的规范」）——
-                角标是**「下一个」**，由 `agy/pool.py::pick`（`next --json`）决定，
-                不再是前端自己排的「最优 / USE」：那一份既不看置顶也不看停用、也不看 15% 阈值，
-                而 wrapper 真正装进去的号由 `pick` 决定 —— 两份实现必然分叉（codex 那边已栽过）。 */}
-            {isBest && (
-              <span data-next-badge title={bestTitle}
-                    style={{ fontSize: Z.curBadge, fontWeight: 700, color: t.accentText,
-                             background: t.accent, padding: "1px 5px", borderRadius: 4,
-                             flexShrink: 0, whiteSpace: "nowrap" }}>下一个</span>
-            )}
-            {/* 差值角标：**只在落后时画**。领先/持平画一个 `+0%` 只是噪音。 */}
-            {gap != null && !isBest && (
-              <span title={`比最优的号少 ${-gap}%`}
-                    style={{ marginLeft: "auto", fontSize: Z.curBadge, fontWeight: 700,
-                             fontFamily: MONO, color: t.muted,
-                             fontVariantNumeric: "tabular-nums" }}>{gap}%</span>
-            )}
-          </div>
-          {/* ★★ 这一格放**账号信息**（邮箱），与账号卡、grok 卡同位同义（用户 2026-09-16
-              点名要的一致性：「gemini model 最紧应该是放账号信息的」）。
-
-              ⚠️ **它原来放的是「gemini 最紧」，而那个理由已经过期了** —— 旧注释写着
-              「agy 的响应里没有任何身份信息（接口无鉴权）」，那说的是**本机 loopback RPC**。
-              2026-09-15（B53）起额度改走云端 `retrieveUserQuotaSummary`，**按账号读**，
-              池里每个号都带 `email`。所以"拿不到身份"不再成立。
-              ★ 本仓 §6：披露/文案的寿命跟着它描述的事实走，事实变了就该重新评估 ——
-                这条正是那个形状，只是它描述的是布局而不是免责。
-
-              ★ 「哪一组最紧」**没有被删掉，移进了 `title`**（§6：不要顺手简化掉已有功能）。
-                环上那个数字来自 4 个桶里最紧的一个，不说来自哪组，用户无从知道是
-                Gemini 还是 Claude/GPT 见底。 */}
-          <div title={tight?.group && tight.b.remaining_percent == null
-                 ? `环上是「—」：**${tight.group}** 有一格上游没给剩余比例 —— 读不到，不是满也不是空。`
-                 : tight?.group
-                 ? `环上的 ${Math.round(tight.b.remaining_percent as number)}% 来自**${tight.group}** —— `
-                   + `4 个桶（Gemini / Claude+GPT × 5h / 周）里最紧的那个。`
-                   + `任何一个见底 agy 就用不了，所以取最小值不取平均。`
-                 : undefined}
-               style={{ fontSize: Z.email, color: t.text2, fontFamily: MONO, overflow: "hidden",
-                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {/* ★ 读不到就说读不到，不拿 label 顶替 —— label 是昵称，邮箱才是身份。 */}
-            {email ?? (busy ? "正在取额度…" : "—")}
-          </div>
-
-          {/* 弹性留白：把条形区压到卡片底边，与账号卡同款。 */}
-          <div aria-hidden style={{ flex: 1, minHeight: 0 }} />
-
-          {/* ★ 被 Google 拒绝时，下一步动作放在**行上**（眼睛已经在的地方），不只放进 `!` 的悬浮。 */}
-          {tight == null && action && (
-            <AgyActionLink t={t} action={action} fontSize={Z.eta} />
-          )}
-
-          {tight != null && slotRows.map(label => {
-            const row = rows.find(r => r.label === label);
-            const rr = row?.remaining;
-            return row == null || rr == null ? (
-              // ★★ 这一行以前是 `visibility: hidden` 的纯占位 —— 用户看到的是**一整行空白**，
-              //   连 `—` 都没有，于是直接问「为什么这个号少了一个窗口」。
-              //   本仓 §5d 的规矩是「**读不到显 `—`，不显 `0`**」，而"什么都不显"比显 0 还糟：
-              //   它把「读不到」伪装成了「没有这个窗口」，两者的下一步动作完全相反。
-              //   高度仍与真行同构（跨卡对齐靠它），只是把话说出来。
-              // ★★★ **原因写在行上，不只写在 `title` 里**（2026-09-14 用户实报
-              //   「我的 gemini 周额度没刷新？还丢失了？」）。实测当时**并没有丢**：
-              //   `.agy-quota.json` 里 `gemini-weekly = 98.78%`、`fetched_at` 就在几秒前，
-              //   只是它的 `pid_email` 指向**另一个号**，所以这张卡结构上拿不到它。
-              //   在那之前这一行是 `—  ↻—`，而同一个 `—` 同时表示「非当值号」和「读失败」，
-              //   两者的下一步动作完全相反。解释一直写着 —— 写在 `title` 里，
-              //   **而本仓的规矩是「告警放在眼睛已经在的地方」，只写进悬浮的真话等于没写**。
-              <div key={label} data-agy-unknown={row ? "" : undefined}
-                   title={row ? (row.seen_at ? AGY_EXPIRED_TITLE : AGY_UNKNOWN_TITLE) : missTitle(label, isCurrent)}
-                   style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO, minWidth: WIN_LABEL_W, whiteSpace: "nowrap" }}>{label}</span>
-                {/* ★ 条槽保留：跨卡对齐靠这一行的高度撑着（见 test_missing_window_says_so）。 */}
-                <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack }} />
-                <span style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO,
-                               whiteSpace: "nowrap" }}>
-                  {row ? (row.seen_at ? "旧读数已过期" : "上游没给数") : "\"这次没读到\""}</span>
-              </div>
-            ) : (
-              // ★★★ `seen_at` = 这一格是**上次读到的**，不是这次读到的。
-              //   现在的来源（2026-10-16）：云端摘要偶尔整组不回（同一个号几分钟内来回），
-              //   后端沿用上次那组并标时刻（`agy/pool.py::carry_missing_groups`）。
-              //   画的是一个**真实发生过**的数字 —— 但必须标龄、降不透明度，
-              //   否则它会冒充现值，而那比画空更糟（§7.0b 的反面：不许把旧值伪装成新值）。
-              <div key={label}
-                   title={row.seen_at
-                     ? `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}% —— 这是 ${fmtAgo(row.seen_at)}的读数：最近一次云端没返回这一组，沿用上次的数，下次读到就会更新。`
-                     : `${row.group ?? "?"} · 剩 ${rr.toFixed(1)}%`}
-                   style={{ display: "flex", alignItems: "center", gap: 6,
-                            opacity: row.seen_at ? .62 : 1 }}>
-                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: MONO, minWidth: WIN_LABEL_W, whiteSpace: "nowrap" }}>{row.label}</span>
-                <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: t.barTrack, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${rr}%`,
-                                background: stateColor, borderRadius: 2,
-                                transition: "width .55s cubic-bezier(.4,0,.2,1)" }} />
-                </div>
-                {/* 数字仍按阈值变色 —— 环恒平台色,这是卡上唯一还能报警的地方(同 GrokCard)。 */}
-                <span style={{ fontSize: Z.pct, fontWeight: 600,
-                               color: alarmed ? "#E0901C" : winNumColor(rr, t),
-                               fontFamily: MONO, fontVariantNumeric: "tabular-nums" }}>
-                  {Math.round(rr)}%
-                </span>
-                <span title={agyResetText(row).title || undefined}
-                      style={{ fontSize: Z.eta, color: t.muted, fontFamily: MONO }}>
-                  ↻{agyResetText(row).text}
-                </span>
-              </div>
-            );
-          })}
-
-          {/* ★ 底注一行,降级与否都在同一位置、同样高度 —— 卡片不会因为 agy 关掉就长高一截。
-              ★★ **数字绝不假装是活的**:有上次读数就说明它是几时的,没有就说读不到。
-              位置与外框刻意与账号卡的「到期」行同构(对齐的一部分,不是装饰线)。 */}
-          {/* ★★ 页脚**恒为一行**，与账号卡同构（用户 2026-09-24：「gemini 的卡片下面有较大的留白」）。
-              原来是 `flexDirection: column`，隐形占位徽章自成第二行 ⇒ 卡片比 codex 卡高 23px
-              （实测 179 vs 156），且那 23px 全是底部空白。 */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                        gap: 8, flexWrap: "nowrap", minWidth: 0,
-                        marginTop: Z.footTop, paddingTop: Z.footPad, borderTop: `1px solid ${t.divider}`,
-                        color: alarmed ? "#E0901C" : t.muted }}>
-            {/* ★★ 这一格与账号卡的「到期」同位（用户 2026-09-16 点名的一致性）。
-                放的是**最紧那个窗口的重置时刻**，绝对写法 `09-19 16:34`。
-
-                ⚠️ **agy 没有「订阅到期日」这个数据，不是我没找。** 三个独立探针一致
-                （2026-09-16，且有正向对照：同样写法在 codex 侧找到了 `sub_until`/`sub_checked`）：
-                  · 凭证文件只有 `token.expiry` —— 那是 access_token 的 ~6h 有效期；
-                  · `id_token` 是纯 Google OIDC（`at_hash/aud/azp/email/email_verified/exp/iat/iss/sub`），
-                    无任何 plan/tier/subscription 声明；
-                  · agy 二进制里没有 subscription/license 类端点。
-                所以这里**不能**写「到期」—— 把 6 小时的 token 有效期或额度重置日说成订阅到期，
-                就是本仓那条「把 5 小时的余量说成一周的余量」，比不显示更糟。
-                ★ 标签如实写「重置」，与账号卡的「到期」**同位不同义，且说出来**。
-
-                ★ 与上方行里的 `↻2h` **互补不重复**：那里答"还有多久"，这里答"具体哪天" ——
-                  周窗口只看 `↻3d` 说不出是哪一天。用户 2026-09-16 选了这一格放重置日，
-                  我用绝对写法正是为了不让它退化成同一个数的第二遍。 */}
-            {/* ★ 「在/不在轮换池」是**事实陈述**，原来住在这一格的兜底文案里。
-                这一格改放重置日之后它没有别处可去（动作条里的轮换图标只在卡被选中时可见），
-                所以并进 `title` —— **搬走一句真话之前要先给它找到家**，本仓 §7.-2 的规矩。 */}
-            <span title={(tight?.group
-                    ? `${tight.group} 是 4 个桶里最紧的，它在 ${fmtResetDate(tight.b.reset_at)} 重置。`
-                      + `⚠️ 这不是订阅到期日 —— agy 不提供订阅期（已实测确认，见代码注释）。`
-                    : "还没读到任何窗口的重置时刻")
-                    + `\n${onSwitch || isCurrent ? "Google 订阅 · 在轮换池" : "Google 订阅 · 不在轮换池"}`}
-                  style={{ fontSize: Z.exp, fontFamily: MONO, whiteSpace: "nowrap",
-                         overflow: "hidden", textOverflow: "ellipsis" }}>{
-              // ★ 陈旧读数仍然**先说它是几时的** —— 数字绝不假装是活的（§7.0b）。
-              shown?.stale ? `${fmtAgo(shown.at ?? undefined)}的读数`
-                : tight ? `重置 ${fmtResetDate(tight.b.reset_at)}`
-                : shown ? "重置 —"
-                : "额度暂时读不到"}</span>
-            {/* agy 没有重置卡这个概念，占位只为让页脚与账号卡等高。 */}
-            <span style={{ minWidth: 0, overflow: "hidden", display: "flex", justifyContent: "flex-end" }}><CardBadgeGhost /></span>
-          </div>
-        </div>
-      </div>
-
-      {/* ★★ 动作条。与账号卡**同一条构造**：同排有别的卡展开时，本卡渲染同一条动作条
-          但整条隐形 —— 不是画一个"差不多高"的占位。账号卡那边手算过一次，sweep 当场
-          量出还差 34px；高度必须**由构造保证**，按钮尺寸一改自动跟上。
-          ★ 隐形那份必须 `pointerEvents: none` + `aria-hidden`，否则会出现看不见却点得到的按钮。
-          ⚠️ **没有「探针」和「轮换开关」** —— 探针跑的是 `codex-rotate probe`，扣的是
-             codex 的额度；而 agy 的自动切号发生在 `bin/agy` 拉起进程之前，不是按号的开关。
-             给一个点了没用的按钮，比没有这个按钮糟。 */}
-      {/* ★ 与账号卡**同款浮层**（§5c 页面统一性：同一类卡必须长得一样）。
-          整段理由见 `AccountCard.tsx` 同处 —— 两张卡各写一套迟早只改一边。 */}
-      <CardActionBar open={!!isSelected} t={t}>
-          {!(onRemove && confirmDelete) ? (<>
-          {isCurrent ? (
-            <span style={{ flex: "1 1 auto", minWidth: 62, textAlign: "center", fontSize: 11,
-                           fontWeight: 600, whiteSpace: "nowrap", color: t.accent, padding: "5px 0" }}>✓ 当前</span>
-          ) : onSwitch ? (
-            <span onClick={() => { if (!switching) onSwitch(); }}
-                  title={`把当前号切到 ${label ?? "这个号"} —— ★ 只对**下一次启动的** agy 生效`}
-                  style={{ flex: "1 1 auto", minWidth: 62, textAlign: "center", fontSize: 11,
-                           fontWeight: 700, whiteSpace: "nowrap", color: t.accentText,
-                           background: t.accent, padding: "5px 8px", borderRadius: 6,
-                           cursor: switching ? "default" : "pointer", opacity: switching ? .5 : 1 }}>
-              {switching ? "切换中…" : "切换"}</span>
-          ) : null}
-          {onProbe && (
-            /* ★ 探针**不压成图标**：它是这一档唯一花钱的控件，必须与旁边免费的按钮
-               一眼可分（琥珀 + ⚡ + 两段确认）。压成一个 34px 的灰图标正好抹掉那条区分。 */
-            <ProbeButton t={t} variant="inline" label="探针"
-              hint={`起一次 agy 让 ${label ?? "这个号"} 真跑一句，验它是否真能干活。⚠️ 花的是 **agy 自己**的额度（实测单次约 15k token、约 30s）`}
-              loading={!!probing} onConfirm={onProbe} loadingText="探测…" />
-          )}
-          {/* ★ 置顶排在「轮换开关」前面（与 codex 卡同序）。 */}
-          {onTogglePin && (
-            <IconBtn title={pinRank !== null
-                       ? `已置顶（第 ${pinRank + 1} 位）。点一下取消 —— 取消后回到「容量最高优先」`
-                       : "置顶：下次启动 agy 优先用这个号。可置顶多个，按点击先后排队；额度见底时自动用下一个"}
-                     onClick={onTogglePin}
-                     color={pinRank !== null ? t.accentText : t.muted}
-                     border={pinRank !== null ? t.accent : t.ghostBorder}
-                     bg={pinRank !== null ? t.accent : undefined}>
-              <IcPin on={pinRank !== null} />
-            </IconBtn>
-          )}
-          {onToggleRotate && (
-            <IconBtn title={rotates
-                       ? `${label ?? "这个号"} 正参与自动轮换。点一下移出 —— wrapper 不再挑它`
-                       : `${label ?? "这个号"} 已停用自动轮换。点一下放回轮换池`}
-                     onClick={() => onToggleRotate(!rotates)}
-                     color={rotates ? t.muted : "#E0901C"}
-                     border={rotates ? t.ghostBorder : "#E0901C55"}
-                     bg={rotates ? undefined : "rgba(224,144,28,.10)"}>
-              <IcRotate off={!rotates} />
-            </IconBtn>
-          )}
-          {onRefresh && (
-            <IconBtn title="重新取一次这一池的额度（云端按账号读，零消耗）"
-                     onClick={() => { if (!busy) onRefresh(); }}
-                     color={t.muted} border={t.ghostBorder}>
-              <span style={{ fontFamily: MONO, fontSize: 12, lineHeight: 1 }}>↻</span>
-            </IconBtn>
-          )}
-          {onRename && (
-            <IconBtn title="重命名 —— 改显示名。卡片、菜单栏、`agy --as` 都会跟着变（label 只是昵称，身份始终是 sub）"
-                     onClick={() => setEditing(label ?? "")} color={t.muted} border={t.ghostBorder}>
-              <IcPen />
-            </IconBtn>
-          )}
-            {onRemove && (
-            <IconBtn title={`从池里移除 ${label ?? ""}（会先要一次确认）`}
-                     onClick={() => setConfirmDelete(true)} color="#E0524D" border="#E0524D40">
-              <IcTrash />
-            </IconBtn>
-            )}
-          </>) : (
-            <>
-              {/* ★★ 确认态**整条只剩「删除 X？/ 确认删除 / 取消」**（用户 2026-10-16 截图：点删除后乱了 ——
-                  「确认删除」+「取消」约 120px 顶替 34px 的垃圾桶，320px 宽的卡一行放不下，「取消」折成两行、
-                  「探针」被挤到 30px 截断、整条从 46px 涨到 60px）。四个图标缩到底也差 ~80px，所以不是压缩能解决的。
-                  顺带：不可逆的确认旁边不再挨着「切换 / 探针」，误触面也没了。
-                  ★ 确认态**保留文字**：删除不可逆，把「确认删除」也压成图标等于让人凭记忆点。
-                  三块都定高 28（= 探针按钮高），整条高度不随确认态变。 */}
-              <span data-confirm-delete title={`从池里移除 ${label ?? ""}`}
-                    style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, color: t.text2, whiteSpace: "nowrap",
-                             overflow: "hidden", textOverflow: "ellipsis", height: 28, display: "flex", alignItems: "center" }}>移除 {label ?? "这个号"}？</span>
-              <span onClick={() => { setConfirmDelete(false); onRemove?.(); }}
-                    style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D", padding: "0 10px", height: 28,
-                             display: "flex", alignItems: "center", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
-              <span onClick={() => setConfirmDelete(false)}
-                    style={{ fontSize: 11, color: t.text2, padding: "0 10px", height: 28, display: "flex", alignItems: "center",
-                             cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>取消</span>
-            </>
-          )}
-      </CardActionBar>
-    </div>
+    <OvCard id={aid ?? label ?? "agy"} t={t} state={state} ringPct={rem} platColor={color} head={head} right={right}
+            email={email ? maskId(email, privacy) : (busy ? "正在取额度…" : "—")}
+            emailTitle={tight?.group ? `环上的数来自 ${tight.group} —— 4 个桶里最紧的那个。任何一个见底 agy 就用不了，所以取最小值。` : undefined}
+            dyn={dyn} w5={toWin("5h", "5h")} ww={toWin("周", "w")}
+            footLeft={footLeft} footRight={footRight} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
   );
-}
-
-/** `#rrggbb` → `rgba(...)`。边框与徽章描边要跟着平台色走，写死一套就没法响应用户改色。 */
-function hexA(hex: string, alpha: number): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h.length === 3 ? h.split("").map((x) => x + x).join("") : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }

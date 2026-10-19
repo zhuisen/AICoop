@@ -1,81 +1,70 @@
-import type { Theme } from "../theme";
-import type { PoolKey, PoolPlatform } from "../platforms";
-import logoOpenAI from "../assets/logo-openai.png";
-import logoGrok from "../assets/logo-grok.png";
+import PlatformLogo, { type LogoPlatform } from "./PlatformLogo";
+import { numColor } from "../live";
+import { MONO } from "./mb/vars";
 
-/**
- * 菜单栏的**平台 logo 芯片行**（v4 交接稿 §2，1:1 复刻）。
- *
- * 它替换的是 v3 那条闲置的「可用账号」标题行 —— 那一行只重复了 Tab 上已经有的数字。
- *
- * ★★ **logo 用蒙版着色，不备两套彩色图**（稿 §2）：同一张白色 glyph + 透明底的 PNG，
- *   通过 `mask-image` 上色，选中/未选中自动跟着芯片状态变。备两套图的话，
- *   下次调品牌色会漏掉其中一套，而那**不会报任何错**。
- *
- * ★★ **资产必须内置**（稿 §9.2）：运行时远程加载等于离线就没有 logo，
- *   而这个 app 的全部卖点就是本机可用。
- */
+/** 菜单栏的平台档。★ 比主窗的 `PoolKey` 多一个 `claude`（交接包 4f：Codex · Claude · Gemini · Grok）。 */
+export type MbPlat = "codex" | "claude" | "gemini" | "grok";
 
-/** Gemini 没有现成蒙版图，用内联四角星（稿 §2 末）。`currentColor` 让它跟着芯片状态走。 */
-const IconGemini = ({ size = 13 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-    <path d="M12 1.8c.9 4.9 4.3 8.3 9.2 9.2v2c-4.9.9-8.3 4.3-9.2 9.2h-2c-.9-4.9-4.3-8.3-9.2-9.2v-2c4.9-.9 8.3-4.3 9.2-9.2h2z" />
+export interface ChipItem {
+  key: MbPlat;
+  label: string;
+  /** 这一档**渲染出来**几个号。写"池里有几个"就是在说界面上看不到的事。 */
+  count: number;
+  /** 这一档有没有失效账号 —— 数字后跟一颗红点。 */
+  hasDead?: boolean;
+  /** 只读档（只有 Grok）：数字后挂一把锁。 */
+  readOnly?: boolean;
+}
+
+/** 档位 → logo / 数字色用的平台键（请求账本那套：Gemini 的键是 `agy`）。 */
+export const LOGO_OF: Record<MbPlat, LogoPlatform> = { codex: "codex", claude: "claude", gemini: "agy", grok: "grok" };
+
+const Lock = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.7" />
   </svg>
 );
 
-const MASKS: Partial<Record<PoolKey, string>> = { codex: logoOpenAI, grok: logoGrok };
-
-export interface ChipItem extends PoolPlatform {
-  /** 这一档**渲染出来**几个号。写"池里有几个"就是在说界面上看不到的事。 */
-  count: number;
-  /** 这一档有没有失效账号 —— 数字后跟一颗红点（稿 §2）。 */
-  hasDead?: boolean;
-  /** 平台识别色，走 `colorOf(traffic, colorKey)` 取。 */
-  color: string;
-}
-
-export default function PlatformChips({ items, cur, on, right, t }: {
+/**
+ * 菜单栏的**平台芯片行**（交接包 2026-10-19 · 4f「平台芯片 28」，`P4PopRows.html` 第 53 行逐值照抄）。
+ *
+ * ★ 2026-10-19 起用**官方彩色 logo**（`PlatformLogo`，资产内置、不远程加载），取代 v4 稿的蒙版单色图：
+ *   交接包规定「logo 任何状态都不变暗」，选中 / 未选中只换芯片的底色、描边与数字色（平台数字色）。
+ * ★ 顺序固定 Codex → Claude → Gemini → Grok；只有 Grok 带锁（只读）。
+ */
+export default function PlatformChips({ items, cur, on, right, isDark }: {
   items: ChipItem[];
-  cur: PoolKey;
-  on: (k: PoolKey) => void;
-  /** 右侧小字 `{当前平台名} · ↻ {时间}` —— **只有 logo 时用来防认错**（稿 §2）。 */
+  cur: MbPlat;
+  on: (k: MbPlat) => void;
+  /** 右侧小字 `↻ HH:MM`（当前这一档上次刷新的时刻）。 */
   right?: React.ReactNode;
-  t: Theme;
+  isDark: boolean;
 }): React.ReactElement {
   return (
-    <div className="mb-chips">
+    <div className="mb-chips2" style={{ display: "flex", alignItems: "center", gap: 6, height: 44, padding: "0 12px",
+                                        flexShrink: 0 }}>
       {items.map((p) => {
-        const on_ = p.key === cur;
-        const mask = MASKS[p.key];
+        const sel = p.key === cur;
+        const pc = numColor(LOGO_OF[p.key], isDark ? "dark" : "light");
         return (
-          <span key={p.key} className={`mb-chip${on_ ? " on" : ""}`} onClick={() => on(p.key)}
-                title={`${p.label} · ${p.count} 号`}
-                style={{
-                  // 选中：品牌色 50% 描边 + 10% 底；未选中：中性描边、透明底（稿 §2 表）
-                  borderColor: on_ ? `${p.color}80` : t.ghostBorder,
-                  background: on_ ? `${p.color}1a` : "transparent",
-                }}>
-            <span className="mb-chip-logo"
-                  style={{ background: on_ ? p.color : "rgba(255,255,255,.08)",
-                           color: on_ ? t.appBg : p.color }}>
-              {mask ? (
-                <span className="mb-chip-mask"
-                      style={{
-                        // ★ 蒙版着色：选中反白成底色、未选中用品牌色。一张图两态。
-                        background: on_ ? t.appBg : p.color,
-                        WebkitMaskImage: `url(${mask})`,
-                        maskImage: `url(${mask})`,
-                      }} />
-              ) : <IconGemini />}
-            </span>
-            <span className="mb-chip-n" style={{ color: on_ ? p.color : t.muted }}>{p.count}</span>
-            {/* 死号提示：数字后紧跟一颗红点（稿 §2）。★ 只在真有死号时出现 ——
-                常亮的灯会被学会忽略，这是本仓判过死刑的形态。 */}
+          <button key={p.key} type="button" className="mb-chip2" data-mb-chip={p.key} data-on={sel ? "1" : "0"}
+                  onClick={() => on(p.key)} title={`${p.label} · ${p.count} 号${p.readOnly ? " · 只读" : ""}`}
+                  style={{ display: "flex", alignItems: "center", gap: 5, height: 28, padding: "0 8px 0 6px",
+                           borderRadius: 14, cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
+                           background: sel ? `${pc}22` : "transparent",
+                           border: `1px solid ${sel ? `${pc}99` : "var(--line)"}` }}>
+            <PlatformLogo platform={LOGO_OF[p.key]} isDark={isDark} size={16} alt={p.label} />
+            <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 600,
+                           color: sel ? pc : "var(--tx2)", transition: "color 200ms" }}>{p.count}</span>
+            {p.readOnly && <span style={{ color: "var(--tx3)" }}><Lock /></span>}
+            {/* 死号提示：只在真有死号时出现 —— 常亮的灯会被学会忽略。 */}
             {p.hasDead && <span className="mb-chip-dead" />}
-          </span>
+          </button>
         );
       })}
-      {right && <span className="mb-chips-right" style={{ color: t.muted }}>{right}</span>}
+      {right && <span style={{ marginLeft: "auto", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 11,
+                               color: "var(--tx3)", whiteSpace: "nowrap" }}>{right}</span>}
     </div>
   );
 }

@@ -2,56 +2,49 @@ import { useState, useMemo, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isWindowsUI, CARD_ACTIONS_LIFE_MS } from "./helpers";
-import { THEMES, CARD_TYPE, CARD_TYPE_COMPACT } from "./theme";
+import { isWindowsUI } from "./helpers";
+import { THEMES } from "./theme";
 import Toast from "./components/Toast";
-import GhostButton from "./components/GhostButton";
-import AccountCard from "./components/AccountCard";
 import DetailModal, { type AccountDetail } from "./components/DetailModal";
 import UseCreditDialog from "./components/UseCreditDialog";
 import LogsPage from "./pages/LogsPage";
 import RelayPage from "./pages/RelayPage";
 import TrafficPage from "./pages/TrafficPage";
 import PlatformPage from "./pages/PlatformPage";
+import RequestsPage, { type ReqNav } from "./pages/RequestsPage";
 import type { RangeState } from "./traffic";
 import { colorOf, daysNeeded, DEFAULT_RANGE, todayOf, singleDayOf, hoursOfDay } from "./traffic";
-import SettingsPage, { getSettings, patchSettings, TRAY_STYLES } from "./pages/SettingsPage";
+import SettingsPage, { getSettings, patchSettings, loadTheme, saveTheme, TRAY_STYLES, type ThemeName } from "./pages/SettingsPage";
 import { useStore } from "./hooks/useStore";
 import { useExpiryWatch } from "./hooks/useExpiryWatch";
 import { useDeadWatch } from "./hooks/useDeadWatch";
 import { useAutoSwitch } from "./hooks/useAutoSwitch";
 import { useKeyboard } from "./hooks/useKeyboard";
-import { maskId, fullVersion, freshnessLine, agyPoolFreshness } from "./helpers";
+import { fullVersion } from "./helpers";
 import { usePrivacy } from "./hooks/usePrivacy";
 import { useTraffic } from "./hooks/useTraffic";
 import { useGrokQuota } from "./hooks/useGrokQuota";
-import GrokCard from "./components/GrokCard";
 import { useAgyQuota } from "./hooks/useAgyQuota";
-import AgyCard from "./components/AgyCard";
-import DawnChip from "./components/DawnChip";
-import { agyAction, agyProbeToast } from "./agy";
-import IntegrationBanner from "./components/IntegrationBanner";
 import { useIntegration } from "./hooks/useIntegration";
-import { useCardOrder, applyOrder } from "./hooks/useCardOrder";
+import { useCardOrder } from "./hooks/useCardOrder";
 import { useCardDrag } from "./hooks/useCardDrag";
-import RunwayHero from "./components/RunwayHero";
 import { useRotationBoard } from "./hooks/useRotationBoard";
-import { IcRefresh, IcKey, IcRotate } from "./components/CardIcons";
-import { useOneRowHeader } from "./hooks/useOneRowHeader";
-import ProviderTabs from "./components/ProviderTabs";
-import { POOL_PLATFORMS, loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
+import { loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
 import { useAgyPool } from "./hooks/useAgyPool";
-import ProbeButton from "./components/ProbeButton";
-import { CardTypeContext, useCompactCards } from "./hooks/useCardType";
+import Overview from "./components/ov/Overview";
+import { useLive } from "./hooks/useLive";
+import { useClaudeQuota } from "./hooks/useClaudeQuota";
 import "./App.css";
 
 // 平台详情页不进导航栏,只能从流量总览钻取(图例行 / 卡片「明细→」/ 点图层),用户定稿 2026-08-09。
-type Page = "overview" | "traffic" | "logs" | "relay" | "settings";
+type Page = "overview" | "traffic" | "logs" | "relay" | "settings" | "requests";
 
 const IconChart = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>;
 // 流量总览 = 四宫格(交接稿 §0)
 const IconGrid = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>;
 const IconRelay = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="5" cy="12" r="2.4"/><circle cx="19" cy="12" r="2.4"/><path d="M7.6 12h8.8M13.4 9.2 16.4 12l-3 2.8"/></svg>;
+/** 「请求」页图标（交接包 page3 画板侧栏原样）。 */
+const IconRequests = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M4 7h11M4 12h16M4 17h8"/><path d="M18 5l2 2-2 2"/></svg>;
 const IconClip = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6v3H9z" fill="currentColor" stroke="none"/></svg>;
 // ★ 真齿轮(带齿廓),不是 circle+8 条直射线 —— 那个画出来和标题栏的 `IconSun` 几乎同一个图形,
 //   侧栏第 4 格看着像"亮度"而不是"设置"(用户 2026-08-09 实测截图)。
@@ -71,42 +64,28 @@ const IconGear = () => (
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
 );
-// ★ 图标搬进 `components/CardIcons.tsx` —— 中转站页也要一个一模一样的「↻ 刷新余额」，
-//   两处各写一份 SVG 必然漂移且不报错（本仓已记过两次）。这里只留一个别名。
-const IconRefresh = IcRefresh;
-const IconSun = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9 17.7 6.3M6.3 17.7 4.9 19.1"/></svg>;
 const IconEye = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M1.6 12S5.3 5.5 12 5.5 22.4 12 22.4 12 18.7 18.5 12 18.5 1.6 12 1.6 12z"/><circle cx="12" cy="12" r="3"/></svg>;
 const IconEyeOff = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6.7 0 10.4 6.5 10.4 6.5a18 18 0 0 1-3.4 4.2M6.2 7.8A18 18 0 0 0 1.6 12S5.3 18.5 12 18.5c1.6 0 3-.4 4.3-.9M3 3l18 18"/></svg>;
-const IconMoon = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>;
 
-/**
- * 总览卡片网格的列数。★ **布局与「同排预留」共用这一个数** —— 三档的
- * `gridTemplateColumns` 由它生成，下面 `sameRow()` 也靠它算「第几排」。
- * 拆成两处写的话，改了网格却没改行算式，预留会静默地留到错误的一排上。
- */
-/**
- * 卡片的**最小可用宽**。列数由它推出来，不再写死 3 列（用户 2026-09-21：
- * 「不要出现换行」）。
- *
- * ★★★ 量出来的根因：动作条那 7 个控件**最紧也要 ~234px**（切换 + 探针 + 5 个图标钮
- *   + 6 道间隙），而浮层比卡片窄 20、自己还有 16 的内边距 ⇒ **卡片至少要 320px**。
- *   写死 3 列时窗口一窄卡片被压到 **211px**（实测 880 窗口），7 个控件在里面
- *   怎么排都放不下 —— 那才是换行的源头，只调按钮是治标。
- * ★ `auto-fill` 而不是固定列数：宽屏仍是 3 列（1300 窗口下内容区 ~1180，放得下 3×320），
- *   窄屏自动退到 2 列、每张反而更宽。**卡片永远不会窄到装不下自己的动作条。**
- */
-const CARD_MIN_W = 320;
-
-const CARD_GRID_COLS = `repeat(auto-fill, minmax(${CARD_MIN_W}px, 1fr))`;
 
 export default function App() {
-  const { state, accounts, currentNode, counts, tokens, lastRefreshAt, freshness, loadingAction, toast, refresh, run, showToast } = useStore();
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const { state, accounts, currentNode, inUseNode, tokens, lastRefreshAt, freshness, loadingAction, toast, refresh, run, showToast } = useStore();
+  // ★ 主题真源 = localStorage `codexbar_theme`（设置页写 + 广播 `theme-changed`；菜单栏弹窗 / 悬停面板读同一个键）。
+  const [theme, setTheme] = useState<ThemeName>(loadTheme);
+  const changeTheme = (v: ThemeName) => { setTheme(v); saveTheme(v); };
+  useEffect(() => {
+    const un = listen("theme-changed", () => setTheme(loadTheme()));
+    return () => { void un.then((f) => f()); };
+  }, []);
   // 版本号运行期从 tauri 取,别再写死(发版时漏改前端字符串是老毛病)
   const [ver, setVer] = useState("");
   // ★ 版本一律走 `fullVersion()`（`X.Y.Z+B`），两个显示位同一个真源。
   useEffect(() => { void fullVersion().then(setVer).catch(() => {}); }, []);
   const [page, setPage] = useState<Page>("overview");
+  /** 「请求页 →」带来的平台筛选（`open-main-page`）。`n` 每次加一，同一平台连点两次也会生效。 */
+  const [reqNav, setReqNav] = useState<ReqNav>({ platform: null, n: 0 });
+  /** 收到过几次 `main-open-page`（根节点 `data-nav-count`）—— 「一次点击只跳一回」的闸靠它数。 */
+  const [navN, setNavN] = useState(0);
   // 接入闸：真源是 `codex-rotate integration`，与 `health` 共用同一个判定函数。
   const { integration } = useIntegration();
   // 卡片自定义顺序（拖拽排序）。★ 走 localStorage + Tauri 广播，主窗与菜单栏不分叉。
@@ -138,30 +117,9 @@ export default function App() {
   const [detailModal, setDetailModal] = useState<AccountDetail | null>(null);
   // 「使用重置卡」确认弹窗：只存 aid，账号数据每次渲染时从 `accounts` 现取（弹窗开着时数据变了也不会陈旧）。
   const [creditConfirm, setCreditConfirm] = useState<string | null>(null);
-  const [selectedCard, setSelectedCard] = useState<string | null>(null);
-  /**
-   * ★ 卡片动作弹层**打开后到点直接收回，不管有没有在操作**（用户 2026-09-23 定；时长见 `CARD_ACTIONS_LIFE_MS`）。
-   *
-   * ⚠️ 第一版是「30 秒**无操作**才收，每次点击/按键重置计时」—— 用户明确否掉：
-   *   「30秒后直接收回，不管动与不动」，随后改 10 秒、再改 5 秒。所以这里**不监听任何输入、不重置**。
-   *   已知代价（用户选的）：改名改到一半、正在点探针确认时到点也会收走，半截名字丢弃
-   *   （与改名框 onBlur 放弃的行为一致，不会静默提交）。
-   * ★ 挂在 `selectedCard` 上：codex 卡、agy 卡、失效号小条共用这一个选中态，一处生效。
-   *   换选另一张卡 = `selectedCard` 变了 = 重新计时（那是一次新的打开，不是「重置」）。
-   */
-  useEffect(() => {
-    if (!selectedCard) return;
-    const id = window.setTimeout(() => setSelectedCard(null), CARD_ACTIONS_LIFE_MS);
-    return () => window.clearTimeout(id);
-  }, [selectedCard]);
   const [autoSwitch, setAutoSwitch] = useState(() => getSettings().autoSwitchEnabled);
   // 侧栏折叠态。**默认折叠**（DEFAULTS.navOpen = false），选择会记住 —— 每次启动都弹回默认的开关很烦人。
   const [navOpen, setNavOpen] = useState(() => getSettings().navOpen);
-  // 小窗口下总览卡片换紧凑标尺（用户 2026-10-14：「最小尺寸下，总览页面里面的账号卡片要缩小」）
-  const compactCards = useCompactCards();
-  // 顶栏一行放不下 ⇒ 动作条换短名 + 图标（见 `useOneRowHeader`）。
-  const head = useOneRowHeader(12, [provider]);
-  const cb = head.compact;
 
   /**
    * ★★ **窄窗自动折叠侧栏**（用户 2026-08-24 定稿：「尺寸小到一定程度后，需要折叠起侧边栏」）。
@@ -210,6 +168,8 @@ export default function App() {
     invoke("set_dock_visible", { on: st.dockVisible }).catch(() => {});
     // 刘海额度条同理（默认关；关着时这句什么都不建）。
     if (st.notchHud) invoke("set_notch_hud", { on: true }).catch(() => {});
+    // 「在跑时显示 t/s」同理：Rust 的 `tray_pill::ENABLED` 默认关、进程内 atomic，默认开要靠这一句。
+    invoke("set_tps_tray", { enabled: st.tpsTray }).catch(() => {});
     // 菜单栏标题样式同理:Rust 侧的 TRAY_STYLE 是进程内 atomic,重启就回默认,
     // 得由主窗口 webview 每次启动重新告诉它一次。
     invoke("set_tray_style", { style: TRAY_STYLES.indexOf(st.trayStyle) }).catch(() => {});
@@ -218,46 +178,42 @@ export default function App() {
   // menubar → 主窗口的三个跳转入口。齿轮=设置;今日 Tab 底栏=流量总览;点平台图例行=该平台详情。
   useEffect(() => {
     const uns = [
-      // ★ 账号行 → 总览。此前账号行调的是**不带事件**的 `openMain()`,主窗口就停在上次那一页 ——
-      //   上次停在用量页,点账号就落在用量页(用户 2026-08-25 报)。
-      //   「打开主窗口」和「去哪个版块」是两件事,前者不该顺带决定后者。
-      // ★★ 带上**是哪一档**。2026-09-14 用户实报「菜单栏点别的账号，怎么跳到 AI 用量去了」——
-      //   当时 agy/grok 那两档的行点击走的是 `navigate-platform`，而它 `setPage("traffic")`，
-      //   也就是 AI 用量的平台详情页。三档的「点行」语义必须一致：
-      //   **点行 = 弹主界面的总览、并停在这一行所属的那一档**（换号走行上的「切换」）。
-      //   ★ `payload` 缺省时不动 `provider` —— 老的调用点（不带档）行为一个字不变。
-      listen<string | undefined>("navigate-overview", (e) => {
-        setDrill(null); setPage("overview");
-        if (e.payload === "codex" || e.payload === "gemini" || e.payload === "grok") {
-          setProvider(e.payload);
-        }
-        void invoke("set_main_visible", { show: true });
-      }),
       listen("navigate-settings", () => { setPage("settings"); void invoke("set_main_visible", { show: true }); }),
       listen("navigate-traffic", () => { setDrill(null); setPage("traffic"); void invoke("set_main_visible", { show: true }); }),
       listen<string>("navigate-platform", (e) => {
         setDrill(e.payload); setPage("traffic"); void invoke("set_main_visible", { show: true });
       }),
+      // ★ 交接包 2026-10-19 的统一跳转（PLAN §2.3）：悬停面板 / 刘海卡片 / 菜单栏弹窗都发 `open-main-page`，
+      //   Rust 把它转成 **`main-open-page` 只发给主窗口**（lib.rs）。★★ 这里**只听** `main-open-page`：
+      //   发送方用全局 `emit` 时主窗口自己也会收到一份 `open-main-page`，两个都听 = 一次点击跳两回
+      //   （请求页的 `reqNav.n` 会加 2）。闸 `tests/test_overview_5b.py::NavigationArrivesOnce`。
+      //   payload `{page, platform}`；platform 用请求账本的键（codex/claude/agy/grok）。
+      //   ★ 菜单栏账号行点击（原 `navigate-overview`）也走这条，停在那一行所属的平台档 —— 旧事件已无人发，监听一并删掉。
+      listen<{ page?: string; platform?: string | null }>("main-open-page", (e) => {
+        const pg = e.payload?.page, pf = e.payload?.platform ?? null;
+        setNavN((n) => n + 1);
+        const reqPf = pf === "codex" || pf === "claude" || pf === "agy" || pf === "grok" ? pf : null;
+        if (pg === "requests") {
+          setPage("requests"); setReqNav((v) => ({ platform: reqPf, n: v.n + 1 }));
+        } else if (pg === "traffic") {
+          setDrill(reqPf); setPage("traffic");
+        } else if (pg === "overview") {
+          setDrill(null); setPage("overview");
+          const pk = pf === "agy" ? "gemini" : pf;
+          if (pk === "codex" || pk === "claude" || pk === "gemini" || pk === "grok") setProvider(pk);
+        } else return;
+        void invoke("set_main_visible", { show: true });
+      }),
     ];
     return () => { uns.forEach((u) => { void u.then((f) => f()); }); };
   }, [win]);
 
-  const aliveByLabel = accounts.filter(a => a.status !== "dead").sort((a, b) => a.node.localeCompare(b.node, undefined, { numeric: true }));
-  /**
-   * 卡片的显示顺序（拖拽排序，用户 2026-09-19 要的）。
-   * ⚠️ 2026-10-16 起 ⌘N **不再切号**（改为切 Codex/Gemini/Grok 档，见下面 `useKeyboard`），
-   *   所以卡上的 `⌘N` 角标一并撤掉 —— 角标是「按它能切到这张」的承诺，行为没了承诺就得跟着走。
-   * ★ 没被排过的号**追加在末尾**，绝不丢（见 `applyOrder`）。
-   */
-  const savedAlive = applyOrder(aliveByLabel, state.pick_order, (a) => a.aid);
-  /** 拖拽中显示 `preview`（实时让位），否则显示已保存的顺序。 */
-  const orderedAlive = preview ? applyOrder(savedAlive, preview, (a) => a.aid) : savedAlive;
   useExpiryWatch(accounts, tokens);
   // Dead-account alerts live in the MAIN window only — the menubar popover renders the same store, so
   // running the watcher in both would double-notify.
   useDeadWatch(accounts, currentNode);
   useAutoSwitch(accounts, currentNode, run);
-  // ★★ 总览上 ⌘1/⌘2/⌘3 = 切到 Codex / Gemini / Grok 档（用户 2026-10-16：「command+数字是切换
+  // ★★ 总览上 ⌘1/⌘2/⌘3/⌘4 = 切到 Codex / Claude / Gemini / Grok 档（用户 2026-10-16：「command+数字是切换
   //   codex、gemini、grok，而不是切换对应的账号」）。序号与 Tab 显示顺序同源（`POOL_PLATFORMS`）。
   //   ⚠️ 这条**取代**了 2026-09-14 / 09-19 的「⌘N 切第 N 张卡」—— 切号仍走卡片上的「切换」。
   //   别的页面没有档位 Tab，⌘N 什么也不做（原来在任何页都会切 codex 号，看不见、却在换计费账号）。
@@ -283,16 +239,6 @@ export default function App() {
   //   `dep` = 池数据：置顶 / 切号 / 停用之后据此重读（agy 那边没有 `state-changed`）。
   const { board: agyBoard, err: agyBoardErr } = useRotationBoard(
     page === "overview" && provider === "gemini", { source: "agy", dep: agyPool.accounts });
-  const agyPinOf = new Map([...(agyBoard?.queue ?? []), ...(agyBoard?.rest ?? [])]
-    .map((e) => [e.aid, e.pin == null ? null : e.pin - 1] as const));
-
-  /**
-   * Gemini 档的排序列表。★ 与 codex 档**同一条规则**（拖拽排序，只管摆放）。
-   * ⚠️ grok 档**刻意不接**：它是单号只读、永远只有一张卡，给它画一个拖不出效果的手柄
-   *   就是「画一个点了没反应的东西」—— 本仓判过死刑的形态。
-   */
-  const savedAgy = applyOrder(agyPool.accounts, cardOrder["gemini"], (a) => a.sub);
-  const orderedAgy = preview ? applyOrder(savedAgy, preview, (a) => a.sub) : savedAgy;
 
   const trafficDays = daysNeeded(trafficSt, todayOf(null));
   const { data: traffic, raw: trafficRaw, cacheMode, prefs: platPrefs, busy: trafficBusy,
@@ -332,9 +278,9 @@ export default function App() {
    *   ⚠️ 总览是默认页,启动仍可能打一次(token 已过期时本地短路、不发请求)。
    *   这个端点不计费、不消耗额度。
    */
-  // ★ 不取 `refresh`：grok 卡的右上角 ↻ 已删（2026-09-20「卡片统一」），而 grok 是只读卡、
-  //   没有动作条可以放它。取数仍是自动的 —— 采样器推送 + 10min 兜底轮询。
-  const { snap: grokSnap, busy: grokBusy, err: grokErr } =
+  // ★ 取 `refresh`：交接包 page5 的只读卡底栏有「刷新」（只读号只有这一个操作）。
+  //   取数平时仍是自动的 —— 采样器推送 + 10min 兜底轮询；手动刷新是只读 GET，不计费。
+  const { snap: grokSnap, busy: grokBusy, err: grokErr, refresh: refreshGrok } =
     useGrokQuota({ enabled: page === "overview" });
   /**
    * ★ agy 额度。**与上面那条最大的区别:它不联网。**
@@ -349,6 +295,18 @@ export default function App() {
    */
   const { snap: agySnap, busy: agyBusy, err: agyErr, refresh: refreshAgy } =
     useAgyQuota({ enabled: page === "overview" });
+  // Claude 档的额度（状态栏转写，读本机文件）与各家实时速度（与托盘 / 刘海同源）—— 只在总览的那一档读。
+  const { quota: claudeQuota, err: claudeErr, refresh: refreshClaude } =
+    useClaudeQuota(page === "overview" && provider === "claude");
+  const { live, error: liveErr } = useLive();
+  /** 自动切号开关（codex）。真源是 localStorage `codexbar_settings.autoSwitchEnabled`（`useAutoSwitch` 读它）。 */
+  const toggleAutoSwitch = () => {
+    const next = !autoSwitch;
+    setAutoSwitch(next);
+    const st = getSettings(); st.autoSwitchEnabled = next;
+    localStorage.setItem("codexbar_settings", JSON.stringify(st));
+    showToast(next ? "✓ 自动切号 已开启" : "自动切号 已关闭");
+  };
   // ★★ 这一段**必须排在 `agySnap` 之后**：它读 `agySnap`，而 `const` 有暂时性死区。
   //    放在前面时页面**整页白屏**，只在 harness 的 `errors` 探针里留一句
   //    `Cannot access 'je' before initialization`（压缩后的变量名）——
@@ -371,12 +329,14 @@ export default function App() {
     //   任何一次增删页面都会让它静默点到别处,而"点错位置"和"没点中"在截图里一模一样。
     { id: "relay", Icon: IconRelay, name: "中转站", tip: "中转站（按量付费的替代路由）" },
     { id: "settings", Icon: IconGear, name: "设置", tip: "设置" },
+    // ★ 第 6 项（交接包 README：总览 · AI用量信息 · 日志 · 中转站 · 设置 · 请求）。
+    { id: "requests", Icon: IconRequests, name: "请求", tip: "请求（最近 2 天逐条请求）" },
   ];
 
   return (
     // ★ `cb-light` 供 App.css 的滚动条规则按主题反色 —— 白色拇指在浅色底上等于隐形。
     //   加这个 class 之前那条规则是**死规则**(写完顺手核了一下才发现根节点没有它)。
-    <div className={theme === "light" ? "cb-light" : undefined}
+    <div className={theme === "light" ? "cb-light" : undefined} data-nav-count={navN}
          style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", background: t.appBg, color: t.text, fontFamily: "'Space Grotesk'", borderRadius: winUI ? 12 : 0, overflow: "hidden", boxShadow: t.shadow, transition: "background-color .35s ease, color .35s ease" }}>
 
       {/* Title bar */}
@@ -395,10 +355,7 @@ export default function App() {
                      color: privacy ? t.accentText : t.muted, background: privacy ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
             {privacy ? <IconEyeOff /> : <IconEye />}
           </span>
-          <div style={{ display: "flex", alignItems: "center", gap: 2, padding: 2, border: `1px solid ${t.ghostBorder}`, borderRadius: 8 }}>
-            <span onClick={() => setTheme("light")} style={{ display: "grid", placeItems: "center", width: 24, height: 20, borderRadius: 6, cursor: "pointer", color: t.sunColor, background: t.sunBg, transition: "background .25s, color .25s" }}><IconSun /></span>
-            <span onClick={() => setTheme("dark")} style={{ display: "grid", placeItems: "center", width: 24, height: 20, borderRadius: 6, cursor: "pointer", color: t.moonColor, background: t.moonBg, transition: "background .25s, color .25s" }}><IconMoon /></span>
-          </div>
+          {/* 日夜切换已移到设置页（交接包 2026-10-19 page 5：标题栏只留隐私眼睛）。 */}
           <span style={{ fontSize: 11, color: t.muted, fontFamily: "'JetBrains Mono'" }}>{ver ? `v${ver}` : ""}</span>
           {/* ★ Windows 窗口控制:右上 ─ □ ✕。按 Windows 规范做,不是把红绿灯挪个位置 ——
               ① 无圆角、无间距、**齐平右上角**(贴边是 Fitts 定律的角落优势,Windows 用户靠它盲点);
@@ -481,400 +438,26 @@ export default function App() {
         {/* Content */}
         <div style={{ flex: 1, minWidth: 0, padding: "16px 20px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {page === "overview" && (
-            <CardTypeContext.Provider value={compactCards ? CARD_TYPE_COMPACT : CARD_TYPE}>
-              {/* ★ `flexWrap` + `rowGap`:空间不够时**整块**换行,而不是把里面的按钮压扁。
-                  断字是 bug(见 GhostButton/ProbeButton 的 nowrap),换行只是变高、零信息损失。 */}
-              <div ref={head.ref} data-overview-head={cb ? "compact" : "full"}
-                   style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
-                            marginBottom: 12, flexWrap: "wrap", rowGap: 8, columnGap: 12 }}>
-                {/* ★ 两块都 `flexShrink: 0`：`useOneRowHeader` 量的是**自然宽度**，被压缩过的宽度会让它误判「放得下」。 */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flexShrink: 0 }}>
-                  {/* ★ 标题**永不断字**。窄窗下曾被劈成「总 / 览」(用户 2026-08-24 截图)。 */}
-                  <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-.01em",
-                                 whiteSpace: "nowrap", flexShrink: 0 }}>总览</span>
-                  <ProviderTabs t={t} cur={provider} on={setProvider}
-                    items={POOL_PLATFORMS.map((p) => ({
-                      ...p,
-                      color: colorOf(traffic, p.colorKey),
-                      // ★ 计数一律是**渲染出来几张**，不是"池里有几个"：死号在下面的折叠区里，
-                      //   算进来就会出现「Codex 7」配着 6 张卡，而那个差额没有任何地方解释。
-                      count: p.key === "codex"
-                        ? accounts.filter((a) => a.status !== "dead").length
-                        : p.key === "gemini"
-                          // 池空时退回那张只读卡，也是 1 张。
-                          ? Math.max(1, agyPool.accounts.length)
-                          : 1,
-                    }))}
-                    onAdd={(k) => showToast(POOL_PLATFORMS.find((p) => p.key === k)!.addHint)} />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
-                {/* ★★★ 这一排全是 **codex 池**的动作（刷新全池 / 检查 token / 探针全池 /
-                    自动切号），所以只在 Codex 档显示。
-                    最要命的是「探针 全池」——它**是花钱的**；挂在 Google 档上，
-                    用户看着 agy 的卡按下去，扣的是 codex 的额度。 */}
-                {provider === "codex" && (
-                <div style={{ display: "flex", gap: cb ? 5 : 7, alignItems: "center",
-                              flexWrap: "wrap", justifyContent: "flex-end", rowGap: 7 }}>
-                  <GhostButton t={t} onClick={() => void run("refresh-all", ["refresh-all", "--notify"], `已刷新全池 · ${counts.total} 个号`)} loading={loadingAction === "refresh-all"} loadingText="刷新中…" title={cb ? "刷新全池" : undefined} dense={cb} headAction><IconRefresh spin={loadingAction === "refresh-all"} />{cb ? "刷新" : "刷新全池"}</GhostButton>
-                  <GhostButton t={t} onClick={() => void run("health", ["health"], "已检查各号 token")} accent loading={loadingAction === "health"} loadingText="检查中…" title={cb ? "检查 token" : undefined} dense={cb} headAction>
-                    {cb ? <><IcKey />检查</> : "检查 token"}
-                  </GhostButton>
-                  <ProbeButton t={t} label={cb ? "探针" : "探针 全池"} dense={cb} headAction
-                    hint={`对 ${counts.total} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"——token 有效但订阅到期/模型权限被撤/被限流,只有这个测得出来。⚠️ 消耗周额度(实测单次 <1%),约 ${counts.total * 7}s`}
-                    loading={loadingAction === "probe-all"} loadingText="探测中…"
-                    onConfirm={() => run("probe-all", ["probe", "--all"], "探针 全池")} />
-                  <DawnChip t={t} kind="codex" active={page === "overview" && provider === "codex"} compact={cb} />
-                  <span onClick={() => {
-                    const next = !autoSwitch;
-                    setAutoSwitch(next);
-                    const s = getSettings(); s.autoSwitchEnabled = next;
-                    localStorage.setItem("codexbar_settings", JSON.stringify(s));
-                    showToast(next ? "✓ 自动切号 已开启" : "自动切号 已关闭");
-                  }} data-head-action="" title={cb ? (autoSwitch ? "自动切号 开" : "自动切号 关") : undefined} style={{
-                    display: "flex", alignItems: "center", gap: 6, padding: cb ? "5px 8px" : "5px 13px", whiteSpace: "nowrap", borderRadius: 8, cursor: "pointer", userSelect: "none", fontSize: 11.5, fontWeight: 600, transition: "all .2s",
-                    border: `1px solid ${autoSwitch ? t.accentBorder : t.ghostBorder}`,
-                    color: autoSwitch ? t.accent : t.ghostText,
-                    background: autoSwitch ? t.accentSoft : "transparent",
-                  }}>
-                    {!cb && <span style={{ width: 8, height: 8, borderRadius: "50%", background: autoSwitch ? t.accent : t.muted, animation: autoSwitch ? "cbDotPulse 2s ease-in-out infinite" : "none" }} />}
-                    {cb ? <><IcRotate off={!autoSwitch} />{autoSwitch ? "切号 开" : "切号 关"}</> : autoSwitch ? "自动切号 开" : "自动切号"}
-                  </span>
-                  {!cb && <span style={{ width: 1, height: 18, background: t.divider, margin: "0 1px" }} />}
-                </div>)}
-                {/* ★ 新鲜度数的是 **codex 池**的快照覆盖度（`6/7 新鲜`）——
-                    在 Google 档上它描述的是另一家，与摘要那行同一条理由。 */}
-                {/* ★★ Gemini 档的动作条。与 Codex 档**同位同形**，但只放这一档真有的东西：
-                    · 「刷新全池」= `agy-rotate quota`，云端按账号读，零消耗
-                    · 「打开 Antigravity」= 换号只对**下一次启动**生效，这是这一档的关键代价
-                    ⚠️ **没有「检查 token」和「探针」**：前者 agy 没有对等物，
-                       后者跑的是 `codex-rotate probe`，扣的是 **codex** 的额度 ——
-                       挂在这一档上就是用户看着 agy 的卡按下去、花的是另一家的钱。
-                    ⚠️ 也**没有「自动切号」开关**：agy 的自动选号发生在 `bin/agy` 拉起进程
-                       之前（wrapper 里），不是 app 能开关的运行期行为。给一个点了没用的
-                       开关，比没有这个开关糟。 */}
-                {provider === "gemini" && (
-                <div style={{ display: "flex", gap: cb ? 5 : 7, alignItems: "center",
-                              flexWrap: "wrap", justifyContent: "flex-end", rowGap: 7 }}>
-                  <GhostButton t={t} onClick={() => { agyPool.refresh(); showToast(`已刷新 Gemini · ${agyPool.accounts.length} 个号`); }}
-                               loading={agyPool.busy} loadingText="刷新中…" title={cb ? "刷新全池" : undefined} dense={cb} headAction>
-                    <IconRefresh spin={agyPool.busy} />{cb ? "刷新" : "刷新全池"}
-                  </GhostButton>
-                  <GhostButton t={t} accent onClick={() => agyPool.health()}
-                               loading={agyPool.running === "health"} loadingText="检查中…" title={cb ? "检查 token" : undefined} dense={cb} headAction>
-                    {cb ? <><IcKey />检查</> : "检查 token"}
-                  </GhostButton>
-                  {/* ★★★ **agy 的探针与 codex 的是两套机制，扣的也是两家不同的额度。**
-                      codex 直接打 `/responses`；agy 没有"指定号发一次请求"这种东西
-                      （只在进程启动时读凭证），所以这条起的是 agy 真身 `agy -p`，
-                      花的是 **agy 自己**的额度（实测一次约 15k token、约 30s）。
-                      ⚠️ 2026-09-13 我曾把「Gemini 档不该有探针」写成闸 —— 那条闸锁死的是
-                         「探针只能是 codex 那一套」这个**错误前提**，已按事实改写。 */}
-                  <ProbeButton t={t} label={cb ? "探针" : "探针 全池"} dense={cb} headAction
-                    hint={`对 ${agyPool.accounts.length} 个号各起一次 agy 真跑一句（问 hi 要求答 ok），证明"真的还能干活"——凭证有效但订阅到期/模型权限被撤/被限流，只有这个测得出来。⚠️ 花的是 **agy 自己**的额度（实测单次约 15k token），每号约 30s`}
-                    loading={(agyPool.running ?? "").startsWith("probe:")} loadingText="探测中…"
-                    onConfirm={() => { showToast("探针 全池…");
-                      void agyPool.probe().then(r => r && showToast(agyProbeToast(r), 8000)); }} />
-                  <DawnChip t={t} kind="agy" active={page === "overview" && provider === "gemini"} compact={cb} />
-                  <span data-head-action="" onClick={() => agyPool.setAuto(!(agyPool.autoOn ?? true))}
-                        title={agyPool.autoOn
-                          ? "自动切号开着：下次启动 agy 时，额度低于阈值会自动换一个号（由 `bin/agy` wrapper 在拉起真身前决定）"
-                          : "自动切号已关：wrapper 不再替你换号，`agy` 一律用当前登录的那个"}
-                        style={{ fontSize: 11.5, fontWeight: 700, padding: cb ? "5px 8px" : "5px 11px", borderRadius: 8,
-                                 cursor: "pointer", whiteSpace: "nowrap", userSelect: "none",
-                                 display: "inline-flex", alignItems: "center", gap: 6,
-                                 color: agyPool.autoOn ? t.accent : t.muted,
-                                 border: `1px solid ${agyPool.autoOn ? t.accent + "55" : t.ghostBorder}`,
-                                 background: agyPool.autoOn ? "rgba(45,212,191,.07)" : "transparent" }}>
-                    {cb ? <IcRotate off={agyPool.autoOn === false} /> : <span style={{ width: 7, height: 7, borderRadius: "50%",
-                                   background: agyPool.autoOn ? t.accent : t.muted }} />}
-                    {cb ? "切号" : "自动切号"} {agyPool.autoOn === null ? "—" : agyPool.autoOn ? "开" : "关"}
-                  </span>
-                </div>)}
-                {/* ★ 与 codex 档同位同形的新鲜度行（用户 2026-09-24 点名的不统一）。
-                    数的是 **Gemini 池**各号的 `quota_at`，不是 codex 的快照。 */}
-                {provider === "gemini" && agyPool.accounts.length > 0 && (() => {
-                  const f = agyPoolFreshness(agyPool.accounts);
-                  return (
-                    <span data-agy-freshness style={{ fontSize: 10, color: t.muted, fontFamily: "'JetBrains Mono'" }}>
-                      {freshnessLine(f.lastAt, f)}
-                    </span>);
-                })()}
-                {provider === "codex" && (
-                <span style={{ fontSize: 10, color: t.muted, fontFamily: "'JetBrains Mono'" }}>
-                  {/* ★★ 原文是「上次全池刷新 X 前」,而它取的是**全池最大值** —— 那句话本身就是假的:
-                      只要有一个号刚被刷新,它就显示「刚刚」,哪怕另一个号的快照已经陈旧 3.8 天。
-                      现在如实说覆盖度(三方评审一致:max/min 单值都证明不了「全池刷新成功」)。 */}
-                  {/* ★★ `unknown`（没有 captured_at，从没读到过）**必须进分母、必须显示**
-                      （2026-09-06 评审抓出）。第一版只算 fresh/stale，于是
-                      `{fresh:1, stale:0, unknown:1}` 会显示成「全池 1 个都是新的」——
-                      把一个从没读到过的号说成新的，正是这条链路一路在防的那种谎。
-                      分母 = 全部账号，不是「我算得出来的那部分账号」。 */}
-                  {freshnessLine(lastRefreshAt, freshness)}
-                </span>)}
-                </div>
-              </div>
-
-              {/* ★★ 接入闸 —— 排在 Hero **之前**，因为没接上时下面整块（当值号、额度环、
-                  卡片）描述的是一个根本没在轮换的池子，而它们看起来完全正常。
-                  本仓铁律「把警报放在眼睛已经在的地方」：用户 2026-09-19 报的正是
-                  「敲 codex 没走 rotateproxy」，而当时界面上没有任何东西会为此变色。
-                  ★ 只挂 codex 档：gemini/grok 的接入机制完全不同，这道闸判不了它们。 */}
-              {provider === "codex" && (
-                <IntegrationBanner t={t} integration={integration}
-                                   onConnect={() => setPage("settings")} />
-              )}
-
-              {/* ★★ Hero 是 **codex 的当值号**。挂在 Google 档上会写着「当前使用中 Asen」，
-                  而那是另一家的账号 —— 与摘要那行同一条理由，且更显眼。 */}
-              {/* ★★★ 2026-09-21 整块换成「续航条」（用户从六个方向里选的 D + 左侧账号环）。
-                  旧 Hero 的两个前提都已不成立，整段理由与实测在 `RunwayHero.tsx` 文件头：
-                    ① 「当前使用中」读 `state.active`（上次 CLI 切换），而代理逐请求挑号 ——
-                       实测两者不一致过，那行标题**会错且没有任何迹象**；
-                    ② 「建议切到 X」既不看置顶也不看停用，会劝你推翻自己刚设的置顶。
-                  ⚠️ 高度是硬约束（用户：不许增加）—— 旧的实测 1300 下 112px / 880 下 128px，
-                    闸量**渲染后的真实高度**，见 tests/test_runway_hero.py。 */}
-              {provider === "codex" && board && (
-                <RunwayHero t={t} board={board} privacy={privacy} />
-              )}
-              {/* ★★ **读不到就要说出来。** hook 里 `setErr` 了不等于用户看得见 ——
-                  「后端有字段 ≠ 已披露」在错误上的形态（codex 评审 2026-09-21 指出：
-                  调用方只解构了 `board`，`err` 直接被丢掉）。
-                  ⚠️ 已经有板子时**不覆盖**它，只在旁边挂一句「这份是上次读到的」——
-                  「这次没读到」与「确实没有」是两件事，本仓头号铁律。 */}
-              {provider === "codex" && boardErr && (
-                <div data-runway-err style={{
-                  display: "flex", alignItems: "center", gap: 8, marginBottom: 13,
-                  padding: "7px 12px", borderRadius: 10, fontSize: 11,
-                  fontFamily: "'JetBrains Mono'", color: "#E0901C",
-                  background: t.ghostBg, border: `1px solid ${t.cardBorder}` }}>
-                  <span style={{ fontWeight: 700 }}>⚠️ 续航数据没读到</span>
-                  <span style={{ color: t.text2, minWidth: 0, overflow: "hidden",
-                                 textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {board ? "下面这条是上次读到的 · " : ""}{boardErr}
-                  </span>
-                </div>
-              )}
-
-              {(() => {
-                // Grid order is by LABEL (then the user's drag order), not by quota: position must
-                // not shuffle on every refresh, and the handoff grid is label-ordered too. The
-                // "which should I use" answer is the Hero + USE badge, not position.
-                const alive = orderedAlive;
-                const dead = accounts.filter(a => a.status === "dead");
-                // Delta baseline = best remaining quota among usable accounts.
-                // ★★ 基准必须用 `tightest`,不能用 `windows[0]`。后者在 5h 回归后会拿
-                //    **plus 的 5h** 去和 **pro 的周** 比 —— 两把不同的尺,算出来的
-                //    「-22%」是个没有意义的数,而它长得和正常角标一模一样。
-                const bestPct = alive.reduce((m, a) => Math.max(m, a.tightest), -1);
-                // ★★ 跨所有卡收集窗口**槽位**(按时长升序),卡片按槽位渲染、缺哪个补哪个的等高空行。
-                //    Plus 有 5h+周两行、Pro 只有周一行,不补的话下方全体错开一行(用户 2026-08-26 截图)。
-                //    ★ 记的是**标签而不是行数**:只补行数的话 Pro 的「周」会顶到第一行、
-                //      和 Plus 的「5h」画在同一条线上 —— 对齐了,但对齐的是两种不同的窗口,
-                //      **比错开更糟:它让人以为在横向比同一个量**。
-                //    ★ 不写死 ["5h","周"]:窗口形状是上游观测,2026-07 只有周、08-25 又变回两个。
-                const winSlots = (() => {
-                  const mins = new Map<string, number>();
-                  for (const a of alive) for (const w of a.windows) mins.set(w.label, w.mins);
-                  return [...mins.entries()].sort((x, y) => x[1] - y[1]).map(([label]) => label);
-                })();
-                return (
-                  <div style={{ flex: 1, overflow: "auto" }}>
-                    {/* ★★ **`minmax(0, 1fr)` 不是 `1fr`** —— CSS Grid 里裸 `1fr` 等价于 `minmax(auto, 1fr)`,
-                        最小值是 **min-content 而不是 0**,所以列**压不下去**,卡片内部那些
-                        `minWidth:0` + 省略号根本没机会生效,只能整个网格溢出。
-                        2026-08-25 实测暴露:差值角标从 `-8%` 变成 `-22%`(宽一个字符),
-                        860px 下网格自然宽 659 / 可用 644 ⇒ 右侧被裁。
-                        ⚠️ 真正的教训不是"下限要重量" —— 是**下限本来就不该随数据浮动**。
-                        改成 minmax(0,1fr) 之后,列能缩、省略号接手,布局不再受内容宽度摆布。 */}
-                    {/* `data-cards-grid` 供 uishot 探针定位这一排卡片（对齐闸只看格子里的，
-                        hero 卡也有同名窗口行，混进来会变成假红）。不参与样式。 */}
-                    {/* ★★ 一次只渲染**选中的那一档**。三家的账号语义不同
-                        （codex 逐请求热切 / agy 启动前换凭证 / grok 只读），
-                        竖着堆在一页里读者会拿同一套直觉去理解它们，而且每档只占三分之一屏。
-                        分档之后卡片能用满整行宽度 —— 用户 2026-09-13 给的样式就是这个。
-                        ★ 每档各自一张 `data-cards-grid`：uishot 的对齐闸按排比较，
-                          这样它只在同一档内比，不会拿 grok 卡去跟 codex 卡比高度。 */}
-                    {provider === "codex" && (<>
-                    <div data-cards-grid style={{ display: "grid", gridTemplateColumns: CARD_GRID_COLS, gap: 12, alignContent: "start" }}>
-                      {alive.map((a) => {
-                        // 改名按 aid 不按 label:cmd_rename 两者都认,而 aid 唯一 —— 重名时不会改到别的号上
-                        return (
-                        <AccountCard key={a.aid} a={a} isCurrent={a.aid === currentNode} isBest={board?.next?.aid === a.aid}
-                          bestLabel="下一个"
-                          bestTitle="代理下一个请求会挑这个号（与顶部续航条同一个真源：codex-rotate next）"
-                          curLabel="直连"
-                          curTitle="不走代理直接跑 codex 时用的就是这个号（auth.json 里是它）。走代理时每个请求都可能换号，以顶部「正在使用」为准。" isSelected={selectedCard === a.aid} bestPct={bestPct} winSlots={winSlots} probing={loadingAction === `probe-${a.aid}`} privacy={privacy} t={t}
-                          drag={makeDrag(a.aid, savedAlive.map((x) => x.aid),
-                            // ★★ 2026-09-21：这句话原来写「这个顺序就是轮换优先级」——
-                            //   用户当天把轮换改回「默认容量最高优先 + 点亮才插队」之后，
-                            //   它就成了**一句假陈述**，而且正好会让人以为自己在调轮换。
-                            "按住拖动排序 —— **只影响卡片摆放**，不影响轮换。"
-                            + "要优先用某个号，展开卡片点「置顶」图标。",
-                            (next) => {
-                              // ★★ codex 档写进 state.json（它就是计费顺序），CLI 是唯一写入口
-                              const byAid = new Map(alive.map((x) => [x.aid, x.node]));
-                              void run("priority",
-                                       ["priority", "--set",
-                                        ...next.map((id) => byAid.get(id) as string)],
-                                       "已更新轮换优先级");
-                            })}
-                          onSelect={() => setSelectedCard(selectedCard === a.aid ? null : a.aid)}
-                          onSwitch={() => run(`switch-${a.aid}`, ["switch", a.node], `当前号 → ${a.node}`)}
-                          onShowDetail={(aid) => { invoke<AccountDetail>("read_account_detail", { aid }).then(d => setDetailModal(d)).catch(() => {}); }}
-                          onRemove={(label) => run(`remove-${label}`, ["remove", label], `已删除 ${label}`)}
-                          onProbe={(label) => run(`probe-${a.aid}`, ["probe", label], `探针 ${label}`)}
-                          // ★ 点角标只是**请求**用卡 —— 先弹确认弹窗，确认后才真发（不可逆，用户 2026-10-01：「很容易误触」）。
-                          onUseCredit={() => setCreditConfirm(a.aid)}
-                          usingCredit={loadingAction === `usecredit-${a.aid}`}
-                          onRename={(next) => run(`rename-${a.aid}`, ["rename", a.aid, next], `${a.node} → ${next}`)}
-                          // ★ 走 CLI 而不是写 localStorage:真源是 `state.json`,代理在 app 没开时
-                          //   也要读它 —— 两个真源迟早分叉成「界面说停用了、代理还在用」
-                          //   (与 dawn-probe 那个开关同一条理由)。
-                          // ★ 传 `a.aid` 不传 label:`cmd_rotate` 两者都认,而 aid 唯一,
-                          //   重名时不会操作到别的号上(同改名那条)。
-                          // ★ 「关掉最后一个」由 CLI 拒绝并回一句人话,这里**不复制**那条校验 ——
-                          //   前端再写一份迟早与 CLI 不一致,而 CLI 是所有入口的共同底座。
-                          onToggleRotate={(_label, on) =>
-                            run(`rotate-${a.aid}`, ["rotate", a.aid, on ? "--on" : "--off"],
-                                on ? `${a.node} 已恢复轮换` : `${a.node} 已停用轮换`)}
-                          /* ★★ 置顶（用户 2026-09-21：「点击就是优先使用该账号」）。
-                             走 CLI 是因为真源在 `state.json` 的 `pinned` —— 代理在 app
-                             没开时也要读它。`--toggle` 让「再点一下 = 取消」成立。 */
-                          onTogglePin={() =>
-                            run(`pin-${a.aid}`, ["pin", "--toggle", a.node],
-                                a.pinRank !== null
-                                  ? `${a.node} 已取消置顶 —— 回到容量最高优先`
-                                  : `${a.node} 已置顶 —— 优先用它，撞限冷却时自动换下一个`)} />
-                      );})}
-                    </div>
-                    </>)}
-                    {provider === "gemini" && (<>
-                    {/* ★★★ 2026-09-24：Hero 换成与 codex 档**同一个** `RunwayHero`（用户：「gemini 的账号总览
-                        同步更新 codex 的规范规则」）。原来那块「当前使用中 + 建议切到 X 切换→」有两个问题：
-                          ① 「建议切到」是前端自己排的，既不看置顶也不看停用 —— 与 wrapper 真正会挑的号不同源；
-                          ② codex 档 2026-09-21 已因同样的理由删掉了它（见 `RunwayHero.tsx` 文件头）。
-                        「下一个」与卡片角标同一个真源：`agy-rotate next --json` → `agy/pool.py::pick`。 */}
-                    {agyBoard && <RunwayHero t={t} board={agyBoard} privacy={privacy} source="agy" />}
-                    {agyBoardErr && (
-                      <div data-runway-err style={{
-                        display: "flex", alignItems: "center", gap: 8, marginBottom: 13,
-                        padding: "7px 12px", borderRadius: 10, fontSize: 11,
-                        fontFamily: "'JetBrains Mono'", color: "#E0901C",
-                        background: t.ghostBg, border: `1px solid ${t.cardBorder}` }}>
-                        <span style={{ fontWeight: 700 }}>⚠️ 续航数据没读到</span>
-                        <span style={{ color: t.text2, minWidth: 0, overflow: "hidden",
-                                       textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {agyBoard ? "上面这条是上次读到的 · " : ""}{agyBoardErr}
-                        </span>
-                      </div>
-                    )}
-                    <div data-cards-grid style={{ display: "grid", gridTemplateColumns: CARD_GRID_COLS, gap: 12, alignContent: "start" }}>
-                      {/* ★★ 池里**有号就一号一卡**；一个都没有时退回原来那张只读卡
-                          （`agy-rotate login --current` 之前就是这个状态，它仍然成立）。
-                          ★ 当值号的卡用**本机 RPC** 那份快照 —— 只有它带周窗口；
-                            其余号只有云端的 5h。少一行是真话，补一行假的「周 100%」不是。 */}
-                      {orderedAgy.length > 0
-                        ? orderedAgy.map((a) => (
-                            <AgyCard key={a.sub} t={t} color={colorOf(traffic, "agy")}
-                                     aid={a.sub}
-                                     snap={agyPool.snapshotOf(a, agySnap)}
-                                     action={agyAction(a.quota_err_reason, a.quota_err_url)}
-                                     plan={a.plan}
-                                     label={a.label} email={a.email ?? undefined}
-                                     isCurrent={a.sub === agyPool.liveSub}
-                                     onSwitch={a.sub === agyPool.liveSub ? undefined
-                                                                        : () => agyPool.switchTo(a.label)}
-                                     switching={agyPool.switching === a.label}
-                                     disabled={!!platPrefs.by?.agy?.off} winSlots={winSlots}
-                                     busy={agyPool.busy} err={agyPool.err}
-                                     drag={makeDrag(a.sub, savedAgy.map((x) => x.sub),
-                                       "按住拖动调整摆放顺序。只影响显示，不影响切号策略。",
-                                       (next) => setOrderFor("gemini", next))}
-                                     /* ★ 只喂给动作条里的 ↻（与 codex 卡的动作条同排）；
-                                        右上角那个已删 —— 它和拖拽手柄是同一个坐标。 */
-                                     onRefresh={agyPool.refresh}
-                                     /* ── 与 codex 账号卡对齐（用户 2026-09-13）── */
-                                     isSelected={selectedCard === a.sub}
-                                     isBest={agyBoard?.next?.aid === a.sub}
-                                     bestTitle="下次启动 agy 会装进这个号（与顶部续航条同一个真源：agy-rotate next）"
-                                     bestPct={agyBoard?.next?.tightest ?? undefined}
-                                     pinRank={agyPinOf.get(a.sub) ?? null}
-                                     onTogglePin={() => agyPool.togglePin(a.label)}
-                                     onSelect={() => setSelectedCard(selectedCard === a.sub ? null : a.sub)}
-                                     onRename={(next) => agyPool.renameTo(a.label, next)}
-                                     /* ★ 移除**不可逆**：卡片上两段确认，`agy-rotate remove`
-                                        另有一道拒绝删当值号的守卫（删掉它 = 既不在池里、
-                                        也没有别的登录态可回）。 */
-                                     onRemove={() => agyPool.removeIt(a.label)}
-                                     onProbe={() => { showToast(`探针 ${a.label}…`);
-                                       void agyPool.probe(a.label).then(r => r && showToast(agyProbeToast(r), 8000)); }}
-                                     probing={agyPool.running === `probe:${a.label}`}
-                                     /* ★ 池里存的是反向的 `rotate_off`：缺省必须等于"参与轮换"，
-                                        否则存量号要写迁移，漏迁移的会**静默退出轮换池**。 */
-                                     rotates={!a.rotate_off}
-                                     onToggleRotate={(on) => agyPool.setRotate(a.label, on)}
-                                     onOpen={() => { setDrill("agy"); setPage("traffic"); }} />
-                          ))
-                        : (
-                            <AgyCard t={t} color={colorOf(traffic, "agy")} snap={agySnap}
-                                     disabled={!!platPrefs.by?.agy?.off} winSlots={winSlots}
-                                     busy={agyBusy} err={agyErr}
-                                     onRefresh={refreshAgy}
-                                     onOpen={() => { setDrill("agy"); setPage("traffic"); }} />
-                          )}
-                    </div>
-                    {/* ★★★ 分歧必须可见，不能抹平。钥匙串是**一个槽**，而本机常有多个
-                        长期存活的 agy 进程；它们各自在自己的 access token 到期时把**自己的身份**
-                        整份写回去（实测 2026-09-13：17:58 装进 B，18:23:17 被一个身份为 A 的
-                        旧进程冲掉）。这行只在真的对不上时出现 —— 常亮的灯会被学会忽略。
-                        ★ 文本说"要做什么"，不只说"坏了"（§5d 披露）。 */}
-                    {agyPool.drifted && (
-                      <div style={{ marginTop: 10, fontSize: 11.5, fontFamily: "'JetBrains Mono'",
-                                    color: "#E0901C", lineHeight: 1.5 }}>
-                        ⚠️ 当前登录的号与你上次切换的不一致 —— 某个<b>仍在跑</b>的 agy
-                        在它自己 token 到期时把凭证写回了钥匙串。要让切换生效：先退出那些旧的
-                        agy 会话，再 <b>切换</b>，然后开新的 agy。
-                      </div>
-                    )}
-                    </>)}
-                    {provider === "grok" && (<>
-                    <div data-cards-grid style={{ display: "grid", gridTemplateColumns: CARD_GRID_COLS, gap: 12, alignContent: "start" }}>
-                      {/* ★ grok 卡。**渲染在格子里,但绝不进 `alive` 数组** —— 那个数组同时驱动
-                          计数徽章、探针全池的号数、自动切号。混进去探针全池会去探一个探不了的东西,
-                          而且不报错。
-                          闸在 tests/test_grok_not_in_pool_ui.py。 */}
-                      <GrokCard t={t} color={colorOf(traffic, "grok")} snap={grokSnap}
-                                disabled={!!platPrefs.by?.grok?.off}
-                                privacy={privacy} busy={grokBusy} err={grokErr}
-                                onOpen={() => { setDrill("grok"); setPage("traffic"); }} />
-                    </div>
-                    </>)}
-                    {/* ★ 失效账号也是 codex 池的 —— 别挂在别家的档上 */}
-                    {provider === "codex" && dead.length > 0 && (
-                      <details style={{ marginTop: 12 }}>
-                        <summary style={{ fontSize: 12, color: t.muted, cursor: "pointer", padding: "8px 14px", background: t.cardBg, borderRadius: 10, border: `1px solid ${t.cardBorder}`, userSelect: "none", display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#E0524D" }} />
-                          {dead.length} 个失效账号
-                        </summary>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "8px 4px 0" }}>
-                          {dead.map(a => (
-                            <span key={a.aid} onClick={() => setSelectedCard(selectedCard === a.aid ? null : a.aid)}
-                              style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", background: t.cardBg, borderRadius: 8, fontSize: 11, cursor: "pointer", border: selectedCard === a.aid ? `1px solid ${t.accent}` : `1px solid ${t.cardBorder}`, opacity: 0.65 }}>
-                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#E0524D" }} />
-                              {a.node} · {maskId(a.email.split("@")[0], privacy)}
-                              {selectedCard === a.aid && (
-                                <span onClick={(e) => { e.stopPropagation(); run(`remove-${a.node}`, ["remove", a.node], `已删除 ${a.node}`); }}
-                                  style={{ fontSize: 10, color: "#E0524D", cursor: "pointer", marginLeft: 4 }}>删除</span>
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                );
-              })()}
-            </CardTypeContext.Provider>
+            <Overview t={t} isDark={theme === "dark"} privacy={privacy} provider={provider} setProvider={setProvider}
+              colors={{ codex: colorOf(traffic, "codex"), claude: colorOf(traffic, "claude"),
+                        gemini: colorOf(traffic, "agy"), grok: colorOf(traffic, "grok") }}
+              state={state} accounts={accounts} inUseNode={inUseNode} currentNode={currentNode}
+              lastRefreshAt={lastRefreshAt} freshness={freshness} loadingAction={loadingAction} run={run} showToast={showToast}
+              integration={integration} onConnect={() => setPage("settings")}
+              board={board} boardErr={boardErr}
+              agyPool={agyPool} agyBoard={agyBoard} agyBoardErr={agyBoardErr}
+              agySnap={agySnap} agyBusy={agyBusy} agyErr={agyErr} refreshAgy={refreshAgy}
+              grokSnap={grokSnap} grokBusy={grokBusy} grokErr={grokErr} refreshGrok={refreshGrok}
+              claudeQuota={claudeQuota} claudeErr={claudeErr} refreshClaude={refreshClaude}
+              live={live} liveErr={liveErr}
+              autoSwitch={autoSwitch} toggleAutoSwitch={toggleAutoSwitch}
+              agyOrder={cardOrder["gemini"]} setAgyOrder={(ids) => setOrderFor("gemini", ids)}
+              preview={preview} makeDrag={makeDrag}
+              platOff={{ agy: !!platPrefs.by?.agy?.off, grok: !!platPrefs.by?.grok?.off }}
+              onShowDetail={(aid) => { invoke<AccountDetail>("read_account_detail", { aid }).then(d => setDetailModal(d)).catch(() => {}); }}
+              onUseCredit={(aid) => setCreditConfirm(aid)}
+              onOpenUsage={(pk) => { setDrill(pk); setPage("traffic"); }}
+              onLogs={() => setPage("logs")} />
           )}
 
           {page === "relay" && <RelayPage t={t} />}
@@ -888,7 +471,8 @@ export default function App() {
                            onDrill={setDrill} busy={trafficBusy} err={trafficErr}
                            onRefresh={refreshTraffic} />)}
           {page === "logs" && <LogsPage t={t} />}
-          {page === "settings" && <SettingsPage t={t} />}
+          {page === "settings" && <SettingsPage t={t} theme={theme} onTheme={changeTheme} />}
+          {page === "requests" && <RequestsPage t={t} privacy={privacy} nav={reqNav} />}
         </div>
       </div>
 

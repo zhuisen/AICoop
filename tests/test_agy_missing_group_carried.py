@@ -164,11 +164,17 @@ class TheFrontendKeepsTheMarker(unittest.TestCase):
                          "★★ 后端标了旧读数，前端没接 —— 卡片照常按新数画")
 
     def test_card_and_menubar_row_both_dim_it(self):
-        for f in ("AgyCard.tsx", "AgyRow.tsx"):
+        # ★ 2026-10-19（交接包 4f）：菜单栏行的外形在 `mb/QuotaRow`：AgyRow 标 `dim: !!row.seen_at`，
+        #   QuotaRow 照同一个值降到 .62。两半都要在，缺哪一半都是「把旧读数画成现值」。
+        # 总览卡（2026-10-19 起 `ov/OvCard::OvWinRow`）同一个形状：AgyCard 标 `dim`，OvWinRow 照它降到 .62。
+        for f, needle in (("AgyCard.tsx", "dim: !!row.seen_at"),
+                          ("ov/OvCard.tsx", "opacity: w.dim ? .62 : 1"),
+                          ("AgyRow.tsx", "dim: !!row.seen_at"),
+                          ("mb/QuotaRow.tsx", "opacity: w.dim ? .62 : 1")):
             with self.subTest(f=f):
                 src = (ROOT / "codexbar" / "src" / "components" / f).read_text(encoding="utf-8")
                 src = re.sub(r"\{/\*.*?\*/\}|/\*.*?\*/|//[^\n]*", "", src, flags=re.S)
-                self.assertIn("opacity: row.seen_at ? .62 : 1", src, "★★ %s 把沿用的旧读数画成现值" % f)
+                self.assertIn(needle, src, "★★ %s 把沿用的旧读数画成现值" % f)
 
 
 if __name__ == "__main__":

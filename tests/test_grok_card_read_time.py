@@ -32,11 +32,13 @@ PROBE = """() => {
   return { text: e.textContent, need: r.getBoundingClientRect().width, have: e.getBoundingClientRect().width,
            textTop: e.getBoundingClientRect().top, textBottom: e.getBoundingClientRect().bottom,
            ghostTop: ghost.getBoundingClientRect().top,
-           below: card.getBoundingClientRect().bottom - foot.getBoundingClientRect().bottom };
+           // 2026-10-19：页脚是共用外壳 `ov/OvCard` 的 `[data-ov-foot]`（定高 28），量到它为止 ——
+           //   文字外面那层内联 span 比页脚矮，量它会把两张同构的卡量出不同的「留白」。
+           below: card.getBoundingClientRect().bottom - (e.closest('[data-ov-foot]') || foot).getBoundingClientRect().bottom };
 }"""
 CODEX = """() => {
   const exp = [...document.querySelectorAll('[data-cards-grid] span')].find(s => /^到期 /.test(s.textContent));
-  const foot = exp.parentElement;
+  const foot = exp.closest('[data-ov-foot]') || exp.parentElement;
   let card = foot; while (card && parseFloat(getComputedStyle(card).borderBottomWidth) === 0) card = card.parentElement;
   return card.getBoundingClientRect().bottom - foot.getBoundingClientRect().bottom;
 }"""

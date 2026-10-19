@@ -48,10 +48,13 @@ class PureJudgements(unittest.TestCase):
         self.assertEqual(node("resizeMath.ts", "[0,3,4,7,157,160].map(x => m.quantizeDown(x))"),
                          [0, 0, 4, 4, 156, 160], "★ 必须向下取：向上取图表会比容器高 1–3px")
 
-    def test_header_needs_slack_to_come_back(self):
-        r = node("resizeMath.ts",
-                 "[m.nextCompact(true, 400, 910, 900), m.nextCompact(true, 400, 915, 900), m.nextCompact(true, 400, 916, 900)]")
-        self.assertEqual(r, [True, True, False], "★ 紧凑态回全名要多出 16px 余量，否则临界点来回拖就来回翻")
+    def test_header_mode_is_a_pure_function_of_content_width(self):
+        """★ 2026-10-19 **改写**：头部全名 / 短名不再「量了自己再判」（`useOneRowHeader` + `nextCompact`
+        的 16px 死区，随交接包 page5 一起删除），而由 `ovLayout(内容区宽)` 直接给 —— 判据不读头部自己的宽度，
+        所以没有反馈环、也就不需要死区。守的是同一件事：同一宽度永远同一结果。"""
+        r = node("overview.ts", "[1099, 1100, 1100, 899, 900].map(w => m.ovLayout(w).labels)")
+        self.assertEqual(r, [False, True, True, False, False])
+        self.assertNotIn("nextCompact", code("resizeMath.ts"), "★ 删掉的判据又回来了却没人用它")
 
     def test_runway_signature_only_tracks_which_names_fit(self):
         items = '[[50,"Egan"],[5,"qq55"],[10,"不可用 2"]]'
@@ -63,15 +66,23 @@ class PureJudgements(unittest.TestCase):
 
 
 class TheCodeIsWiredThatWay(unittest.TestCase):
-    def test_runway_hero_sets_width_only_when_the_signature_flips(self):
-        s = code("components/RunwayHero.tsx")
-        self.assertRegex(s, r"if \(sig !== last\) \{ last = sig; setBarW\(w\); \}")
-        self.assertEqual(len(re.findall(r"setBarW\(", s)), 1, "★ 别处又直接 setBarW 了")
-        self.assertIn("Math.max(e.weekly ?? 1, 5), e.label", s, "★ 签名用的段权重必须与渲染同一组")
+    def test_relay_bar_rerenders_only_when_the_signature_flips(self):
+        """2026-10-19：续航条从 RunwayHero 换成 `ov/OvHero::RelayBar`，同一条规矩照搬。"""
+        s = code("components/ov/OvHero.tsx")
+        self.assertRegex(s, r"if \(sig !== last\) \{ last = sig; setSig\(sig\); \}")
+        self.assertEqual(len(re.findall(r"setSig\(", s)), 1, "★ 别处又直接 setState 了")
+        self.assertNotRegex(s, r"new ResizeObserver\(\(\) => setW\(", "★ 又成了每像素 setState")
+        self.assertIn("fitSignature(items.current, 100, wRef.current, 11)", s)
+        self.assertIn("segFits(b.width, 100, w, s.label ?? \"\", 11)", s, "★ 签名与渲染必须同一组权重 / 字号")
 
-    def test_header_effect_does_not_depend_on_compact(self):
-        s = code("hooks/useOneRowHeader.ts")
-        self.assertIn("}, [gap, ...deps]);", s, "★ compact 回到依赖里 = 每次翻档拆 RO 重建")
+    def test_overview_layout_effect_has_no_deps(self):
+        s = code("components/ov/Overview.tsx")
+        self.assertRegex(s, r"new ResizeObserver\(\(\) => setCw\(ovBand\(el\.clientWidth\)\)\);[\s\S]{0,160}\}, \[\]\);",
+                         "★ 版式 RO 带了依赖 = 每次翻档拆 RO 重建")
+        self.assertEqual(len(re.findall(r"setCw\(", s)), 2, "★ 别处直接存原始宽度 —— 拖一路整页每像素重渲染")
+        self.assertEqual(node("overview.ts", "[0, 899, 900, 1099, 1100, 2000].map(m.ovBand)"), [0, 0, 900, 900, 1100, 1100])
+        self.assertEqual(node("overview.ts", "[0, 899, 900, 1099, 1100, 2000].map(w => JSON.stringify(m.ovLayout(m.ovBand(w))) === JSON.stringify(m.ovLayout(w)))"),
+                         [True] * 6, "★ 档下沿必须与原宽度给出同一版式")
 
 
 def _measure():

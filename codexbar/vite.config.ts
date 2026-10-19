@@ -10,6 +10,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         menubar: resolve(__dirname, 'menubar.html'),
         notch: resolve(__dirname, 'notch.html'),
+        tpshover: resolve(__dirname, 'tps-hover.html'),
       },
     },
   },

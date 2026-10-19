@@ -7,7 +7,7 @@ Connector 把脚本复制进 `<store>/runtime/`、把 `~/.local/bin/*` 链过去
 既有的闸全都**显式传了** `CODEX_ROTATE_STORE`，所以永远是绿的。
 
 ## 守的
-1. `.dmg` 布局：9 个 Python 入口 + 3 个 shell 入口，`env -i`（HOME 指临时目录、PATH=/usr/bin:/bin）下
+1. `.dmg` 布局：11 个 Python 入口 + 3 个 shell 入口，`env -i`（HOME 指临时目录、PATH=/usr/bin:/bin）下
    求出的数据目录都 = `<store>`，不是 `<store>/runtime`。
 2. clone 布局（目录不叫 runtime）：数据目录 = 仓库根，行为不变。
 3. 发布出去的脚本里没有作者的 clone 路径 / npm prefix 写死在代码里（注释除外）。
@@ -40,7 +40,7 @@ _BUNDLE = os.environ.get("CODEXBAR_BUNDLE_SCRIPTS")
 SRC_ROOT = Path(_BUNDLE).resolve() if _BUNDLE else ROOT
 
 EXTRA = ["traffic/scan.py", "traffic/agy_quota_sampler.py", "traffic/agy_rotation.py",
-         "grok-quota-sampler", "grok-quota", "agy-quota"]
+         "grok-quota-sampler", "grok-quota", "agy-quota", "claude_otel_env.py"]
 
 #: (文件, 读数据目录的表达式) —— 在子进程里按路径加载模块后求值。
 PY_SITES = [
@@ -53,6 +53,9 @@ PY_SITES = [
     ("traffic/agy_quota_sampler.py", "m._STORE"),
     ("traffic/agy_rotation.py", "m._store()"),
     ("grok-quota-sampler", "m._STORE"),
+    # ★ OTel 接收端写账本的目录 = <store>/traffic/otel-ledger（读的人是 requests.py / scan.py）。
+    ("traffic/otel_receiver.py", "m.default_dir().parent.parent"),
+    ("claude_otel_env.py", "m._store()"),
 ]
 
 PROBE = r"""

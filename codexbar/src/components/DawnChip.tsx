@@ -14,10 +14,18 @@ const MONO = "'JetBrains Mono'";
  *   悬浮在胶囊上也看得到同一句（`title`）。
  * ★ 图标用线条钟面而不是 ⏰ emoji：本仓设计语言不用 emoji 当图标（`~/.claude/rules/ui-design.md`）。
  */
-export default function DawnChip({ t, kind, active, compact }: {
+export default function DawnChip({ t, kind, active, compact, look = "chip", showLabel = true }: {
   t: Theme; kind: DawnKind; active: boolean;
   /** 顶栏一行放不下时（`useOneRowHeader`）收窄内边距，与旁边的按钮同一档。 */
   compact?: boolean;
+  /**
+   * `switch` = 总览头部「[定时 | 自动切号]」开关组里的那一格（交接包 page5 头部）：钟面 + 「定时」+ 28×16 开关。
+   * ★ 开关只是**显示**状态；点它仍是打开浮层（用户 2026-10-15：「胶囊只显示 定时 开/关，点击才出时间选择」——
+   *   这是会花钱的功能，真开关放在浮层里多一步）。
+   */
+  look?: "chip" | "switch";
+  /** `switch` 形态下是否带「定时」两个字（窄档只留图标 + 开关）。 */
+  showLabel?: boolean;
 }) {
   const { rec, busy, toggle, setTime } = useDawnStatus(kind, active);
   const [open, setOpen] = useState(false);
@@ -41,6 +49,19 @@ export default function DawnChip({ t, kind, active, compact }: {
 
   return (
     <span ref={box} data-head-action="" style={{ position: "relative", display: "inline-flex" }}>
+      {look === "switch" ? (
+        <span data-dawn-chip={kind} data-dawn-on={rec == null ? "" : on ? "1" : "0"} onClick={() => setOpen(o => !o)}
+              title={showLabel ? desc : `定时探针 · ${desc}`}
+              style={{ display: "flex", alignItems: "center", gap: 7, height: 32, padding: "0 9px", cursor: "pointer",
+                       color: "var(--tx2)", fontSize: 12.5, userSelect: "none" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+            <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          {showLabel && <span>定时</span>}
+          <span className="ov-sw" data-on={on ? "1" : "0"} style={{ opacity: rec == null ? .5 : 1 }}><i /></span>
+        </span>
+      ) : (
       <span data-dawn-chip={kind} onClick={() => setOpen(o => !o)} title={desc}
             style={{ fontSize: 11.5, fontWeight: 700, padding: compact ? "5px 8px" : "5px 11px", borderRadius: 8,
                      cursor: "pointer", whiteSpace: "nowrap", userSelect: "none",
@@ -54,6 +75,7 @@ export default function DawnChip({ t, kind, active, compact }: {
         </svg>
         定时 {rec == null ? "—" : on ? "开" : "关"}
       </span>
+      )}
       {open && (
         <div data-dawn-pop={kind}
              style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", width: 280, zIndex: 20,

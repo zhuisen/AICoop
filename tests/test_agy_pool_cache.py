@@ -456,10 +456,28 @@ class TheGeminiCardMatchesTheAccountCardLayout(unittest.TestCase):
     def setUpClass(cls):
         cls.src = _strip_comments(cls.CARD.read_text(encoding="utf-8"))
 
+    def _prop(self, name):
+        """`<OvCard … name={…}` 的那个表达式（括号配平，到结构边界为止 —— 不用定长切片）。"""
+        i = self.src.index("\n            %s={" % name)
+        j = self.src.index("{", i)
+        depth = 0
+        for k in range(j, len(self.src)):
+            depth += {"{": 1, "}": -1}.get(self.src[k], 0)
+            if depth == 0:
+                return self.src[j:k + 1]
+        raise AssertionError("★ %s= 没配平 —— 切片坏了" % name)
+
+    def _footer_text(self):
+        """页脚左格渲染出来的那几个字：`data-agy-footer` 那个 span 的 children（`}>` 到 `</span>`）。
+        `title` 在属性里、注释已剥掉，都不在窗口里。"""
+        i = self.src.index("data-agy-footer")
+        start = self.src.index('`}>', i) + 3
+        return self.src[start:self.src.index("</span>", start)]
+
     def test_the_subtitle_slot_holds_the_account_email(self):
         """★ 名字下方那一格 = 账号信息。"""
-        i = self.src.index("fontSize: Z.email")
-        body = self.src[i:i + 320]
+        # 2026-10-19 起卡片走 `OvCard` 的固定槽位（交接包 page5：②槽 = 邮箱），文字槽是 `email=` 这个 prop。
+        body = self._prop("email")
         self.assertIn("email", body, "★ 副标题槽没放账号信息")
 
     def test_the_subtitle_no_longer_holds_the_tightest_group(self):
@@ -469,8 +487,7 @@ class TheGeminiCardMatchesTheAccountCardLayout(unittest.TestCase):
         那说的是**本机 loopback RPC**，而 2026-09-15(B53) 起额度改走云端按账号读，
         每个号都带 `email`。**旧理由已过期**（§6：披露的寿命跟着它描述的事实走）。
         """
-        i = self.src.index("fontSize: Z.email")
-        self.assertNotIn("最紧", self.src[i:i + 320],
+        self.assertNotIn("最紧", self._prop("email"),
                          "★★ 副标题槽里还留着「最紧」—— 账号信息被挤掉了")
 
     def test_the_tightest_group_is_kept_in_a_title_not_deleted(self):
@@ -488,11 +505,7 @@ class TheGeminiCardMatchesTheAccountCardLayout(unittest.TestCase):
         周窗口只看 `↻3d` 说不出是哪一天。
         """
         self.assertIn("fmtResetDate", self.src, "★ 页脚没用绝对日期")
-        i = self.src.index("fontSize: Z.exp")
-        # 页脚那一段：往前找到它所在的 <span>
-        head = self.src.rindex("<span", 0, i)
-        body = self.src[head:i + 300]
-        self.assertIn("重置", body, "★ 页脚没写「重置」标签")
+        self.assertIn("重置", self._footer_text(), "★ 页脚没写「重置」标签")
 
     def test_the_footer_never_claims_a_subscription_expiry(self):
         """★★★ 页脚**不许**出现「到期」—— agy 没有这个数据，写了就是编造。
@@ -504,10 +517,7 @@ class TheGeminiCardMatchesTheAccountCardLayout(unittest.TestCase):
         这次是第六次，而**一条会假红的闸，用户学会的是忽略它**。
         所以窗口收敛到 `}}>` 与 `</span>` 之间的 children 表达式 —— `title` 与注释都在窗口外。
         """
-        i = self.src.index("fontSize: Z.exp")
-        # children 从这个 span 的 style 属性收尾（`}}>`）开始，到 `</span>` 结束。
-        start = self.src.index("}}>", i) + 3
-        body = self.src[start:self.src.index("</span>", start)]
+        body = self._footer_text()
         # ★ 已知阳性自检：窗口必须真的框住了渲染文案，否则"没扫到"会被读成"没写"。
         self.assertIn("重置", body, "★ 窗口没框住页脚文案 —— 是切片坏了，不是文案对了")
         self.assertNotIn("到期", body,

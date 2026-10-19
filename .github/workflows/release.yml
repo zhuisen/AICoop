@@ -23,9 +23,7 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-          - platform: windows-latest
-            args: '--bundles nsis,msi'
-            rust-targets: ''
+          # Windows 已取消（用户 2026-10-19「取消 windows 版本的设计与发布」）：只出 macOS。
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +55,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'CodexBar ${{ github.ref_name }}'
           releaseDraft: true          # 先出草稿,人工核过产物再公开
-          prerelease: false
+          # 带连字符的 tag（v1.12.0-beta.1）= 预发布：不标成 Latest；app 内「检查更新」只认三段数字 tag，也不会推给普通用户
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
 
       # ★★ 对**刚构建出来的 `.app`** 跑一次脚本级冒烟（B85，四方评审 P2），不起 GUI。

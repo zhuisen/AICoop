@@ -1,437 +1,213 @@
-import { useState, useEffect, useRef } from "react";
-import { STATUS_COLORS, STATUS_TEXT, type Theme } from "../theme";
-import { useCardType } from "../hooks/useCardType";
+import { useState } from "react";
+import type { Account } from "../helpers";
+import { CARD_WARN_DAYS, QUOTA_STALE_SEC, cardLeftText, fmtAgeSec, maskId } from "../helpers";
+import type { Theme } from "../theme";
+import type { OvState } from "../overview";
+import { deltaText, fmtClock, fmtDur } from "../overview";
+import { fmtTokens, fmtTps } from "../live";
+import type { DragWiring } from "./DragHandle";
 import StaleMark from "./StaleMark";
-import DragHandle, { type DragWiring } from "./DragHandle";
-import { type Account, fmtCd, fmtAgeSec, maskId, winBarColor, winNumColor,
-         QUOTA_STALE_SEC } from "../helpers";
-import CardActionBar from "./CardActionBar";
-import Ring from "./Ring";
-import PlanBadge from "./PlanBadge";
-import CardBadge, { isCardExpiring } from "./CardBadge";
-import ProbeButton from "./ProbeButton";
-import { IconBtn, IcRotate, IcPin, IcPen, IcInfo, IcTrash } from "./CardIcons";
+import { isCardExpiring } from "./CardBadge";
+import { Ab, DynText, HoldAb, IcRefresh, IcSwap, IcTicket, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
 
-/** Delta vs the best account in the pool — "最优" / "-19%". ≤-50 is amber (handoff §5.0). */
-function DeltaChip({ delta, t }: { delta: number; t: Theme }) {
-  const Z = useCardType();
-  const best = delta === 0;
-  const far = delta <= -50;
-  return (
-    <span style={{
-      marginLeft: "auto", flexShrink: 0,
-      fontSize: Z.delta, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
-      fontVariantNumeric: "tabular-nums",
-      color: best ? t.accent : far ? "#E0901C" : t.text2,
-      background: best ? t.accentSoft : far ? "rgba(224,144,28,.12)" : t.ghostBg,
-    }}>{best ? "最优" : `${delta}%`}</span>
-  );
-}
+/**
+ * Codex 账号卡（交接包 page5「账号卡」，5 行槽位 + 底栏，固定 148 高）。外壳在 `ov/OvCard.tsx`，
+ * 这里只把 `Account` 映射进槽位、把每个原有操作接到底栏 / ⋯ 菜单上。
+ *
+ * ★★ CLAUDE.md §6「不要随手简化掉已有功能」—— 旧动作条（`CardActionBar`）上的每一项都还在：
+ *   | 原来                         | 现在                                   |
+ *   |------------------------------|----------------------------------------|
+ *   | 切换                         | 底栏主按钮「切换」（在用号不出）           |
+ *   | 探针（两段确认）              | 底栏「探针」，按住 0.6 s（与菜单栏同一状态机）|
+ *   | 置顶 / 轮换开关 / 改名 / 详情 / 删除（两段）| ⋯ 菜单                         |
+ *   | 页脚重置卡角标 → 确认弹窗     | 页脚角标原样可点（`data-card-badge-use`）+ ⋯「使用重置卡」|
+ *   | 拖拽手柄                      | 右上角，悬停出现                          |
+ *   ⚠️ 新增的「刷新」：codex 没有单号刷新命令，它跑的就是「刷新全池」（`refresh-all`），title 写明。
+ */
+export interface LiveLine { tps: number | null; sessions: number; today: number }
 
-
-export default function AccountCard({ a, isCurrent, isBest, isSelected,
-  bestLabel = "USE", bestTitle, curLabel = "当前", curTitle, bestPct, probing, privacy, t, onSelect, onSwitch, onShowDetail, onRemove, onProbe, onUseCredit, usingCredit, onRename, onToggleRotate, onTogglePin, winSlots, drag }: {
-  a: Account; isCurrent: boolean; isBest: boolean; isSelected: boolean;
-  /** 高亮角标的文案。★ codex 档传「下一个」（真挑号器的结果），agy 档保留 `USE`
-   *  —— agy **没有逐请求挑号器**，手动切号就是它的机制，「推荐切到谁」在那边仍成立。 */
-  bestLabel?: string; bestTitle?: string;
-  /** 「当前」角标的文案与解释。codex 档改叫「直连」，见下。 */
-  curLabel?: string; curTitle?: string;
-  /**
-   * 拖拽排序的接线（用户 2026-09-19 从三个方案里选的**专用手柄**）。
-   *
-   * ★★ 为什么是手柄而不是「整张卡可拖」：卡片现在「点一下 = 选中并展开动作条」。
-   *   整张卡可拖的话，快点会误触发拖拽、慢点又像没反应 —— 两种手感都坏。
-   *   手柄把两件事在**空间上**分开，零冲突（用户看过三个方案后选的就是这个）。
-   * ★ 不传 `drag` 时卡片行为与以前**完全一致**，一个像素都不变。
-   */
+export default function AccountCard({ a, t, state, isDirect, borrowOff, bestPct, privacy, hov, drag, live, lastUse, rotLoaded,
+  probing, usingCredit, refreshing,
+  onSwitch, onProbe, onRefresh, onShowDetail, onRemove, onUseCredit, onRename, onToggleRotate, onTogglePin }: {
+  a: Account; t: Theme; state: OvState;
+  /** auth.json 里是它（不走代理直接跑 codex 时用的号）。 */
+  isDirect: boolean;
+  /** `state.borrow_off`：池子见底时**不许**借用停用号（缺省允许）。只影响停用卡上的说法。 */
+  borrowOff?: boolean;
+  bestPct: number | null;
+  privacy: boolean;
+  hov?: boolean;
   drag?: DragWiring;
-  /** Highest remaining quota in the pool — the baseline the delta chip compares against. */
-  bestPct: number;
-  /**
-   * 这一格网格里出现过的窗口**槽位**，按时长升序（由调用方跨所有卡算出，如 `["5h","周"]`）。
-   * 卡片按槽位逐行渲染，自己没有的槽位画一行同构的隐藏行 —— 让「到期」及其下方
-   * 在所有卡之间对齐到同一条水平线（用户 2026-08-26）。
-   *
-   * ★ 传**标签而不是行数**：只补行数的话 Pro 的「周」会顶到第一行、和 Plus 的「5h」
-   *   画在同一条线上 —— 对齐了，但对齐的是两种不同的窗口，**比错开更糟**。
-   * ★ 不写死 `["5h","周"]`：Plus 现在 2 个窗口、Pro 1 个，但那是**上游此刻的形状**不是不变量 ——
-   *   2026-07 它还只有周，2026-08-25 5h 才回来。写死等于把一个会变的观测钉进布局。
-   * ★ 不用「把 Pro 的条加粗填满」：同一个指标出现两种粗细，会让粗细看起来有含义而实际没有；
-   *   且设计语言明写「进度=细胶囊条 3–8px，反对粗色块」。
-   */
-  /** 用掉最近到期的那张重置卡（不可逆）。不传 = 这个界面没有该动作。 */
-  onUseCredit?: (label: string) => void; usingCredit?: boolean;
-  winSlots: string[]; /** 该号正在探测中 */ probing: boolean; /** 打码模式 */ privacy: boolean; t: Theme;
-  onSelect: () => void; onSwitch: () => void; onShowDetail: (aid: string) => void; onRemove: (label: string) => void; onProbe: (label: string) => void;
-  /** 把这个号移出/放回自动轮换池。真源是 `state.json` 的 `rotate_off`（**不是 localStorage**）——
-   *  代理在 app 没开时也要读它，两个真源迟早分叉成「界面说停用了、代理还在用」。 */
-  onToggleRotate: (label: string, on: boolean) => void;
-  /** 置顶/取消置顶（用户 2026-09-21：「点击就是优先使用该账号」）。真源是 `state.json`
-   *  的 `pinned`（aid 队列），走 `codex-rotate pin --toggle` —— 与 `rotate_off` 同一条
-   *  理由：代理在 app 没开时也要读它，存 localStorage 会分叉成「界面点亮了、代理用别的号」。 */
-  onTogglePin?: () => void;
-  /** 改名。空名/含空格/重名的校验在 `codex-rotate rename`(唯一真源)——那三种都会让按 label
-   *  查找的 switch/probe 静默操作到错的号上。这里只挡「没改」。 */
+  /** 在用号的实时速度（`read_live` 的 codex 平台合计，与托盘 / 刘海同源）。 */
+  live?: LiveLine | null;
+  /** 轮换段里它最后一次在岗的时刻（秒）+ 今天经代理的 token。 */
+  lastUse?: { last: number; today: number } | null;
+  rotLoaded: boolean;
+  probing: boolean; usingCredit: boolean; refreshing: boolean;
+  onSwitch: () => void;
+  onProbe: () => void;
+  onRefresh: () => void;
+  onShowDetail: () => void;
+  onRemove: () => void;
+  onUseCredit: () => void;
   onRename: (next: string) => void;
+  onToggleRotate: (on: boolean) => void;
+  onTogglePin: () => void;
 }) {
-  const Z = useCardType();
-  const cardRef = useRef<HTMLDivElement | null>(null);   // 拖拽影像要用整张卡
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);   // null = 不在改名
-  // 卡片一取消选中就退出改名:否则输入框会留在收起的卡片上,看不见却仍持有焦点
-  useEffect(() => { if (!isSelected) { setConfirmDelete(false); setEditing(null); } }, [isSelected]);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pct = a.windows.length ? a.tightest : null;
+  const five = a.windows.find((w) => w.mins > 0 && w.mins < 1000) ?? null;
+  const week = a.windows.find((w) => w.mins >= 10000) ?? null;
+  const toWin = (w: Account["windows"][number] | null, kind: "5h" | "w"): OvWin => {
+    const label = kind === "5h" ? "5h" : "周";
+    if (!w) return { label, pct: null, reset: "", kind, absent: true,
+                     title: kind === "5h" && week ? "这个号没有 5h 窗口（Pro 只有周额度）" : undefined };
+    const anchored = w.anchorState === "anchored";
+    return { label, pct: w.pct, kind, reset: anchored ? w.reset : "", note: anchored ? undefined : w.reset, title: w.resetAt };
+  };
 
+  const tag = state === "inuse" ? { text: "在用", kind: "inuse" as const }
+    : state === "next" ? { text: "下一个", kind: "next" as const }
+    : state === "cool" ? { text: "冷却中", kind: "cool" as const }
+    : state === "unprobed" ? { text: "未探测", kind: "unprobed" as const }
+    : state === "low" ? { text: "额度低", kind: "low" as const }
+    : state === "off" ? { text: "已停用", kind: "off" as const }
+    : state === "dead" ? { text: "失效", kind: "dead" as const }
+    : null;
+  const delta = state === "ok" || state === "next" || state === "low" ? deltaText(pct, bestPct) : "";
 
-  const isDead = a.status === "dead";
-  const isCool = a.status === "cool";
-  const sc = STATUS_COLORS[a.status] ?? STATUS_COLORS.live;
-  // ★ 环取**最紧**的窗口,不是第一个 —— 下方细条会把所有窗口列全,环是那份清单的"最坏值"。
-  //   用 windows[0] 会让环显示 5h、而真正卡住你的是周,**把约束藏起来**。
-  const pct = a.tightest;
-  const known = pct >= 0 && !isDead;
-  // Quota-driven colour for live/low (handoff rule), status colour for cool/dead where the state
-  // matters more than the number.
-  // ★★ 与菜单栏行**同一条规则**(`winBarColor`):平时按窗口取色,低额度时警告色夺回。
-  //    用户 2026-08-26 的两条要求 ——「5h 与周颜色不一样」+「低额度靠条色报警」——
-  //    在这条规则里和解:**识别是常态,报警是例外,而例外优先**。
-  //    两个 surface 各写一份迟早分叉(grok 那边栽过一次,靠截图才发现)。
-  const qc = isDead || isCool ? sc : winBarColor(a.tightestWin, pct, t);
-  const glow = known && pct <= 20 ? (pct <= 10 ? "#E0524D" : "#E0901C") : undefined;
+  const head = (
+    <>
+      {editing !== null ? (
+        <input autoFocus value={editing} data-ov-rename=""
+               onClick={(e) => e.stopPropagation()}
+               onChange={(e) => setEditing(e.target.value)}
+               onKeyDown={(e) => {
+                 e.stopPropagation();
+                 if (e.key === "Enter" && editing.trim()) { onRename(editing.trim()); setEditing(null); }
+                 if (e.key === "Escape") setEditing(null);
+               }}
+               onBlur={() => setEditing(null)}
+               style={{ fontSize: 14, fontWeight: 700, color: "var(--tx)", minWidth: 0, width: 110, background: "transparent",
+                        border: "1px solid var(--accLine)", borderRadius: 5, padding: "0 4px", fontFamily: "inherit", height: 20 }} />
+      ) : (
+        <b data-card-name="" style={{ fontSize: 15, minWidth: 24, overflow: "hidden", textOverflow: "ellipsis" }}>{a.node}</b>
+      )}
+      {a.pinRank !== null && (
+        <span data-pin-badge="" title={`已置顶（第 ${a.pinRank + 1} 位）—— 优先用它，撞限冷却时自动换下一个`}
+              style={{ fontSize: 10.5, fontWeight: 700, color: "var(--acc)", flexShrink: 0 }}>▲{a.pinRank + 1}</span>
+      )}
+      {tag && <OvTag tag={tag} title={state === "next" ? "代理下一个请求会挑这个号（与顶部续航条同一个真源：codex-rotate next）"
+                                     : state === "off" ? "已停用自动轮换 —— 代理不会挑它（池子见底且允许借用时除外）" : undefined} />}
+      {/* 在用但停了轮换（被借用 / 手动直连）：「在用」压过了「已停用」，这枚补上另一半事实。 */}
+      {!a.rotates && state === "inuse" && <OvTag tag={{ text: "已停用", kind: "off" }} title="这个号停了自动轮换，此刻是被借用 / 直连在用" />}
+      {a.plan && a.plan !== "plus" && a.plan !== "free" && <OvTag tag={{ text: a.plan.toUpperCase(), kind: "ultra" }} title={`套餐：${a.plan}`} />}
+      {a.quotaStale && a.quotaAgeSec != null && (
+        <StaleMark t={t} tone="muted" size={10}
+                   note={`这个号的额度快照是 ${fmtAgeSec(a.quotaAgeSec)}前读到的（超过 ${Math.round(QUOTA_STALE_SEC / 60)} 分钟）。`
+                         + "条和百分比画的是那一刻的值，不是现在的值。这不代表额度有问题——只代表我们有一阵子没读到它了。"} />
+      )}
+    </>
+  );
+  const right = delta === "最优" ? <OvTag tag={{ text: "最优", kind: "best" }} title="全池可用号里余量最多的" />
+    : delta ? <span title={`比余量最多的号少 ${delta.slice(1)}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--tx3)" }}>{delta}</span>
+    : null;
+
+  const lastLine = lastUse && lastUse.last > 0
+    ? `上次用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
+    : rotLoaded ? "24 小时内没经代理用过" : "上次用 —";
+  const dyn = state === "inuse" && live && live.sessions > 0 ? (
+    <DynText tone="live" title="codex 此刻在跑的会话合计（与托盘 / 刘海同源）">
+      <i style={{ display: "inline-block", verticalAlign: 1, margin: "0 7px 0 3px", width: 6, height: 6, borderRadius: 3,
+                  background: "var(--acc)", boxShadow: "0 0 0 3px rgba(45,212,191,.2)" }} />
+      {fmtTps(live.tps)} t/s · {live.sessions} 会话 · 今日 {fmtTokens(live.today)}
+    </DynText>
+  ) : state === "cool" ? (
+    <DynText tone="warn">429 冷却 · {fmtDur(a.cooldownSec / 60)} 后恢复</DynText>
+  ) : state === "unprobed" ? (
+    <DynText tone="bad">未探测 · 刷新一次后显示额度</DynText>
+  ) : state === "low" ? (
+    <DynText tone="bad">额度低 · {a.tightestWin?.label ?? ""} 剩 {Math.round(a.tightest)}%{a.tightestWin?.anchorState === "anchored" && a.tightestWin.reset ? ` · ↻${a.tightestWin.reset}` : ""}</DynText>
+  ) : state === "dead" ? (
+    <DynText tone="bad" title="token 已被服务端判死。重登只用 codex-rotate login（codex login/logout 会 revoke 别的号）">凭证失效 · 终端跑 codex-rotate login 重登</DynText>
+  ) : state === "off" ? (
+    <DynText tone="muted" title={lastLine}>{borrowOff ? "已停用 · 借用已关闭（池子见底也不会用它）" : "池子见底时可临时借用"}</DynText>
+  ) : (
+    <DynText tone="muted">{lastLine}</DynText>
+  );
+
   const expiring = isCardExpiring(a);
-  // 槽位化窗口行：先按调用方给的槽位顺序排，再兜上任何不在槽位表里的窗口（见渲染处注释）。
-  const slotRows: { label: string; w?: typeof a.windows[number] }[] = [
-    ...winSlots.map(label => ({ label, w: a.windows.find(x => x.label === label) })),
-    ...a.windows.filter(w => !winSlots.includes(w.label)).map(w => ({ label: w.label, w })),
-  ];
+  const some = expiring && a.cardsExpiring > 0 && a.cardsExpiring < a.cards;
+  const canUse = !!a.cardExp;
+  const cardTitle = (a.cardExp
+    ? `共 ${a.cards} 张 · 最早一张到期 ${a.cardExp}${a.cardsExpiring ? ` · ${a.cardsExpiring} 张在 ${CARD_WARN_DAYS} 天内作废` : ""}`
+    : `共 ${a.cards} 张 · 到期未知(运行 codex-rotate credits 取明细)`)
+    + (canUse ? `\n用卡：⋯ →「使用重置卡」，弹窗确认后用掉所选的那张（默认最近到期 ${a.cardExp}）。⚠️ 不可逆。额度没见底也能用（用户实测）` : "")
+    // 「怎么用卡」（2026-09-18 从菜单栏横幅搬来，横幅可关 ⇒ 这里是它的常驻归宿）：只在快到期时缀上。
+    + (expiring ? "\n也可以在终端用：codex → 输入 /usage → Redeem usage limit reset" : "");
+  // 停用的号：有重置卡就照样画角标（卡会过期，停不停用都一样）；「可借用 / 不借用」第 ③ 槽已经写了，
+  //   没卡时才放到这里（交接包 12 的样子）。
+  const footRight = state === "off" && !(a.cards > 0) ? (
+    <span style={{ color: "var(--tx2)", flexShrink: 0 }} title={borrowOff ? "借用已关闭" : "池子见底时代理会临时借用它"}>{borrowOff ? "不借用" : "可借用"}</span>
+  ) : a.cards > 0 ? (
+    // ★ 只是显示：交接包 page5 的卡片悬停时底栏**整条**换成操作，角标在鼠标够得着之前就让位了，
+    //   点它的入口改在 ⋯「使用重置卡」（同一个确认弹窗，PLAN §4）。留着 onClick 就是一个够不着的按钮。
+    <span data-card-badge="" title={cardTitle}
+          style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace",
+                   fontVariantNumeric: "tabular-nums", color: expiring ? "var(--ovWarnTx)" : "var(--ovNum)",
+                   flexShrink: 0 }}>
+      <IcTicket />{usingCredit ? "使用中…" : `重置卡 ×${a.cards}${expiring ? ` · ${some ? `${a.cardsExpiring}张` : ""}剩 ${cardLeftText(a.cardDays ?? 0)}` : ""}`}
+    </span>
+  ) : <span style={{ color: "var(--ovPh)", fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>无重置卡</span>;
 
-  const border = isSelected ? t.accent
-    : expiring ? "rgba(224,144,28,.4)"
-    : isCurrent ? t.accentBorder
-    : t.cardBorder;
+  const canSwitch = state !== "inuse" && state !== "dead" && !isDirect;
+  const actions = state === "dead" ? (
+    <>
+      <Ab onClick={onShowDetail} data="detail">详情</Ab>
+      <OvMenu onOpenChange={setMenuOpen} items={[
+        { key: "rename", label: "重命名", onClick: () => setEditing(a.node) },
+        { key: "remove", label: "删除这个号", bad: true, confirm: "再点一次确认删除", onClick: onRemove },
+      ]} />
+    </>
+  ) : (
+    <>
+      {canSwitch && (
+        <Ab primary onClick={onSwitch} data="switch"
+            title={state === "off"
+              ? `借用：把直连号（auth.json）切成 ${a.node}。不恢复它的自动轮换 —— 要恢复在 ⋯ 里打开`
+              : `把直连号（auth.json）切成 ${a.node}。走代理时每个请求仍由代理挑号`}>
+          <IcSwap />{state === "off" ? "借用" : "切换"}
+        </Ab>
+      )}
+      {state !== "off" && (
+        <HoldAb loading={probing} onFire={onProbe}
+                hint={`对 ${a.node} 发一次真实补全（问 hi 要求答 ok），证明"真的还能干活"。⚠️ 计费：消耗周额度（实测单次 <1%）`} />
+      )}
+      <Ab onClick={onRefresh} disabled={refreshing} data="refresh"
+          title="刷新额度 —— codex 没有单号刷新命令，这里跑的是「刷新全池」（零消耗）">
+        <IcRefresh spin={refreshing} />刷新
+      </Ab>
+      <OvMenu onOpenChange={setMenuOpen} items={[
+        { key: "direct", label: "✓ 直连号（auth.json 里是它）", info: true, hidden: !isDirect,
+          title: "不走代理直接跑 codex 时用的就是这个号。走代理时每个请求都可能换号，以顶部「正在使用」为准。" },
+        { key: "pin", label: a.pinRank !== null ? `取消置顶（第 ${a.pinRank + 1} 位）` : "置顶 —— 优先用它", onClick: onTogglePin },
+        { key: "rotate", label: a.rotates ? "停用自动轮换" : "恢复自动轮换", onClick: () => onToggleRotate(!a.rotates),
+          title: a.rotates ? "移出轮换池 —— 代理不再挑它（关掉最后一个会被 CLI 拒绝）" : "放回轮换池" },
+        { key: "rename", label: "重命名", onClick: () => setEditing(a.node) },
+        { key: "detail", label: "详情", onClick: onShowDetail },
+        { key: "credit", label: `使用重置卡（${a.cards} 张）`, hidden: !(a.cards > 0 && canUse), onClick: onUseCredit },
+        { key: "remove", label: "删除这个号", bad: true, confirm: "再点一次确认删除", onClick: onRemove },
+      ]} />
+    </>
+  );
 
   return (
-    <div
-      ref={cardRef}
-      data-aid={a.aid}
-      onClick={onSelect}
-      style={{
-        position: "relative", background: isCurrent ? t.curCardBg : t.cardBg,
-        border: `1px solid ${drag?.isDragging ? t.accent : border}`, borderRadius: 12,
-        padding: Z.pad, display: "flex", flexDirection: "column",
-        cursor: "pointer", userSelect: "none",
-        // ★ 被拖的那张**浮起来**(不是变淡):其余卡片实时让位,让位本身就是落点反馈,
-        //   所以这里要的是"它被拿在手上"的观感 —— 与手机拖图标一致。
-        opacity: isDead ? 0.55 : 1,
-        zIndex: drag?.isDragging ? 5 : undefined,
-        boxShadow: drag?.isDragging ? "0 8px 24px rgba(0,0,0,.45)" : undefined,
-        // ★★★ **`transform` 归拖拽 hook 独占，React 一个字都不许写。**
-        //   两边都写同一个属性时，React 的每次重渲染都会把 hook 直接写进 DOM 的
-        //   位移**整个抹掉** —— 实测症状：卡片只剩 `scale(1.03)`，完全不跟手。
-        //   浮起的缩放也一并交给 hook（它在 `paint()` 里和位移合成一条 transform）。
-        // ★★★ **`transform` 不许出现在 transition 里。** 它归拖拽 hook 独占，
-        //   而留着过渡会让「清空 transform 后立刻量位置」量到**过渡中间值** ——
-        //   实测症状：量到 1437 而真实槽位是 685，跟手补偿整个算错、卡片离指针 600px。
-        //   让位动画由 hook 用 Web Animations API 显式播放，不靠 CSS 过渡。
-        transition: "background .2s ease, border-color .2s ease, box-shadow .15s ease",
-      }}>
-
-      {/* ★★ `⊘` = 这个号被**手动停用了自动轮换**（`state.json` 的 `rotate_off`）。
-          它必须在**总览一眼能看到**的地方，而不是只在展开卡片的动作条里：
-          拖拽顺序在界面上叫「轮换优先级」，但 `rotate_off` 是**另一个开关**，
-          `ok()` 在排序**之前**就把它滤掉了。实测 2026-09-21：用户优先级 #1/#2/#3
-          （5530 / mou / qq55）三个全是 `rotate_off`，界面上却看着是最优先的 ——
-          「排第一但根本不参与」在旧界面上完全看不出来。
-          ★ 琥珀而不是红：这是**主动停用**，不是坏了。红留给凭证失效。
-          ★ 左上角原来还有 `⌘N` 切号角标，2026-10-16 起 ⌘N 改切档位、角标随之撤掉。 */}
-      <span style={{ position: "absolute", top: 6, left: 10, fontSize: Z.shortcut,
-                     color: t.muted, fontFamily: "'JetBrains Mono'",
-                     display: "flex", alignItems: "center", gap: 4 }}>
-        {/* ★★ 置顶角标**必须在收起态就看得见** —— 它决定钱花在哪个号上。
-            「排第一但根本不参与」那次教训说的就是：判断优先用哪个号是在**总览一眼扫**
-            的时候，而不是展开某一张卡的时候。
-            ★ 带**队列位次**（`pinRank + 1`）：用户选的是「按点击先后排队」，
-              只画一个图标的话两个置顶号看着一样，而它们的先后是有意义的。 */}
-        {a.pinRank !== null && (
-          <span data-pin-badge
-                style={{ display: "inline-flex", alignItems: "center", gap: 1,
-                         color: t.accent, fontWeight: 700 }}>
-            <IcPin on />{a.pinRank + 1}
-          </span>
-        )}
-        {!a.rotates && (
-          <span data-rotate-off title="已停用自动轮换 —— 不参与轮换池，轮换优先级对它无效。展开卡片点循环图标可放回"
-                style={{ color: "#E0901C", fontWeight: 700 }}>⊘</span>
-        )}
-      </span>
-
-      {/* 拖拽手柄（⠿）。走 pointer 事件，不走 HTML5 DnD —— 理由见 DragHandle。 */}
-      {drag && <DragHandle t={t} dragging={drag.isDragging} hint={drag.hint}
-                           onStart={drag.onStart} onMove={drag.onMove} onEnd={drag.onEnd} />}
-
-      {/* ★★ `flex:1` + 内容列 `alignSelf:stretch`：卡片在网格里本来就等高（`stretch`），
-          这里把多出来的高度交给内容列，好让下方区块**吊在卡片底边**（见下方 spacer）。
-
-          ★ 环保持**垂直居中**（用户 2026-08-26 指出顶对齐难看）。这与"环要跨卡对齐"不冲突：
-            内容列一旦拉满卡片高度，这一行的交叉轴尺寸就等于**卡片高度**，而同排卡片等高，
-            所以居中的环自然落在同一条线上。
-            ⚠️ 我先前把环改成顶对齐、并注了「居中会上下浮动」—— 那是**拉满之前**的观测，
-            现在不成立了。别再照那句话改回顶对齐。闸在 sweep.py 的 `rings` 那一项。 */}
-      <div style={{ display: "flex", gap: 11, alignItems: "center", flex: 1, minHeight: 0 }}>
-        <Ring pct={known ? pct : 0} r={Z.ringR} sw={Z.ringSw} color={qc} track={t.ringTrack} size={Z.ring} glow={glow}>
-          <span style={{ fontSize: Z.ringNum, fontWeight: 700, color: t.text, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{known ? pct : "—"}</span>
-        </Ring>
-
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", gap: Z.colGap }}>
-          {/* ★ 三列九宫格下这一行**零余量**:`plus4 活 USE 最优` 实测自然宽 126、可用 117。
-              零余量意味着任何扰动都会破 —— 分数缩放下的字形量化就够了(每个内联元素舍入
-              半像素,十几个累积出 9px)。所以指定**唯一让位者**:名字截省略号,徽章一个不压。
-              名字截一点还认得出,徽章少一半就读不出是 USE 还是 PRO。 */}
-          {/* ★★ `minWidth: 0` 单独用会把名字压到 **0px 直接消失**(2026-08-25 实测:
-              Pro1 那行徽章最多 —— PRO+活+USE+当前 —— 860px 下自然宽 122 / 可用 114,
-              flex 就把唯一可缩的名字压没了)。**认不出是哪个号,比裁掉半个日期更糟。**
-              所以两条一起:名字给一个**下限**(4 个字符宽,截成 `Pro…` 也还认得出),
-              整行允许换行 —— 宽屏永不触发,只在下限宽度让徽章掉到第二行。 */}
-          <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0,
-                        flexWrap: "wrap", rowGap: 4 }}>
-            {editing === null ? (
-              <span data-card-name style={{ fontSize: Z.name, fontWeight: 700, color: t.text, minWidth: 40,
-                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.node}</span>
-            ) : (
-              <input
-                autoFocus value={editing}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setEditing(e.target.value)}
-                onKeyDown={(e) => {
-                  // ★ 必须拦:全局 ⌘1~⌘3 是切档快捷键,不拦的话在输入框里打 ⌘+数字会切走这一档
-                  e.stopPropagation();
-                  if (e.key === "Enter") {
-                    const v = editing.trim();
-                    if (v && v !== a.node) onRename(v);
-                    setEditing(null);
-                  } else if (e.key === "Escape") setEditing(null);
-                }}
-                onBlur={() => setEditing(null)}
-                style={{ fontSize: Z.name, fontWeight: 700, color: t.text, width: 96,
-                         background: "transparent", border: `1px solid ${t.accentBorder}`,
-                         borderRadius: 5, padding: "1px 5px", outline: "none",
-                         fontFamily: "'JetBrains Mono'" }} />
-            )}
-            <PlanBadge plan={a.plan} t={t} size={Z.planBadge} />
-            {/* ★★ 冷却倒计时**并进状态字,不另起一行**(2026-09-05 修)。
-                原来它在窗口行之后单独占一行,于是冷却中的卡比兄弟卡高一行,
-                页脚被推下、细条被推上 —— 实测跨卡错开 **21px**,所有总览宽度全中。
-                ★ 这个缺陷 memory.md 里**预测过**:「冷却态多一行 ⇒ 理论上破对齐,
-                但这是推理不是实测,没有夹具能造出冷却态」。今天真实数据造出了冷却号,
-                对齐闸如期抓到 —— 预测、判据、修法三样当初就都写对了,只差一个触发条件。
-                ★ 名字行本来就有「冷却」两个字,那一行**只多了个倒计时**,所以合并零信息损失。 */}
-            <span style={{ fontSize: Z.status, fontWeight: 600, color: sc }}>
-              {STATUS_TEXT[a.status]}{isCool && a.cooldownSec ? ` ${fmtCd(a.cooldownSec)}` : ""}
-            </span>
-            {/* ★★ 额度快照陈旧的标记（2026-09-05 加）。此前 `StaleMark` **只接了 grok/agy，
-                codex 账号卡一个都没接** —— 于是一个 token 已失效、快照陈旧 3.8 天的号，
-                卡片上没有任何提示，而池级「上次刷新」取的是全池最大值、被每 300s 刷新的
-                活号盖成「刚刚」，**主动把这件事藏了起来**。
-                ★ 刻意用 muted 不用红：合盖休眠唤醒的那一瞬间全池都会陈旧，那是事实不是故障；
-                  把它染成告警色只会训练用户忽略所有告警。它只是一句可悬浮的事实陈述。 */}
-            {a.quotaStale && a.quotaAgeSec != null && (
-              <StaleMark t={t} tone="muted" size={10}
-                         note={`这个号的额度快照是 ${fmtAgeSec(a.quotaAgeSec)}前读到的（超过 ${Math.round(QUOTA_STALE_SEC / 60)} 分钟）。`
-                               + `条和百分比画的是那一刻的值，不是现在的值。`
-                               + `这不代表额度有问题——只代表我们有一阵子没读到它了。`} />
-            )}
-            {/* ★★ 这个角标以前恒是 `USE`，由 `recommended()` 算 —— **剩余最多者**，
-                **既不看置顶也不看停用**。2026-09-21 用户截图实证它在说谎：Yu 拿着 USE，
-                而真挑号器（`codex-rotate next`）说下一个是 wing。它与我同日从 banner 上
-                删掉的「建议切到 X」是**同一份作废逻辑**，只是换成了角标形态。
-                ★ codex 档现在传的是 `board.next` —— 与顶部续航条**同一个真源**，
-                  所以两处永远说同一件事；agy 档保留 `USE`（那边手动切号才是机制）。 */}
-            {isBest && <span title={bestTitle} style={{ fontSize: Z.useBadge, fontWeight: 700, color: t.accentText, background: t.accent, padding: "1px 5px", borderRadius: 4, flexShrink: 0, whiteSpace: "nowrap" }}>{bestLabel}</span>}
-            {isCurrent
-              /* ★★ 它读的是 `state.active` = **上次 CLI 切换**留下的号，也就是
-                 `~/.codex/auth.json` 里那个 —— 只有**不走代理直连**时才用得上。
-                 走代理时每个请求都可能换号，「当前」二字与顶部的「正在使用」撞名却说的是
-                 另一回事（用户 2026-09-21：「一个界面出现了三个使用」）。codex 档改叫「直连」。 */
-              ? <span title={curTitle} style={{ marginLeft: "auto", flexShrink: 0, fontSize: Z.curBadge, fontWeight: 700, color: t.accent, border: `1px solid ${t.accentBorder}`, padding: "1px 7px", borderRadius: 999, whiteSpace: "nowrap" }}>{curLabel}</span>
-              : known && bestPct >= 0 && <DeltaChip delta={pct - bestPct} t={t} />}
-          </div>
-
-          <div style={{ fontSize: Z.email, color: t.text2, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{maskId(a.email, privacy)}</div>
-
-          {/* ★★ 弹性留白：把条形区与其下方压到卡片底边，于是这些水平线**与上方高度无关** ——
-              徽章行折不折行随窗宽而变（240px 卡里 `plus5 活 -4%` 就要折行、253px 不折），
-              **给上方补固定高度永远追不上这种随宽度变化的差异**。
-              ★ 必须放在条形区**之前**：放在它之后只能对齐「到期」，条形区自己仍是顶对齐的 ——
-                而用户 2026-08-26 的红线正是画在条上。
-
-              ★ **不封顶**（曾经封在 28px）。封顶是为了避免"邻卡展开时兄弟卡中间裂一道大洞"，
-                但要吸的量 = 徽章折行差 **+ 动作条高度**，28px 吸不完，兄弟卡之间就差了 24px
-                （实测 960px 展开态：plus5 名字行 45、grok 21，两边留白都顶到 28 就卡住了）。
-                而那道"洞"出现的**唯一场合**正是邻卡展开 —— 洞里对应的就是邻卡的按钮区，
-                读起来是合理的。**用一个会错位的上限换一个不难看的空白，是划不来的交易。** */}
-          <div aria-hidden style={{ flex: 1, minHeight: 0 }} />
-
-          {/* ★★ 逐**槽位**画，不是逐窗口画：自己没有的槽位画一行 `visibility:hidden` 的同构行。
-              占位行**复用同一份行结构**，高度由构造保证一致 —— 写一个固定像素的空 div
-              是在复制"行有多高"这个知识，字号一改就错位。
-              ★ 末尾兜上不在槽位表里的窗口：宁可多一行，也不能把一个真窗口悄悄画没 ——
-                「合法窗口被静默丢掉」正是 2026-08-25 那个 bug 的形态，它不报错，只是看不见。 */}
-          {/* ★★ 「从没探测过」的号（`windows: []`）**也走槽位**，提示文字占**第一条槽位行**，
-              而不是在槽位之外另起一行 —— 另起一行就意味着这张卡比兄弟卡多/少一行，
-              而条形区与页脚是从卡片底边往上推的，于是它的「到期」整体错位（实测 9px：
-              少两条细条 34px、多一行提示 17px，差 37px 超过留白 28px 的上限，吸不完）。
-              ★ 提示行**沿用同一份 4 段结构**（后三段隐形），高度由构造与真行一致。 */}
-          {!isDead && (slotRows.length ? slotRows : [{ label: "—", w: undefined }])
-            .map(({ label, w }, i) => {
-            const real = known && !!w;
-            const notice = !known && i === 0;
-            return (
-              <div key={label} aria-hidden={real || notice ? undefined : true}
-                   style={{ display: "flex", alignItems: "center", gap: 6, visibility: real || notice ? undefined : "hidden" }}>
-                <span style={{ fontSize: Z.winLabel, color: t.muted, fontFamily: notice ? undefined : "'JetBrains Mono'", whiteSpace: "nowrap" }}>{notice ? "未探测 · 刷新一次" : label}</span>
-                <div style={{ flex: 1, height: Z.bar, borderRadius: 2, background: real ? t.barTrack : "transparent", overflow: "hidden" }}>
-                  {real && w && <div style={{ height: "100%", width: `${w.pct}%`, background: winBarColor(w, w.pct, t), borderRadius: 2, transition: "width .55s cubic-bezier(.4,0,.2,1)" }} />}
-                </div>
-                <span style={{ fontSize: Z.pct, fontWeight: 600, color: real && w ? winNumColor(w.pct, t) : t.text2, fontFamily: "'JetBrains Mono'", fontVariantNumeric: "tabular-nums",
-                              // ★ 提示行里这两段只借**高度**：`visibility:hidden` 仍占宽度，
-                              //   在 168px 的窄卡里把整行撑到 177 溢出。加 `width:0` 只留行盒。
-                              ...(notice ? { visibility: "hidden" as const, width: 0, overflow: "hidden" as const } : null) }}>{real && w ? `${w.pct}%` : "00%"}</span>
-                {/* ★ `title` 是「未启动 / 待确认」这三个字的**证据出口** —— 行内只放得下结论，
-                    凭什么这么说必须能问得到（`buildWindow` 的 `resetAt` 带着观测次数）。 */}
-                <span title={real && w ? w.resetAt : undefined}
-                      style={{ fontSize: Z.eta, color: t.muted, fontFamily: "'JetBrains Mono'",
-                              ...(notice ? { visibility: "hidden" as const, width: 0, overflow: "hidden" as const } : null) }}>↻{real && w ? w.reset : "0d00h"}</span>
-              </div>
-            );
-          })}
-          {isDead && <span style={{ fontSize: Z.note, color: "#E0524D", fontWeight: 600 }}>token 失效 · 需重登</span>}
-          {/* ★ 冷却那一行已并进名字行的状态字(见上面 STATUS_TEXT 处的说明)。
-              **别再在这里加任何独立行** —— 窗口行与页脚之间每多一行,这张卡就比兄弟卡高一行,
-              而细条是从页脚往上推的,整排就会错开。死号不受影响:它只在折叠区渲染,不进网格。 */}
-
-          {/* ★★ 页脚**恒为一行**：日期左、重置卡徽章右（用户 2026-09-07：「重置卡和日期应该齐平，
-              因此重置卡大小应该缩小即可」）。
-
-              ⚠️ 这里**不是**回退到从前那个 bug。原来的写法是 `flex-wrap`：**折不折行取决于文案长短**，
-              于是「一张卡的重置卡快到期、另一张不快」时两张卡的页脚一个 48px、一个 29px，
-              而条形区是从页脚往上推的 ⇒ 上面那些细条整排错开 **19px**（实测 1040~1120px 区间）。
-              当时的修法是"固定两行"，用高度换掉那个可变性。
-
-              现在换成"固定一行"，可变性用**另一种方式**消掉，而且更硬：
-                ① `flexWrap: nowrap` —— 结构上就不可能折行，不再取决于文案；
-                ② 徽章可收缩 + 省略号 —— 放不下时**截断**而不是换行；
-                ③ 日期 `flexShrink: 0` —— 让位者只有一个，且是信息量最低的那个（张数尾巴）。
-              高度因此恒等于「一行」，与文案、与徽章有没有到期后缀全都无关。
-              ★ 别改回 `flexWrap: wrap` 去省几像素 —— 那才是原来的 bug。 */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                        gap: 8, flexWrap: "nowrap", minWidth: 0,
-                        marginTop: Z.footTop, paddingTop: Z.footPad, borderTop: `1px solid ${t.divider}` }}>
-            <span title={a.expStale ? "OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。刷新 token 也拉不到新状态,要等 OpenAI 自己复核。" : undefined}
-                  style={{ fontSize: Z.exp, color: t.muted, fontFamily: "'JetBrains Mono'",
-                           whiteSpace: "nowrap", flexShrink: 0 }}>到期 {a.exp}{a.expStale && <span style={{ color: "#E0901C" }}>*</span>}</span>
-            <span style={{ minWidth: 0, overflow: "hidden", display: "flex", justifyContent: "flex-end" }}><CardBadge a={a} t={t} onUse={onUseCredit && !isDead && a.cardExp ? () => onUseCredit(a.node) : undefined} using={!!usingCredit} /></span>
-          </div>
-        </div>
-      </div>
-
-      {/* ★★ 同排有别的卡展开时,本卡渲染**同一条动作条**但整条隐形 —— 不是画一个
-          "差不多高"的占位。第一版占位手算了 45px,而真动作条 79px(ProbeButton 比图标钮高),
-          sweep 当场量出还差 **34px**。★ 高度必须**由构造保证**,不能由我心算:
-          按钮尺寸一改,占位自动跟上;写死或另搭一套就会静默失准(同 `CardBadgeGhost` 的理由)。
-          ★ 隐形那份必须 `pointerEvents: none` + `aria-hidden`,否则会出现看不见却点得到的按钮。 */}
-      {/* ★★★ 动作条是**浮在卡片底部的覆盖层**，不再内嵌（用户 2026-09-21 从三版 demo 里选的 A）。
-          在这之前它是文档流里的一块，展开时把卡片撑高 ~47px —— 而同排的卡在网格里等高，
-          于是邻卡跟着长，还得靠 `reserveActions` 给同排每张卡预留一条等高的隐形占位。
-          **浮层把那整套逻辑连根去掉**：卡片高度恒定，同排不被顶动，预留也就没有存在理由。
-          ★ 已知代价（demo 里就画出来了、用户选的时候知情）：它**盖住「到期 / 重置卡」那一行**。
-            换来的是全局布局零抖动 —— 那一行只在收起态读，而动作条是主动打开的。
-          ★ 半透明 + 模糊是为了让被盖住的那行**透出轮廓**，读者知道下面还有东西、不是没了。 */}
-      {/* 外壳（定位 / 磨砂材质 / 收回动画 / 倒计时细线 / 不换行）在 `CardActionBar` —— 与 agy 卡共用一份。 */}
-      <CardActionBar open={isSelected} t={t}>
-          {/* ★★ 压成**一行**(用户 2026-09-07:「都是出现换行问题」)。
-              两行动作条不只是难看:卡片高度差 ~80px,而同排兄弟卡的环是**垂直居中**的,
-              于是邻卡一展开,兄弟卡的邮箱与环之间就裂开一道大洞(用户截图圈出的正是它)。
-              所以这里每压缩一格,都同时在修那个排版问题。
-              ★ 主操作(切换/当前)保留文字 —— 它是这张卡存在的理由,压成图标会让人找不到。
-                其余全部图标 + `title` 悬浮出全名。 */}
-          {!confirmDelete ? (<>
-          {!isCurrent && !isDead && (
-            <span onClick={onSwitch} title={`把当前号切到 ${a.node}`}
-                  style={{ flex: "1 1 auto", minWidth: 44, textAlign: "center", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", color: t.accentText, background: t.accent, padding: "5px 8px", borderRadius: 6, cursor: "pointer" }}>切换</span>
-          )}
-          {isCurrent && (
-            /* ★ 与右上角的「直连」是**同一件事**（这张卡就是 auth.json 里那个号），所以同一个词。
-               2026-09-23 右上角改名时漏了这里，一张卡上同一个意思挂两个名字 ——
-               而用户报的「一个界面三个使用」里被圈出来的正有这一个。 */
-            <span title="不走代理直接跑 codex 时用的就是这个号（auth.json 里是它）"
-                  style={{ flex: "1 1 auto", minWidth: 62, textAlign: "center", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", color: t.accent, padding: "5px 0" }}>✓ 直连</span>
-          )}
-          {!isDead && (
-            /* ★ 探针**不压成图标**:它是全 app 唯一花钱的控件,必须与旁边免费的按钮
-               一眼可分(琥珀 + ⚡ + 两段确认)。把它做成一个 34px 的灰图标,
-               正好抹掉那条区分 —— 那比多占 20px 危险得多。 */
-            <ProbeButton t={t} variant="inline" label="探针"
-              hint={`对 ${a.node} 发一次真实补全,验它是否真能干活。⚠️ 消耗周额度(实测单次 <1%)`}
-              loading={probing} onConfirm={() => onProbe(a.node)} loadingText="探测…" />
-          )}
-          {/* ★ **动作条里没有「用卡」按钮**（用户 2026-10-01：「很容易误触」）。用卡入口只有页脚的
-              「重置卡 ×N」角标，点它弹确认弹窗（`UseCreditDialog`）。动作条里的按钮紧挨着切换 / 探针，误触代价是一张卡。 */}
-          {/* ★ 置顶排在「轮换开关」前面：它是你最常用的那个动作（「优先用这个号」），
-              而轮换开关是偶尔才碰的。 */}
-          {onTogglePin && !isDead && (
-            <IconBtn title={a.pinRank !== null
-                       ? `已置顶（第 ${a.pinRank + 1} 位）。点一下取消 —— 取消后回到「容量最高优先」`
-                       : "置顶：优先用这个号。可置顶多个,按点击先后排队;撞限冷却时自动用下一个"}
-                     onClick={onTogglePin}
-                     color={a.pinRank !== null ? t.accentText : t.muted}
-                     border={a.pinRank !== null ? t.accent : t.ghostBorder}
-                     bg={a.pinRank !== null ? t.accent : undefined}>
-              <IcPin on={a.pinRank !== null} />
-            </IconBtn>
-          )}
-          {!isDead && (
-            <IconBtn title={a.rotates
-                       ? `${a.node} 正参与自动轮换。点一下移出轮换池 —— 代理不再挑它`
-                       : `${a.node} 已停用自动轮换,代理不会挑它。点一下放回轮换池`}
-                     onClick={() => onToggleRotate(a.node, !a.rotates)}
-                     color={a.rotates ? t.muted : "#E0901C"}
-                     border={a.rotates ? t.ghostBorder : "#E0901C55"}
-                     bg={a.rotates ? undefined : "rgba(224,144,28,.10)"}>
-              <IcRotate off={!a.rotates} />
-            </IconBtn>
-          )}
-          <IconBtn title="重命名 —— 改显示名。菜单栏标题、弹窗、卡片会一起变（label 只是昵称，不影响套餐判定）"
-                   onClick={() => setEditing(a.node)} color={t.muted} border={t.ghostBorder}>
-            <IcPen />
-          </IconBtn>
-          <IconBtn title="详情 —— 查看 account_id、token 到期、订阅复核时间"
-                   onClick={() => onShowDetail(a.aid)} color={t.muted} border={t.ghostBorder}>
-            <IcInfo />
-          </IconBtn>
-            <IconBtn title={`删除 ${a.node}（会先要一次确认）`}
-                     onClick={() => setConfirmDelete(true)} color="#E0524D" border="#E0524D40">
-              <IcTrash />
-            </IconBtn>
-          </>) : (
-            <>
-              {/* ★★ 确认态**整条只剩「删除 X？/ 确认删除 / 取消」**（用户 2026-10-16 截图：点删除后乱了 ——
-                  「确认删除」+「取消」约 120px 顶替 34px 的垃圾桶，320px 宽的卡一行放不下，「取消」折成两行、
-                  「探针」被挤到 30px 截断、整条从 46px 涨到 60px）。四个图标缩到底也差 ~80px，所以不是压缩能解决的。
-                  顺带：不可逆的确认旁边不再挨着「切换 / 探针」，误触面也没了。
-                  ★ 确认态**保留文字**：删除不可逆，把「确认删除」也压成图标等于让人凭记忆点。
-                  三块都定高 28（= 探针按钮高），整条高度不随确认态变。 */}
-              <span data-confirm-delete title={`删除 ${a.node}`}
-                    style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, color: t.text2, whiteSpace: "nowrap",
-                             overflow: "hidden", textOverflow: "ellipsis", height: 28, display: "flex", alignItems: "center" }}>删除 {a.node}？</span>
-              <span onClick={() => { setConfirmDelete(false); onRemove(a.node); }}
-                    style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#E0524D", padding: "0 10px", height: 28,
-                             display: "flex", alignItems: "center", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>确认删除</span>
-              <span onClick={() => setConfirmDelete(false)}
-                    style={{ fontSize: 11, color: t.text2, padding: "0 10px", height: 28, display: "flex", alignItems: "center",
-                             cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>取消</span>
-            </>
-          )}
-      </CardActionBar>
-    </div>
+    <OvCard id={a.aid} t={t} state={state} ringPct={pct} head={head} right={right}
+            email={maskId(a.email, privacy) || "—"} dyn={dyn} w5={toWin(five, "5h")} ww={toWin(week, "w")}
+            footLeft={<span title={a.expStale ? "OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。" : "订阅到期日"}>
+              到期 {a.exp}{a.expStale && <span style={{ color: "var(--ovWarnTx)" }}>*</span>}{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}
+            </span>}
+            footRight={footRight} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
   );
 }

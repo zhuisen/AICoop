@@ -12,7 +12,7 @@
 ★★ **夹具里 `last_aid` 与 `active` 必须不同**（make_harness.py 已这样造）——
   两者相同时，读哪个都是同一个像素，改没改都绿（本仓形态⑩）。本文件第一条先证这个前提。
 
-## ② 卡片动作弹层打开后到点直接收回（不论是否在操作；时长 = `CARD_ACTIONS_LIFE_MS`，同日 30→10→5 秒）
+## ② 卡片动作弹层打开后到点直接收回（2026-10-19 随弹层一起作废，见文末；仍成立的「收回不生硬」改守悬停底栏）
 
 ★ 用 Chrome headless 的 `--virtual-time-budget` **真的让时间走过去**，而不是断言源码里有个数字：
   那种断言在「计时器根本没挂上」「挂上了但被每次渲染重置」时同样是绿的。
@@ -145,146 +145,90 @@ class TheTrayTitleFollowsTheProxyToo(unittest.TestCase):
         self.assertEqual(rhs, ["inUseAid(state)"], "★ useStore 的 inUseNode 没走 inUseAid")
 
 
-# 卡片动作弹层：点开 → 时长一半时在 → 到点 +600ms 不在；另一组 80% 时按一下键，到点 +600ms 照样不在。
-# ★★ 时间点**从 `CARD_ACTIONS_LIFE_MS` 推导**，不写死（用户同一天把时长调了三次：30→10→5 秒，
-#    写死的话每调一次测试就要跟着改，而漏改的那一版会在错误的时刻取样、判据悄悄失效）。
-# ★ 「一半时还在」同时挡「收得太早」。
-_CARD_PROBE = r"""
-setTimeout(function () {
-  var out = {};
-  var card = document.querySelector('[data-aid]');
-  out.card = !!card;
-  if (card) card.click();
-  var poke = %(poke)s;
-  function has() { return !!document.querySelector('[data-actions]'); }
-  setTimeout(function () { out.at5 = has(); }, __HALF__);
-  if (poke) setTimeout(function () {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true }));
-  }, __POKE__);
-  setTimeout(function () { out.at11 = has();
-    document.title = '__MF__' + JSON.stringify(out); }, __AFTER__);
-}, 2600);
-"""
-
-
-@unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
-class TheActionPopoverClosesItselfOnTime(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        life = _const("CARD_ACTIONS_LIFE_MS")
-        if not life:
-            raise unittest.SkipTest("读不到 CARD_ACTIONS_LIFE_MS —— 探针无从定时")
-        def probe(poke):
-            js = (_CARD_PROBE % {"poke": poke}).replace("__HALF__", str(life // 2)) \
-                 .replace("__POKE__", str(life * 4 // 5)).replace("__AFTER__", str(life + 600))
-            return _probe("harness.html", "nav=home", js, budget=life + 6000)
-        cls.idle, cls.busy = probe("false"), probe("true")
-        if cls.idle is None or cls.busy is None:
-            raise unittest.SkipTest("harness 静态服务（3304）没在跑")
-
-    def test_it_opened_in_the_first_place(self):
-        """★★ 先证它**打开过**（时长一半时还在）—— 没打开时「到点后不在」是白绿。"""
-        self.assertTrue(self.idle["card"], "★★ 找不到卡片")
-        self.assertTrue(self.idle["at5"], "★★ 点了卡片动作弹层没出来 —— 下面几条都没有意义")
-
-    def test_it_closes_after_ten_seconds(self):
-        self.assertFalse(self.idle["at11"], "★★★ 到点 600ms 了，动作弹层还在")
-
-    def test_activity_does_not_keep_it_open(self):
-        """★★ 用户定的语义：**到点直接收回，不管动与不动**。
-
-        第一版做成了「有操作就重置计时」，被用户否掉。这条守住现在的语义：
-        到 80% 时按了一下键，到点 600ms 后**必须已经收回**。
-        """
-        self.assertTrue(self.busy["at5"], "★★ 这一组也没打开过 —— 下面的判断没意义")
-        self.assertFalse(self.busy["at11"], "★★ 有操作就不收了 —— 用户要的是到点就收")
-
-
-# 收回动画 + 倒计时细线（用户 2026-09-23 从 demo 里选 A · 原路退回 + 细线）。
-_EXIT_PROBE = r"""
-setTimeout(function () {
-  var out = {};
-  var card = document.querySelector('[data-aid]');
-  if (card) card.click();
-  function bar() { return document.querySelector('[data-actions]'); }
-  function snap(tag) {
-    var b = bar(), o = { present: !!b };
-    if (b) {
-      var cs = getComputedStyle(b), tk = b.querySelector('[data-actions-countdown]');
-      o.leaving = b.hasAttribute('data-leaving');
-      o.anim = cs.animationName; o.dur = cs.animationDuration; o.pe = cs.pointerEvents;
-      if (tk) { var ts = getComputedStyle(tk); o.tick = { anim: ts.animationName, dur: ts.animationDuration }; }
-    }
-    out[tag] = o;
+# ★ 2026-10-19 **作废并取代**（交接包 page5 · 5b，PLAN §4 F5）：
+#   原来两组闸守的是「点卡片弹出的动作弹层」（`CardActionBar`）：到 `CARD_ACTIONS_LIFE_MS`（5 s）直接收回、
+#   收回时原路退回（cbSink 140 ms）+ 倒计时细线。交接包把这层浮层整个删掉，换成**悬停时底栏原位换成操作**
+#   （`ov/OvCard` 的 `.ov-fact`），鼠标一离开就收 —— 「打开后一直挂着盖住卡片」这个问题本身不存在了，
+#   定时收回、倒计时细线随之删除（常量与 keyframes 一起删）。
+#   两条用户诉求里**仍成立的那条**原样守：收回不许「一帧就没了」（用户 2026-09-23：「现在太生硬了」），
+#   且收回途中点不中（不会点中一个正在消失的按钮）。用 Playwright 的**真鼠标 + 真时间**（不开 notrans）。
+_HOVER_JS = """async () => {
+  const card = document.querySelectorAll('[data-cards-grid] > [data-aid]')[1];
+  const fact = card && card.querySelector('[data-ov-actions]');
+  if (!fact) return null;
+  const read = () => { const cs = getComputedStyle(fact); return { op: +cs.opacity, pe: cs.pointerEvents }; };
+  return read();
+}"""
+_LEAVE_JS = """async () => {
+  const card = document.querySelectorAll('[data-cards-grid] > [data-aid]')[1];
+  const fact = card.querySelector('[data-ov-actions]');
+  const out = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < 700) {
+    const cs = getComputedStyle(fact);
+    out.push({ t: Math.round(performance.now() - t0), op: +cs.opacity, pe: cs.pointerEvents });
+    await new Promise(r => setTimeout(r, 16));
   }
-  setTimeout(function () { snap('open'); }, __HALF__);
-  setTimeout(function () { snap('mid'); }, __MID__);
-  setTimeout(function () { snap('after'); document.title = '__MF__' + JSON.stringify(out); }, __AFTER__);
-}, 2600);
-"""
+  return out;
+}"""
 
 
-def _ms(css_time):
-    """'0.14s' / '140ms' / '10s' → 毫秒。"""
-    v = css_time.strip().split(",")[0]
-    return float(v[:-2]) if v.endswith("ms") else float(v[:-1]) * 1000
-
-
-def _const(name):
-    src = (ROOT / "codexbar" / "src" / "helpers.ts").read_text(encoding="utf-8")
-    m = re.search(rf"export const {name} = ([\d_]+);", src)
-    return int(m.group(1).replace("_", "")) if m else None
+def _hover_leave():
+    import os
+    import urllib.request
+    if os.environ.get("OV_REBUILD") == "1":      # tools/mutate.py 变异源码后必须重编，否则测的是旧 bundle
+        cb = ROOT / "codexbar"
+        subprocess.run(["npx", "vite", "build", "--outDir", "uishot/app"], cwd=cb, check=True, capture_output=True, timeout=300)
+        subprocess.run(["python3", "uishot/make_harness.py"], cwd=cb, check=True, capture_output=True, timeout=300)
+    try:
+        from playwright.sync_api import sync_playwright
+        urllib.request.urlopen(HARNESS + "/harness.html", timeout=2).read(1)
+    except Exception:
+        return None
+    with sync_playwright() as p:
+        br = p.chromium.launch(executable_path=CHROME, headless=True, args=["--use-mock-keychain"])
+        pg = br.new_page(viewport={"width": 1200, "height": 860})
+        pg.goto(HARNESS + "/harness.html?nav=home", timeout=30000)
+        pg.wait_for_timeout(2600)
+        box = pg.locator("[data-cards-grid] > [data-aid]").nth(1).bounding_box()
+        before = pg.evaluate(_HOVER_JS)
+        pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + 40)
+        pg.wait_for_timeout(500)
+        shown = pg.evaluate(_HOVER_JS)
+        pg.mouse.move(5, box["y"] + box["height"] + 300)
+        trail = pg.evaluate(_LEAVE_JS)
+        br.close()
+    return before, shown, trail
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
-class TheActionPopoverLeavesTheWayItCame(unittest.TestCase):
-    """★★ 收回不许「一帧就没了」（用户：「现在太生硬了」）。
-
-    生硬的根因：动作条是条件渲染，弹出有 160ms 动画，收回是**组件直接卸载、0ms**。
-    所以这组闸量的是**退场那一刻它还在、且正在播退场动画**，不是「源码里有个 cbSink」——
-    后者在「keyframes 写了但组件照样立即卸载」时同样是绿的，而那正是原来的缺陷。
-    """
-
+class TheHoverActionsLeaveTheWayTheyCame(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.life, cls.exit = _const("CARD_ACTIONS_LIFE_MS"), _const("CARD_ACTIONS_EXIT_MS")
-        if not cls.life:
-            raise unittest.SkipTest("读不到 CARD_ACTIONS_LIFE_MS —— 探针无从定时")
-        # ★ 「到点后 70ms」取样退场中的样子（退场共 EXIT+40ms），「到点后 600ms」确认已卸载。
-        js = _EXIT_PROBE.replace("__HALF__", str(cls.life // 2)) \
-                        .replace("__MID__", str(cls.life + 70)).replace("__AFTER__", str(cls.life + 600))
-        cls.r = _probe("harness.html", "nav=home", js, budget=cls.life + 6000)
-        if cls.r is None:
-            raise unittest.SkipTest("harness 静态服务（3304）没在跑")
+        r = _hover_leave()
+        if r is None:
+            raise unittest.SkipTest("harness 静态服务（3304）没在跑 / 没有 playwright —— skip 不是绿")
+        cls.before, cls.shown, cls.trail = r
 
-    def test_it_opened(self):
-        self.assertTrue(self.r["open"]["present"], "★★ 动作条没打开过 —— 下面几条都没意义")
-        self.assertFalse(self.r["open"]["leaving"], "★ 刚打开就标成了退场中")
+    def test_it_was_hidden_then_shown(self):
+        """★★ 先证悬停真的换出了操作 —— 没出来时「收回不生硬」是白绿。"""
+        self.assertIsNotNone(self.before, "★★ 找不到第 2 张卡的操作层")
+        self.assertLess(self.before["op"], .05, "★ 没悬停时操作就露着")
+        self.assertEqual("none", self.before["pe"], "★ 没悬停时操作点得中")
+        self.assertGreater(self.shown["op"], .95, "★★ 真鼠标悬停了，操作没换出来")
+        self.assertNotEqual("none", self.shown["pe"], "★★ 换出来了却点不中")
 
-    def test_it_is_still_there_and_sinking_right_after_the_timer(self):
-        """★★★ 计时器到点后 70ms：必须**还在**，且在播 cbSink。立即卸载 = 原来那个生硬。"""
-        mid = self.r["mid"]
-        self.assertTrue(mid["present"], "★★★ 到点那一刻直接没了 —— 没有退场动画")
-        self.assertTrue(mid["leaving"], "★★ 还在但没标退场态")
-        self.assertEqual("cbSink", mid["anim"], f"★★ 退场播的不是 cbSink：{mid['anim']}")
-        self.assertEqual(self.exit, round(_ms(mid["dur"])),
-                         "★ 退场时长不是 CARD_ACTIONS_EXIT_MS —— CSS 与常量分叉了")
-        self.assertEqual("none", mid["pe"], "★ 退场中还能点 —— 会点中一个正在消失的按钮")
+    def test_leaving_is_animated_not_one_frame(self):
+        mids = [x for x in self.trail if .05 < x["op"] < .95]
+        self.assertTrue(mids, "★★★ 鼠标离开后一帧就没了 —— 没有退场过渡：%s" % self.trail[:6])
+        self.assertLess(self.trail[-1]["op"], .05, "★★ 700 ms 后操作还挂着")
 
-    def test_it_is_gone_after_the_exit(self):
-        self.assertFalse(self.r["after"]["present"], "★★ 退场播完了还挂着")
-
-    def test_the_countdown_line_runs_for_exactly_the_life(self):
-        """★★ 细线时长必须**等于**收回计时器 —— 它是预告，预告不准比没有更糟。
-
-        期望值从 helpers.ts 现读（不在测试里抄一个 10000），两处同源才有意义。
-        """
-        tick = self.r["open"].get("tick")
-        self.assertIsNotNone(tick, "★★ 打开的动作条里没有倒计时细线")
-        self.assertEqual("cbTick", tick["anim"], f"★ 细线没在播 cbTick：{tick}")
-        self.assertIsNotNone(self.life, "★ 没从 helpers.ts 读到 CARD_ACTIONS_LIFE_MS")
-        self.assertEqual(self.life, round(_ms(tick["dur"])),
-                         f"★★ 细线走 {tick['dur']}，而收回计时器是 {self.life}ms —— 预告与实际对不上")
+    def test_it_cannot_be_clicked_while_leaving(self):
+        """★ 退场中还能点 = 会点中一个正在消失的按钮（旧闸同一条）。"""
+        for x in self.trail:
+            if x["op"] < .95:
+                with self.subTest(t=x["t"]):
+                    self.assertEqual("none", x["pe"], "★ 退场中还能点")
 
 
 if __name__ == "__main__":

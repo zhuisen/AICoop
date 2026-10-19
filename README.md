@@ -67,6 +67,8 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 
 覆盖的 CLI:**Claude Code · Codex · Grok · Kimi · Antigravity(agy) · OpenClaw · Reasonix · DeepSeek Harness**。加一家 = 在 `traffic/scan.py` 写个解析器 + 注册表加一行,前端自动跟上。
 
+★ **Claude 实测速度**（v1.12.0 起，仅 macOS，默认关）：在「设置 → Claude 实测速度」打开。开了之后，Claude Code 把每次请求的耗时与 token 发到本机 `127.0.0.1:4318`，不含对话内容。不开时，Claude 的速度是估值。说明见 [docs/INSTALL.md「Claude 实测速度」](docs/INSTALL.md#claude-实测速度otel仅-macos)。
+
 除了 token 用量,总览页还显示**订阅额度**(与账号池的 Codex 余量并列,同款圆环+细条,标「只读」不参与切号):
 **Grok** 周额度(xAI 账单接口)· **Antigravity** 4 个桶(Gemini / Claude+GPT × 5h / 周,按账号读云端额度摘要,**零消耗**;
 摘要缺 Gemini 组时 5h 改读模型列表,周沿用最后一次读数并标龄,超过一天显示「旧读数已过期」)。没装那家 CLI 的机器上**零像素**,不会留一张写着"你没装"的空卡。
