@@ -25,9 +25,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "codexbar" / "src"
-CARD = SRC / "components" / "relay" / "OutletCards.tsx"
-TABLE = SRC / "components" / "relay" / "RelayTable.tsx"
-SECTION = SRC / "components" / "RelaySection.tsx"
+# AICoop P8（2026-10-22）：余额在明细块的账户表 + 余额大字（`RelayDetail`），节点账户行在 `RouteMap`，页面在 `RelayPage`。
+CARD = SRC / "components" / "relay" / "RelayDetail.tsx"
+TABLE = SRC / "components" / "relay" / "RouteMap.tsx"
+SECTION = SRC / "pages" / "RelayPage.tsx"
 HARNESS = "http://127.0.0.1:3304"
 APP_DIR = ROOT / "codexbar" / "uishot" / "app"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -61,7 +62,7 @@ class TheRefreshReusesTheOneSnapshot(unittest.TestCase):
         self.assertIn("refresh: refreshUsage", code,
                       "★★ 没有复用 useRelayUsage 的 refresh")
         self.assertIn("onRefreshUsage={() => void refreshUsage()}", code,
-                      "★ 刷新没接到「当前出口」卡上")
+                      "★ 刷新没接到明细块上")
 
     def test_there_is_no_second_fetch_path_for_balance(self):
         """★★ 出现第二条取数命令就是造了第二个真源，两者迟早分叉。"""
@@ -88,33 +89,31 @@ class AStaleBalanceSaysSo(unittest.TestCase):
     """★★★ 余额是钱，「这是什么时候读的」必须跟着它走。"""
 
     def test_the_marker_is_driven_by_the_stale_fact_not_by_an_age_guess(self):
-        """⚠️ 断言打在**性质**上（这一行读的是 `curUsage.stale`），不是某个字面写法。
-
-        第一版写死 `const stale = !!curUsage?.stale;`，于是把 `!!x` 换成 `x === true`
-        这种语义完全相同的改写也判红 —— 变异实测当场抓到。**一条会假红的闸，
-        用户学会的是忽略它**（本仓铁律），所以这里只管"它读没读那个事实"。
-        真正的行为闸在 `ItReallyRendersInEveryRelayState`。
-        """
-        code = _code(CARD)
-        m = re.search(r"const\s+stale\s*=\s*([^\n;]+);", code)
-        self.assertIsNotNone(m, "找不到 stale 的判据")
-        self.assertIn("curUsage", m.group(1))
-        self.assertIn(".stale", m.group(1),
-                      "★★★ 旧读数判据不是 `stale` —— 自己按 fetched_at 算岁数分不出"
-                      "「这次取到了但数没变」和「这次根本没取到」")
-        self.assertNotIn("Date.now", m.group(1), "★★★ 判据里混进了时间推断")
+        """⚠️ 断言打在**性质**上：旧读数标记由该条目的 `stale` 事实驱动，不是自己按 fetched_at 算岁数。
+        AICoop P8 起两处（明细账户表 / 路由图节点账户行）都是 `{e?.stale && (` 守着那个 `*`。"""
+        for p in (CARD, TABLE):
+            with self.subTest(f=p.name):
+                code = _code(p)
+                i = code.index("data-relay-balance-stale")
+                head = code[max(0, i - 200):i]
+                m = re.search(r"\{([^{}]*?)\s*&&\s*\(\s*<span\s*$", head.rstrip())
+                self.assertIsNotNone(m, "找不到旧读数标记的判据")
+                self.assertIn(".stale", m.group(1),
+                              "★★★ 旧读数判据不是 `stale` —— 自己按 fetched_at 算岁数分不出"
+                              "「这次取到了但数没变」和「这次根本没取到」")
+                self.assertNotIn("Date.now", m.group(1), "★★★ 判据里混进了时间推断")
 
     def test_the_money_colour_does_not_change(self):
-        """★ 第一版把金额染成警告琥珀 `#E0901C`，与金额琥珀 `#E0A21C` **肉眼分不出**
-        （本仓已记过这对的 ΔE 只有 2.6），等于加了个无效区分还多造一个琥珀。"""
+        """★ 金额色不随 stale 变（两个琥珀肉眼分不出，ΔE 2.6）；旧读数只靠 `*` 说。"""
         code = _code(CARD)
-        i = code.index("余额 <b")
-        self.assertNotIn("#E0901C", code[i:i + 160],
-                         "★ 金额色又跟着 stale 变了 —— 两个琥珀分不出")
+        i = code.index("{money(d?.balance ?? null, d?.unit)}")
+        cell = code[max(0, i - 220):i]
+        self.assertNotIn("stale", cell, "★ 金额色又跟着 stale 变了")
+        self.assertNotIn("#E0901C", cell)
 
     def test_both_surfaces_say_the_same_thing(self):
         """★★ 同一个事实在同一屏的两处要说同一句话（§5c 页面统一性）。"""
-        for p, who in ((CARD, "当前出口卡"), (TABLE, "中转站表格")):
+        for p, who in ((CARD, "明细账户表"), (TABLE, "路由图节点")):
             with self.subTest(surface=who):
                 self.assertIn("data-relay-balance-stale", _code(p),
                               f"★★ {who} 上没有旧读数标记 —— 同一个号两处说法不一致")
@@ -131,7 +130,7 @@ class ItReallyRendersInEveryRelayState(unittest.TestCase):
 
     EXPECT = {              # relay 夹具 → (↻ 个数, 旧读数标记个数)
         "relay": (1, 0),    # 正常
-        "stale": (1, 2),    # 失败但保留旧数据 ⇒ 卡 + 表行各一个
+        "stale": (1, 2),    # 失败但保留旧数据 ⇒ 路由图节点 + 明细账户表各一个
         "mixed": (1, 0),    # 两家都正常
         "unreachable": (1, 0),  # 失败且**没有**旧数据 ⇒ 走「读不到」那条路，不是旧读数
     }
@@ -149,7 +148,7 @@ class ItReallyRendersInEveryRelayState(unittest.TestCase):
         """★★ 先正面证明页面在 —— 零渲染时「标记不存在」恒真。"""
         for k, d in self.dom.items():
             with self.subTest(relay=k):
-                self.assertIn("当前出口", d, f"relay={k} 中转站页没渲染")
+                self.assertIn("请求怎么走", d, f"relay={k} 中转站页没渲染")
 
     def test_each_state_shows_exactly_the_right_markers(self):
         for k, (refresh, stale) in self.EXPECT.items():

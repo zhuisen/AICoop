@@ -165,7 +165,8 @@ class RelayPageRenders(unittest.TestCase):
                 m = re.search(r'data-outlet="(\w+)" data-outlet-active="1"', d)
                 self.assertIsNotNone(m, f"{mode}：没有任何一张出口卡标成「在用」")
                 self.assertEqual(m.group(1), mode, f"{mode}：标成在用的是 {m.group(1)}")
-                self.assertIn("在用", d)
+                # AICoop P8：出口节点 / 账户行写「● 出口」（原两张出口卡写「在用」）。
+                self.assertIn("● 出口", d)
                 for other, omark in MARK.items():
                     if other in self.HEALTHY:
                         continue
@@ -191,11 +192,15 @@ class RelayPageRenders(unittest.TestCase):
         d = self.page("relay")
         self.assertIn("实扣", d)
         self.assertIn("$0.0863", d, "★★ 「今日实扣」印的是牌价不是实扣款")
-        self.assertNotIn("$0.36", d, "★★ 牌价出现在了页面上，而它没有任何标注")
+        # AICoop P8：牌价按稿回到明细里，但**只做灰色参考且必须带「牌价」二字**（实扣永远是主数字）。
+        txt = re.sub(r"<[^>]+>", "", d)
+        for m in re.finditer(r"\$0\.36", txt):
+            self.assertIn("牌价", txt[max(0, m.start() - 12):m.start()], "★★ 牌价出现在了页面上，而它没有标注")
         # 用量块必须挂口径牌 —— 否则用户会把它当成 AI用量页那个「等效成本」。
         u = self.usage_page("relay")
         self.assertIn("实扣口径", u, "没挂口径牌")
-        self.assertNotIn("牌价", u, "牌价那一列已按设计稿去掉，它又回来了")
+        # 用量块（`data-section="relay-usage"`）里仍不出牌价；明细里的灰色「牌价」是 P8 稿要的参考口径（上面已断言带标注）。
+        self.assertNotIn("牌价", u[u.index('data-section="relay-usage"'):], "用量块里的牌价那一列已按设计稿去掉，它又回来了")
 
     def test_unknown_money_renders_as_a_dash_not_zero(self):
         """★★ 「读不到」和「真的是 0」用户的下一步动作完全相反。
@@ -203,7 +208,9 @@ class RelayPageRenders(unittest.TestCase):
         d = self.usage_page("never")
         self.assertIn("—", d)
         self.assertIn("活跃日样本不足", d, "runway 读不到时没说出原因")
-        self.assertNotIn("$0.00", d, "★ 读不到被画成了 0 —— 两者的下一步动作完全相反")
+        # ★ 只看中转站那半（明细块 + 用量块）：账号池明细的「等效牌价 $0.00」是账本里真的 0（今天没走池子），不是读不到。
+        i = d.index("data-relay-detail=")
+        self.assertNotIn("$0.00", d[i:], "★ 读不到被画成了 0 —— 两者的下一步动作完全相反")
 
     def test_a_failing_relay_reports_its_state_instead_of_showing_zeros(self):
         for mode, needle in (("unreachable", "unreachable"), ("auth", "auth"),

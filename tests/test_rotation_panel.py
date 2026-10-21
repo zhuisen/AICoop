@@ -30,6 +30,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx"
+# AICoop P7（2026-10-22）起页面拆成 LogsPage + `components/rot/*`（时间线 / 账号 × 时段 / 轮换记录）。
+ROT_DIR = ROOT / "codexbar" / "src" / "components" / "rot"
+
+
+def page_src():
+    """代理轮换页的全部源码（页面 + 它的三个卡片组件）。"""
+    return "\n".join(f.read_text(encoding="utf-8") for f in [PAGE, *sorted(ROT_DIR.glob("*.ts*"))])
 HARNESS = ROOT / "codexbar" / "uishot" / "make_harness.py"
 CONF = ROOT / "codexbar" / "src-tauri" / "tauri.conf.json"
 
@@ -186,7 +193,7 @@ class CoverageIsDisclosed(unittest.TestCase):
         self.assertEqual([a for (_t, a, _b) in reqs], ["plusA"], "traceback 造出了幽灵账号")
 
     def test_the_page_says_three_different_things(self):
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         self.assertIn("读不到 proxy/proxy.log", src, "失败态没有自己的文案")
         self.assertIn("in_window_lines", src, "没有区分「窗口内零请求」与「读不到」")
         self.assertIn("代理没有处理过请求", src)
@@ -221,13 +228,17 @@ class BillingPhasesStayDistinct(unittest.TestCase):
         self.assertIn("未计费", by["safe_switch"])
 
     def test_only_billed_unknown_is_danger_colored(self):
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        """AICoop P7：样式表按记录类型（`rotationView.ts::recKind`：billed_unknown → billed、safe_switch → safe）。"""
+        src = strip_js_comments(page_src())
         i = src.index("const EV_STYLE")
         block = src[i:src.index("};", i)]
-        m = re.search(r"billed_unknown:\s*\{[^}]*color:\s*(\w+)", block)
-        self.assertIsNotNone(m, "事件样式表里没有 billed_unknown")
+        m = re.search(r"\bbilled:\s*\{[^}]*color:\s*(\w+)", block)
+        self.assertIsNotNone(m, "事件样式表里没有 billed（计费未知）")
         self.assertEqual(m.group(1), "BAD", "「可能已计费」没用危险色 —— 它和无害失败长得一样了")
-        m2 = re.search(r"safe_switch:\s*\{[^}]*color:\s*([^,]+)", block)
+        kinds = (ROOT / "codexbar" / "src" / "rotationView.ts").read_text(encoding="utf-8")
+        self.assertIn('if (e.type === "billed_unknown") return "billed";', kinds)
+        self.assertIn('if (e.type === "safe_switch") return "safe";', kinds)
+        m2 = re.search(r"\bsafe:\s*\{[^}]*color:\s*([^,]+)", block)
         self.assertIsNotNone(m2)
         self.assertNotIn("BAD", m2.group(1), "「安全换号」被染成危险色 —— 没花钱的事被报成花钱了")
 
@@ -341,7 +352,7 @@ class CacheAndSnapshot(unittest.TestCase):
     def test_page_paints_the_snapshot_before_the_rescan(self):
         """★★ 「先画快照再后台重扫」是修「太卡」的**唯一**那一步。
         判据打在**调用顺序**上:快照那次 invoke 必须在全扫之前。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         i_snap = src.index('"read_rotation_snapshot"')
         i_full = src.index('"read_proxy_rotation"')
         self.assertLess(i_snap, i_full, "全扫排在了快照前面 —— 页面仍然会同步等")
@@ -355,7 +366,7 @@ class CacheAndSnapshot(unittest.TestCase):
 
     def test_busy_flag_is_cleared_in_finally(self):
         """★ 失败时不熄灯 ⇒ 那盏「刷新中」长亮又灭不掉,是本仓判过死刑的形态。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         i = src.index("setBusy(true)")
         self.assertRegex(src[i:i + 900], r"finally\s*\{[^}]*setBusy\(false\)",
                          "busy 不是在 finally 里清的")
@@ -363,7 +374,7 @@ class CacheAndSnapshot(unittest.TestCase):
     def test_window_choice_persists_and_is_validated(self):
         """★ 记住窗口选择;读回来必须**校验在合法集合里** —— localStorage 里是字符串,
         手改过或旧版本留下的值会变成谁都不匹配的窗口,页面永远空着且不报错。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         self.assertIn("localStorage.setItem(WIN_KEY", src, "窗口选择没有持久化")
         i = src.index("function loadWin")
         body = src[i:src.index("\n}", i)]
@@ -422,73 +433,52 @@ class ProFallbackIsVisible(unittest.TestCase):
         """★ 汇总条上那一格「Pro 保底」已按用户 2026-09-07 要求删掉。
         但**信号不能跟着删** —— 它必须仍活在两个位置:泳道徽章 + 独立的事件类型。
         引擎侧 `pro_segs/pro_secs` 也保留:算好的事实不该因为暂时不显示就丢掉。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         self.assertIn('l.plan === "pro"', src, "泳道上没有按 plan 画 PRO 徽章")
-        self.assertIn("pro_fallback:", src, "事件类型里没有「Pro 保底」这一类")
+        self.assertRegex(src, r'\bpro:\s*\{ label: "Pro 保底"', "事件类型里没有「Pro 保底」这一类")
+        kinds = (ROOT / "codexbar" / "src" / "rotationView.ts").read_text(encoding="utf-8")
+        self.assertIn('e.reason === "pro_fallback" ? "pro"', kinds, "★ Pro 保底是换号的原因（type 仍是 switch），没被认出来")
         eng = (ROOT / "traffic" / "rotation.py").read_text(encoding="utf-8")
         self.assertIn('"pro_segs"', eng, "引擎不再算保底段数 —— 换个地方想显示时又要重算")
 
     def test_the_removed_cell_did_not_take_the_signal_with_it(self):
         """★ 反向断言:顶栏那一格确实没了,而事件流里的文案还在。
         「删掉一格」和「把这件事藏起来」是两回事。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         self.assertNotIn('k="Pro 保底"', src, "汇总条那一格还在")
-        self.assertIn("Pro 保底接管", src, "连事件文案也一起删了 —— 信号没有落点了")
+        self.assertNotIn('label: "Pro 保底", value', src, "KPI 里又出现了「Pro 保底」格")
+        self.assertIn("Pro 保底接管", src, "连原因文案也一起删了 —— 信号没有落点了")
 
     def test_pro_fallback_is_not_painted_as_a_failure(self):
         """★ 保底接管是**按设计工作**,不是故障。染成危险红会训练用户忽略真正的告警。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         i = src.index("const EV_STYLE")
         block = src[i:src.index("};", i)]
-        m = re.search(r'pro_fallback:\s*\{[^}]*color:\s*"([^"]+)"', block)
+        m = re.search(r'\bpro:\s*\{[^}]*color:\s*"([^"]+)"', block)
         self.assertIsNotNone(m, "事件样式表里没有 pro_fallback")
         self.assertNotIn(m.group(1).upper(), ("#E0524D",), "保底被染成了危险红")
 
 
 class SummaryStripIsCompact(unittest.TestCase):
-    """汇总条(用户 2026-09-07 从三方案 demo 里选的 **B · 单行分隔条**,并入标题行)。"""
+    """汇总（AICoop P7 2026-10-22）：7 格 KPI 卡，任何宽度一行（稿 §1.3），与 Token 页共用 `KpiGrid`。
 
-    def test_no_more_two_line_kpi_blocks(self):
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+    ⚠️ 合同被取代，不是被违反：2026-09-07 用户选的「B · 单行分隔条」（`Stat`）与 10-14 的「整条下移」
+      都被 P7 的 7 格卡取代。守的仍是同一件事：**只有一套汇总、不折行、标题旁没有重复的副标**。
+      行为闸在 `test_one_screen_layout.py::test_rotation_summary_is_one_whole_line`（7 格同一行）。"""
+
+    def test_one_summary_from_the_shared_grid(self):
+        src = strip_js_comments(page_src())
         self.assertNotIn("function Kpi(", src, "旧的两行大字 KPI 组件还在 —— 会有两套汇总")
-        self.assertIn("function Stat(", src)
-
-    def test_stat_is_at_module_scope(self):
-        """★ 写在页面 render 里每次渲染都是新组件类型,React 会整组卸载重建(本仓 `Seg` 那条)。"""
-        # ★ 判据是**顶格定义**(第 0 列),不是"排在页面组件前面" —— 位置前后不决定作用域,
-        #   写在文件末尾照样是模块作用域。第一版按位置判,把一个正确的实现判红了。
-        s = PAGE.read_text(encoding="utf-8")
-        self.assertRegex(s, r"(?m)^function Stat\(",
-                         "Stat 不在模块顶层 —— 写在页面 render 里会每次渲染重建组件类型")
-
-    def test_the_summary_is_the_one_that_gives_way(self):
-        """★★ 指定**唯一让位者**。不给汇总条 `flex: 1 1 0` 的话,空间不够时浏览器会把
-        右边的窗口分段控件整项换到第二行 —— 实测「1h 6h 24h 7d」独占一整行,看着像画错了。
-
-        ⚠️ 2026-10-14 让位方式变了（合同被取代，不是被违反）：原来汇总条 `flex: 1 1 0` 在**内部折行**，
-          860px 下实测被挤成竖着的 6 行；用户要「标题一行处理完」后改成**整条**挪到标题下面一行。
-          「唯一让位者是汇总条」不变 —— 行为闸在 `test_one_screen_layout.py::test_rotation_summary_is_one_whole_line`
-          （标题行其余各项同一行、汇总条整条一行），这里守源码形态。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
-        i = src.index("<Stat")
-        head = src[max(0, i - 700):i]
-        self.assertIn('order: 1, flexBasis: "100%"', head,
-                      "汇总条放不下时不是整条让到下一行 —— 让位的会变成右边的控件")
-        self.assertIn('flexWrap: "nowrap"', head, "汇总条又在内部折行了（860px 下会竖成 6 行）")
-        self.assertIn("minWidth: 0", head)
+        self.assertNotIn("function Stat(", src, "旧的单行汇总条还在 —— 会有两套汇总")
+        self.assertIn("<KpiGrid t={t} items={kpis}", src, "汇总没走共用的 KpiGrid")
+        i = src.index("const kpis: TkKpi[]")
+        self.assertEqual(len(re.findall(r"\{ label: ", src[i:src.index("\n  ];", i)])), 7, "不是 7 格")
 
     def test_duplicate_subtitle_is_gone(self):
-        """★ 标题后面那句副标（`… token · … 次请求 · … 个号`）与汇总条逐字重复,已删。
-
-        ⚠️ 2026-09-21 收窄：原来对**整个文件**断言 `"次请求" not in src`，于是新加的
-          「每号·每天在岗」表里一句格子悬浮提示（`N 次请求 · M token`）把它撞红了 ——
-          而那和"标题旁的副标"是两回事。**一条会假红的闸，用户学会的是忽略它**（本仓铁律）。
-          现在只看标题那一段：判据是「`代理轮换` 标题到第一个 `<Stat` 之间」，
-          副标要复活必然出现在这里。
-        """
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
-        i = src.index("代理轮换")
-        head = src[i:src.index("<Stat", i)]
+        """★ 标题后面那句副标（`… token · … 次请求 · … 个号`）与汇总逐字重复，已删。只看标题到 KPI 之间。"""
+        src = strip_js_comments(page_src())
+        i = src.index(">代理轮换</h1>")
+        head = src[i:src.index("<KpiGrid", i)]
         self.assertNotIn("次请求", head, "副标还在 —— 同一组数字在同一行说了两遍")
         self.assertNotIn("个号", head)
 
@@ -504,22 +494,18 @@ class LaneNameIsNeverTruncated(unittest.TestCase):
       三条同时成立时截断在结构上就不可能发生。像素那半由 `?rot=procur` 的截图人工看。
     """
 
-    def test_name_column_fits_the_worst_case(self):
-        src = PAGE.read_text(encoding="utf-8")
-        m = re.search(r"const NAME_W = (\d+);", src)
-        self.assertIsNotNone(m)
-        # 圆点 8 + 名字 ~44 + PRO ~34 + 当前 ~40 + 3 个 gap 21 = 147
-        self.assertGreaterEqual(int(m.group(1)), 147,
-                                "名字列放不下「名字 + PRO + 当前」这个最坏情况")
-
     def test_the_name_never_gives_way(self):
-        """★ 名字是这一行的**身份**。宁可徽章挤,也不能把号名截掉 ——
-        「认不出是哪个号」比「时间轴窄 34px」严重得多。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
-        i = src.index("{l.acc}</span>")
-        span = src[max(0, i - 320):i]
-        self.assertIn("flexShrink: 0", span, "名字可收缩 —— 徽章一多它就被压掉")
-        self.assertNotIn("textOverflow", span, "名字还留着省略号机制 —— 结构上仍可能被截")
+        """★ 名字是这一行的**身份**。宁可标签挤，也不能把号名截掉。
+        AICoop P7 账号列按稿收到 136 / 118 / 100（原 152 固定）⇒ 让位顺序 = 标签可收缩 + 省略号，名字不收缩、无省略号。
+        像素那半由 `test_rotation_p7.py::Rendered::test_names_fit_their_column`（`?rot=procur` 860 宽实量）守。"""
+        for fname in ("RotTimeline.tsx", "RotTod.tsx"):
+            with self.subTest(f=fname):
+                src = strip_js_comments((ROT_DIR / fname).read_text(encoding="utf-8"))
+                i = src.index("<span title={") if fname == "RotTimeline.tsx" else src.index("{row.acc}</span>")
+                j = src.index("</span>", i)
+                span = src[max(0, i - 400) if fname == "RotTod.tsx" else i:j]
+                self.assertIn("flexShrink: 0", span, "名字可收缩 —— 标签一多它就被压掉")
+                self.assertNotIn("textOverflow", span, "名字还留着省略号机制 —— 结构上仍可能被截")
 
     def test_worst_case_has_a_fixture(self):
         """★ 默认夹具的「当前」在 plus4 上 ⇒ 「PRO + 当前 同行」**一次都没被渲染过**,
@@ -530,5 +516,5 @@ class LaneNameIsNeverTruncated(unittest.TestCase):
     def test_redundant_clock_is_gone(self):
         """「现在 xx:xx · 当前号 X」两条信息在这一页都是重复的:时间轴右端标着「现在」,
         当前号在泳道上有「当前」徽章。它还是右侧最长的一项。"""
-        src = strip_js_comments(PAGE.read_text(encoding="utf-8"))
+        src = strip_js_comments(page_src())
         self.assertNotIn("当前号", src, "顶栏那句「现在 · 当前号」还在")

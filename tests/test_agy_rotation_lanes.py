@@ -114,7 +114,7 @@ class SwitchAndDriftAreDifferentThings(unittest.TestCase):
 
 class TheOutputMatchesTheRotationInterface(unittest.TestCase):
     def test_keys_parsed_from_the_ts_source(self):
-        ts = (ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx").read_text(encoding="utf-8")
+        ts = (ROOT / "codexbar" / "src" / "components" / "rot" / "rotTypes.ts").read_text(encoding="utf-8")
 
         def fields(name):
             body = re.search(r"interface %s \{([\s\S]*?)\n\}" % name, ts).group(1)
@@ -194,14 +194,17 @@ class TheLogsPageWiring(unittest.TestCase):
 
     def test_the_gemini_tab_uses_its_own_ipc(self):
         self.assertIn('invoke<Rotation>("read_agy_rotation"', self.SRC)
-        self.assertIn('<Seg opts={["codex", "agy"] as const}', self.SRC)
+        # AICoop P7：平台切换是 logo 胶囊（`data-rot-plat-chip`），两项 codex / agy。
+        self.assertRegex(self.SRC, r'k: "codex" as const.*\n.*k: "agy" as const')
+        self.assertIn("data-rot-plat-chip={x.k}", self.SRC)
 
     def test_gemini_shows_tokens_only_when_attribution_ran(self):
         """★ 2026-10-14 起 Gemini 也显示 token —— 但只在后端真的做过归属时（`attributed_pct` 非 None）；
         否则仍是「—」，不把「没有可归属的」画成 0。"""
         self.assertIn("const agyTok = !isAgy || rot?.coverage.attributed_pct != null;", self.SRC)
-        self.assertIn('v={rot && agyTok ? fmtTok(rot.kpi.tokens) : "—"}', self.SRC)
-        self.assertIn('{agyTok ? fmtTok(l.tokens) : "—"}', self.SRC)
+        self.assertIn('value: rot && agyTok ? fmtTokL(k!.tokens, L) : "—"', self.SRC)
+        lane = (ROOT / "codexbar" / "src" / "components" / "rot" / "RotTimeline.tsx").read_text(encoding="utf-8")
+        self.assertIn('{agyTok ? fmtTokL(l.tokens, lay.L) : "—"}', lane)
 
     def test_the_run_log_is_not_merged_twice(self):
         """★ Gemini 版的 rot.log 就是 agy.log 的换号行 —— 服务日志里已经整份含着。"""

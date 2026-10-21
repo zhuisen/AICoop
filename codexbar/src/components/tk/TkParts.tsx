@@ -32,8 +32,10 @@ export function InfoI({ color }: { color: string }) {
  * ★ 稿上没有点击 —— 现行「点了重扫、扫描中转圈」是已有功能，保留（偏离 R2-3）。
  * 颜色分级沿用旧 `StaleHint`：≤ 30 分钟灰、> 30 分钟琥珀（稿里琥珀正是 43 分钟没刷新）。
  */
-export function RefreshAgo({ t, generatedAt, L, busy, onRefresh }: {
+export function RefreshAgo({ t, generatedAt, L, busy, onRefresh, hint }: {
   t: Theme; generatedAt: number | null; L: Density; busy: boolean; onRefresh?: () => void;
+  /** 点击做什么（悬停提示后半句）。默认是 Token 页的「重新扫描本机 CLI 记录」。 */
+  hint?: string;
 }) {
   const p = tkPal(t);
   const [now, setNow] = useState(() => Date.now());
@@ -51,7 +53,7 @@ export function RefreshAgo({ t, generatedAt, L, busy, onRefresh }: {
   const color = busy ? p.accent : mins > 30 ? p.amber : p.label;
   return (
     <span data-refresh onClick={busy ? undefined : onRefresh}
-          title={busy ? "扫描中…" : `上次刷新 ${hhmm}（${tz}）· 点击重新扫描本机 CLI 记录（只读本地文件，不消耗额度）`}
+          title={busy ? "扫描中…" : `上次刷新 ${hhmm}（${tz}）· ${hint ?? "点击重新扫描本机 CLI 记录（只读本地文件，不消耗额度）"}`}
           style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, color,
                    fontFamily: MONO, cursor: busy || !onRefresh ? "default" : "pointer",
                    userSelect: "none", whiteSpace: "nowrap", flexShrink: 0 }}>

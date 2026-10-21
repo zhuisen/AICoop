@@ -57,6 +57,32 @@ def _store():
                 or (ROOT.parent if ROOT.name == "runtime" else ROOT))
 
 
+def _iso_ts(s):
+    try:
+        import datetime as _dt
+        return _dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _quota_5h(a, now):
+    """Gemini 组 5h 桶的剩余 %（AICoop P7 右列）。读不到 ⇒ None，不画满（同 `pool.board`）。
+    ★ 读数写进池子之后窗口可能已经重置过 / 沿用的旧桶超过 24 h ⇒ 读不到，不是那个旧数（同 `pool._carry`）。"""
+    for g in a.get("quota_summary") or []:
+        if not str(g.get("displayName", "")).lower().startswith("gemini"):
+            continue
+        for b in g.get("buckets") or []:
+            fr = b.get("remainingFraction")
+            if str(b.get("window", "")).startswith("week") or not isinstance(fr, (int, float)):
+                continue
+            rs = _iso_ts(b.get("resetTime"))
+            seen = b.get("seenAt")
+            if (rs is not None and rs <= now) or (isinstance(seen, (int, float)) and now - seen > 24 * 3600):
+                return None
+            return round(fr * 100)
+    return None
+
+
 def _pool():
     try:
         return json.loads((_store() / ".agy-pool.json").read_text(encoding="utf-8"))
@@ -249,6 +275,12 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
                 return round(r * 100) if isinstance(r, (int, float)) else None
         return None
 
+    def quota_5h(lab):
+        for a in accs.values():
+            if a.get("label") == lab:
+                return _quota_5h(a, now)
+        return None
+
     accounts = []
     for lab in labels:
         mine = [s for s in segs if s["acc"] == lab]
@@ -263,7 +295,7 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
         accounts.append({"acc": lab, "plan": "", "color": colors.get(lab, "#2dd4bf"), "tokens": tok,
                          "requests": len(mine),
                          "top_model": ({"model": top[0], "share": top[1] / tok} if top and tok else None),
-                         "quota_pct": quota_pct(lab),
+                         "quota_pct": quota_pct(lab), "quota_5h": quota_5h(lab), "cooling_until": None,
                          **({"retired": True} if lab not in in_pool else {})})
 
     TEXT = {"auto": "自动切到", "wanted": "恢复成你选的", "borrow": "借用已停用的", "manual": "手动切换到"}

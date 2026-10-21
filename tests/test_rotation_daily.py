@@ -228,9 +228,11 @@ class TheTableIsFoldedIntoAHoverBadge(unittest.TestCase):
 
         旧位置（两张卡之间独占一行）既白占版面、又夹在空档里。
         """
-        i = self.code.index("{dailyPop}")
-        self.assertIn("账号", self.code[max(0, i - 260):i],
-                      "★ 角标不在泳道表头「账号」旁了")
+        # AICoop P7：表头在两张卡组件里（1h–24h 时间线 / 7d+ 账号 × 时段），角标作为 `acctExtra` 传进去。
+        self.assertEqual(self.code.count("acctExtra={dailyPop}"), 2, "★ 有一种视图没挂「每天在岗」角标")
+        for f in ("RotTimeline.tsx", "RotTod.tsx"):
+            src = (ROOT / "codexbar" / "src" / "components" / "rot" / f).read_text(encoding="utf-8")
+            self.assertIn("账号{acctExtra}", src, f"★ {f} 的角标不在表头「账号」旁了")
 
     def test_inherited_uppercase_is_reset_on_the_popup(self):
         """★★ 浮层是**表头单元格的后代**，而表头整行是 `uppercase` + 带字距。

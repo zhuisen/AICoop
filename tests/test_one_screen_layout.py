@@ -61,19 +61,25 @@ CARDS_JS = """() => {
 LOGS_JS = """() => {
   const st = document.querySelector('[data-rot-stats]');
   if (!st) return null;
-  const head = st.parentElement, page = head.parentElement;
-  const tops = [...st.children].map(c => Math.round(c.getBoundingClientRect().top));
-  const others = [...head.children].filter(c => c !== st).map(c => Math.round(c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2));
-  return {mode: st.dataset.rotStats, statN: st.children.length, statRows: new Set(tops).size,
+  const page = document.querySelector('[data-rot-page]');
+  const head = page.children[0];
+  const cells = [...st.querySelectorAll('[data-kpi]')];
+  const tops = cells.map(c => Math.round(c.getBoundingClientRect().top));
+  const others = [...head.children].map(c => Math.round(c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2));
+  const vals = [...st.querySelectorAll('[data-kpi-value]')];
+  return {statN: cells.length, statRows: new Set(tops).size,
+          clipped: vals.filter(v => v.scrollWidth > v.clientWidth + 1).length,
           otherSpread: Math.max(...others) - Math.min(...others),
-          statsBelow: st.getBoundingClientRect().top >= Math.max(...[...head.children].filter(c => c !== st).map(c => c.getBoundingClientRect().bottom)) - 1,
-          root: page.scrollHeight - page.clientHeight};
+          root: page.scrollHeight - page.clientHeight,
+          recScroll: (() => { const l = document.querySelector('[data-rec-list]'); return l ? getComputedStyle(l).overflowY : null; })()};
 }"""
 RELAY_JS = """() => {
-  const h = [...document.querySelectorAll('span')].find(e => e.textContent.trim() === '日均实扣');
+  // AICoop P8：中转站账户表（明细块里）。表头是含「还能撑」的那一行。
+  const h = [...document.querySelectorAll('[data-relay-detail] span')].find(e => e.textContent.trim() === '还能撑' && e.parentElement.children.length === 6);
   if (!h) return null;
-  const head = h.parentElement, card = head.parentElement;
-  return {right: h.getBoundingClientRect().right, cardRight: card.getBoundingClientRect().right,
+  const head = h.parentElement, card = head.closest('[data-relay-detail]');
+  const last = head.children[head.children.length - 1];
+  return {right: last.getBoundingClientRect().right, cardRight: card.getBoundingClientRect().right,
           headOver: head.scrollWidth - head.clientWidth,
           endpointW: head.children[1].getBoundingClientRect().width,
           headLines: (() => { const r = document.createRange(); r.selectNodeContents(head.children[1]);
@@ -193,27 +199,28 @@ class OneScreenDashboard(unittest.TestCase):
             self.assertGreater(hi, lo, f"{name}: 大窗口下图表没长高（{lo} → {hi}），不是撑满")
 
     def test_rotation_summary_is_one_whole_line(self):
-        lo, hi = self.r["logs:min"]["h"], self.r["logs:big"]["h"]
-        self.assertIsNotNone(lo, "代理轮换的汇总条没渲染")
-        self.assertGreaterEqual(lo["statN"], 5)
-        self.assertEqual(lo["statRows"], 1, f"★ 860 宽下汇总条折成了 {lo['statRows']} 行")
-        self.assertEqual(lo["mode"], "row")
-        self.assertTrue(lo["statsBelow"], "汇总条应整条挪到标题行下面")
-        self.assertLessEqual(lo["otherSpread"], 2, "标题行本身折行了")
-        self.assertLessEqual(lo["root"], 1, f"代理轮换页面根在滚（溢出 {lo['root']}px）")
-        self.assertEqual(hi["mode"], "inline", "宽窗口下汇总条应并在标题行里（2026-09-07 定稿）")
-        self.assertEqual(hi["statRows"], 1)
+        """AICoop P7：7 格 KPI 任何宽度一行（取代 09-07「并在标题行」/ 10-14「整条下移」两版，合同被取代）。"""
+        for key in ("logs:min", "logs:big"):
+            with self.subTest(win=key):
+                m = self.r[key]["h"]
+                self.assertIsNotNone(m, "代理轮换的 7 格指标没渲染")
+                self.assertEqual(m["statN"], 7)
+                self.assertEqual(m["statRows"], 1, f"★ 指标折成了 {m['statRows']} 行")
+                self.assertEqual(m["clipped"], 0, "有指标数字被截断")
+                self.assertLessEqual(m["otherSpread"], 2, "标题行本身折行了")
+                self.assertLessEqual(m["root"], 1, f"代理轮换页面根在滚（溢出 {m['root']}px）")
+                self.assertEqual(m["recScroll"], "auto", "轮换记录不在自己的容器里滚")
 
     def test_relay_table_is_not_clipped(self):
         t = self.r["relay:min"]["t"]
         self.assertIsNotNone(t, "中转站表头没渲染")
         self.assertGreaterEqual(t["rows"], 1)
-        self.assertLessEqual(t["right"], t["cardRight"] + .5, "「日均实扣」列被卡片裁掉了")
+        self.assertLessEqual(t["right"], t["cardRight"] + .5, "「出口」列被卡片裁掉了")
         self.assertLessEqual(t["headOver"], 0, "表头比卡片宽 —— 卡片 overflow:hidden 会裁掉右侧")
-        # ★ 原来写死列宽时 endpoint 列被压到 ~20px，只剩「ht…」
-        self.assertGreaterEqual(t["endpointW"], 55, f"endpoint 列只剩 {t['endpointW']:.0f}px")
+        # ★ 原来写死列宽时 endpoint 列被压到 ~20px，只剩「ht…」（P8 起这一列是 key 指纹前缀）
+        self.assertGreaterEqual(t["endpointW"], 55, f"key 列只剩 {t['endpointW']:.0f}px")
         # ★ 按文字行数量，不按盒子高：网格单元格默认拉伸到行高，盒子高之比恒为 1（第一版就是这么空的）
-        self.assertEqual(t["headLines"], 1, "表头「endpoint / key」折成了两行")
+        self.assertEqual(t["headLines"], 1, "表头「key」折成了两行")
 
 
 if __name__ == "__main__":

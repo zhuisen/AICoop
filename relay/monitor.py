@@ -415,15 +415,39 @@ def fetch(relay, remember_path=False, prev=None):
         if isinstance(d, dict) and d.get("date") and d.get("models") is not None:
             # ★ 带上 `partial`：当天抓的明细只覆盖到那一刻，明天必须重取一次。
             prev_days[d["date"]] = (d["models"], bool(d.get("models_partial")))
-    norm["daily"] = attach_day_models(
-        relay, path, norm.get("daily") or [], prev_days,
-        time.strftime("%Y-%m-%d", time.localtime()))
+    today = time.strftime("%Y-%m-%d", time.localtime())
+    norm["daily"] = attach_day_models(relay, path, norm.get("daily") or [], prev_days, today)
+    # ★ 这次取数**确实看过**的日子：上游窗口至少从它回来的最早一天开到今天（中间没请求的日子上游不回，
+    #   但窗口覆盖了它们）。前端据此判「本月实扣」是否整月 —— 只看 `daily` 最早一天会被一条旧月份记录骗过
+    #   （中间断档几天也照样说整月）。最早一天是窗口起点的**下界**，所以这个判断只会偏保守。
+    ds = [d["date"] for d in norm["daily"] if isinstance(d, dict) and isinstance(d.get("date"), str)]
+    norm["covered"] = [[min(ds + [today]), today]]
     norm["runway"] = runway(norm)
     norm["fetched_at"] = int(time.time())
     norm["usage_path"] = path
     # 调用方据此决定是否把探测结果落盘(monitor 自己不写,见上)。
     norm["usage_path_discovered"] = (path != relay.get("usage_path"))
     return {"ok": True, "state": "ok", "data": norm}
+
+
+def merge_covered(prev, new):
+    """`covered`（看过的日期区间）的并集：重叠或首尾相邻（差一天）就并成一段。只增不减，同 `merge_daily`。"""
+    import datetime as _dt
+    iv = []
+    for x in list(prev or []) + list(new or []):
+        try:
+            a, b = _dt.date.fromisoformat(x[0]), _dt.date.fromisoformat(x[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if a <= b:
+            iv.append((a, b))
+    out = []
+    for a, b in sorted(iv):
+        if out and a <= out[-1][1] + _dt.timedelta(days=1):
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return [[a.isoformat(), b.isoformat()] for a, b in out]
 
 
 def merge_daily(prev_days, new_days):
@@ -488,6 +512,7 @@ def collect(prev=None):
                    "stale_since": old.get("fetched_at")}
         elif res.get("ok") and old:
             res["data"]["daily"] = merge_daily(old.get("daily"), res["data"].get("daily"))
+            res["data"]["covered"] = merge_covered(old.get("covered"), res["data"].get("covered"))
         out.append({"id": r["id"], "label": r.get("label"),
                     "base_url": r["base_url"], "key_fp": store.fingerprint(r["key"]),
                     **res})

@@ -163,8 +163,8 @@ export default function AccountCard({ a, state, isDirect, borrowOff, bestPct, pr
     <OvCard id={a.aid} t={t} state={state} ringPct={pct} head={head} marks={marks} right={right} off={off}
             pinned={a.pinRank !== null} shine={shine} popOpen={creditOpen}
             email={maskId(a.email, privacy) || "—"} dyn={dyn} w5={toWin(five, "5h")} ww={toWin(week, "w")}
-            footLeft={<span data-ov-exp={a.exp} title={a.expStale ? `订阅到期 ${a.exp}。OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。` : `订阅到期 ${a.exp}`}>
-              到期 {shortDate(a.exp, Date.now())}{a.expStale && <span style={{ color: "var(--ovWarnTx)" }}>*</span>}{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}
+            footLeft={<span data-ov-exp={a.exp} title={a.expStale ? `订阅到期 ${a.exp}。OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。${isDirect ? " · auth.json 里是它（直连号）" : ""}` : `订阅到期 ${a.exp}${isDirect ? " · auth.json 里是它（直连号）" : ""}`}>
+              到期 {shortDate(a.exp, Date.now())}{a.expStale && <span style={{ color: "var(--ovWarnTx)" }}>*</span>}{isDirect && <span className="ov-direct" title="auth.json 里是它（直连时用的号）"> · 直连</span>}
             </span>}
             chip={chip} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
   );

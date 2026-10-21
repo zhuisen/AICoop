@@ -348,5 +348,6 @@ class EveryOperationLeavesATrace(unittest.TestCase):
 
     def test_failures_are_not_the_same_colour_as_successes(self):
         """★★ `✗` 行和成功行同色，等于把"成功与否"藏起来 —— 用户点名要看的就是这个。"""
-        lp = code(ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx")
-        self.assertIn('l.text.includes("✗")', lp, "★★ 失败行没有单独染色")
+        # AICoop P7：原始日志在 `components/rot/RotRecords.tsx`。
+        lp = code(ROOT / "codexbar" / "src" / "components" / "rot" / "RotRecords.tsx")
+        self.assertIn('l.text.includes("✗") ? p.down', lp, "★★ 失败行没有单独染色")

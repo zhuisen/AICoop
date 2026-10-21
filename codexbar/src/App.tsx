@@ -177,6 +177,9 @@ export default function App() {
   const { board: agyBoard, err: agyBoardErr } = useRotationBoard(
     page === "overview" && provider === "gemini", { source: "agy", dep: agyPool.accounts });
 
+  // 代理轮换页的泳道顺序 = 池顺序（AICoop P7「顺序固定」），胶囊上的账号数也用它。
+  const rotPools = useMemo(() => ({ codex: accounts.map((a) => a.node), agy: agyPool.accounts.map((a) => a.label) }),
+                           [accounts, agyPool.accounts]);
   const trafficDays = daysNeeded(trafficSt, todayOf(null));
   const { data: traffic, raw: trafficRaw, cacheMode, prefs: platPrefs, busy: trafficBusy,
           err: trafficErr, refresh: refreshTraffic, requestHoursFor } = useTraffic({
@@ -339,7 +342,7 @@ export default function App() {
               onLogs={() => setPage("logs")} />
           )}
 
-          {page === "relay" && <RelayPage t={t} />}
+          {page === "relay" && <RelayPage t={t} onOpenOverview={() => { setProvider("codex"); setPage("overview"); }} />}
 
           {page === "traffic" && (drill
             ? <PlatformPage t={t} data={traffic} raw={trafficRaw} cacheMode={cacheMode} prefs={platPrefs}
@@ -350,7 +353,7 @@ export default function App() {
                            st={trafficSt} setSt={setTrafficSt}
                            onDrill={setDrill} busy={trafficBusy} err={trafficErr}
                            onRefresh={refreshTraffic} />)}
-          {page === "logs" && <LogsPage t={t} />}
+          {page === "logs" && <LogsPage t={t} pools={rotPools} />}
           {page === "settings" && <SettingsPage t={t} theme={theme} onTheme={changeTheme} />}
           {page === "requests" && <RequestsPage t={t} privacy={privacy} nav={reqNav} />}
         </div>

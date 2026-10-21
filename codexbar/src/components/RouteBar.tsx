@@ -32,7 +32,7 @@ import { relayRouteNote, type RouteStatus } from "../relay";
  * 路由状态说明条。**不再自己做选择器**（用户 2026-09-10：
  * 「单纯让路由不同的按钮选择，我感觉还是不适合目前项目的设计语言」）——
  * 选哪一条路由现在是**点卡片**，与账号池完全同一套词汇（`当前` 药丸徽章、
- * accent 描边、`切换` 实心按钮），见 `RelaySection`。
+ * accent 描边、`切换` 实心按钮），见 `pages/RelayPage.tsx`。
  *
  * 这里只剩两件事，都是"卡片上放不下、但少了会出人命"的话：
  * ① **六态里的异常态**。其中 `orphan` / `relay_disabled` / `route_corrupt` 三种下

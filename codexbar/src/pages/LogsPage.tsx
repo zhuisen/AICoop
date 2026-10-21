@@ -1,43 +1,42 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Theme } from "../theme";
-import Seg from "../components/Seg";
+import { introEnabled } from "../hooks/useIntro";
+import { fmtTokL, titleSize } from "../tokenView";
+import { type Rec, median, mins, recsOf, rotLayout } from "../rotationView";
+import { useReqLedger } from "../hooks/useReqLedger";
+import { KpiGrid, PLogo, RefreshAgo, type TkKpi } from "../components/tk/TkParts";
+import { MONO, numColor, tkPal } from "../components/tk/tkPal";
+import RotTimeline, { BAD, WARN, type Lane } from "../components/rot/RotTimeline";
+import RotTod from "../components/rot/RotTod";
+import RotRecords from "../components/rot/RotRecords";
+import type { Rotation, SvcLine } from "../components/rot/rotTypes";
+import { useWinDensity } from "./TrafficPage";
+import "../components/tk/tk.css";
 
 /**
- * 代理轮换（泳道时间轴）· 1:1 复刻用户 2026-09-07 的交接稿
- * `~/Downloads/design_handoff_codexbar 5/代理轮换-交接说明.md` + 同目录原型。
+ * 代理轮换 · AICoop P7（阶段 5）1:1 复刻 `~/Downloads/AICoop_handoff/boards/07_rotation/P7_A*` / `P7_Long*`。
+ * 规格摘录 `scratch/aicoop_20261021/P7P8_extract.md`；偏离逐条在 `PLAN.md` 第 41 条（P7-*）。
  *
- * 回答四个问题：**什么时间 · 哪个号在岗 · 烧了多少 token（哪些模型）· 为什么切换**。
+ * 结构：顶栏（标题 · 平台胶囊 · 刷新 · 时间档）→ 7 个指标 → 在岗视图（1h/6h/24h 时间线；7d+ 账号 × 时段）→ 轮换记录。
+ * 回答四个问题：**什么时间 · 哪个号在岗 · 烧了多少 token · 为什么切换**。
  *
- * ## 与稿子的三处刻意偏离（都不是照抄不动，是稿子的前提在真机上不成立）
- *
- * 1. **账号配色不按稿子的具体映射**（稿子写死 plus5=#2dd4bf 等六条）。label 用户可改名，
- *    把一次快照写成规则迟早对不上。复刻的是**调色板 + 每号专属色**这条不变量，
- *    分配在 `traffic/rotation.py::assign_colors`（散列偏好 + 线性探测，保证互不相同 ——
- *    纯散列实测当场让 Pro1 与 plus6 撞成同一个紫）。
- * 2. **多一行覆盖率脚注**。稿子把「612M token」当完整总量写，而真机上 token 只能归属到
- *    **走过代理**的响应（实测 93%）；直连 `codex` 的请求根本不经过代理，永远不在里面。
- *    把下界当总量画出来和编造没有区别，所以合计旁边必须写明它是下界。
- * 3. **段会比稿子碎得多**。稿图是 13 段 / 平均驻留 1h51m；真机 24h 是 28 段 / 5m ——
- *    因为代理是**逐请求**挑号的，本来就不存在长时间"驻留"。这是数据的真相不是渲染问题。
+ * ★ 段比稿碎得多：稿图 24h 约 30 段 / 每段 18–55 分钟；真机代理是**逐请求**挑号，24h 常见几十段、平均几分钟。
+ *   「太短」预警因此几乎常亮 —— 那是数据的真相，不调阈值让它消失（P7-7 第 8 条）。
+ * ★ 合计是**下界**：只有走过代理的响应能归属，直连 codex 的请求永远进不来（`covNote` 挂在 Token 格上）。
  */
 
 /**
  * ★ 2026-09-21 加了 14d / 30d（用户：界面最长只能看 7 天，而日志里有 44 天）。
- *   上界实测：30d 读 ~4MB / 约 5s，在 `TAIL_BYTES`(6MB) 之内；**60d 会撞上限并截断**
- *   （读满 6MB、约 10s），所以刻意停在 30d。真要看更长的趋势，正确做法是落盘日聚合
- *   而不是每次重扫日志 —— 那是另一件事，不该靠把上限越调越大来假装解决。
+ *   上界实测：30d 读 ~4MB / 约 5s，在 `TAIL_BYTES`(6MB) 之内；**60d 会撞上限并截断**，所以刻意停在 30d。
  */
 const WINDOWS = [1, 6, 24, 168, 336, 720] as const;
 type WinH = (typeof WINDOWS)[number];
-/** ★ `24` 仍写作 `24h`（既有标签，这轮没人让我改它）；只有 ≥7 天的新档位用 `Nd`。 */
+/** ★ `24` 仍写作 `24h`（既有标签）；只有 ≥7 天的档位用 `Nd`。 */
 const winLabel = (h: WinH): string => (h >= 168 ? `${h / 24}d` : `${h}h`);
 
 /** 时间窗选择要**记住**（用户 2026-09-07：「我选 6h，下次打开也是 6h」）。
- *  ★ 用 localStorage 而不是 `state.json`：这是**纯展示偏好**，代理与后台任务都不读它，
- *    与「参与轮换」那种必须让 app 关着的代理也能读到的开关不是一回事。
- *  ★ 读回来要**校验在合法集合里**：localStorage 里是字符串，手改过或旧版本留下的值
- *    会变成一个谁都不匹配的窗口，页面就永远空着且没有任何报错。 */
+ *  ★ 读回来要**校验在合法集合里**：手改过或旧版本留下的值会变成一个谁都不匹配的窗口。 */
 const WIN_KEY = "codexbar_rot_win";
 /** 代理轮换看的是哪个平台（Codex / Gemini）。 */
 const PLAT_KEY = "codexbar_rot_plat";
@@ -49,94 +48,6 @@ function loadWin(): WinH {
   return 24;
 }
 
-interface Seg0 {
-  acc: string;
-  start: number;
-  end: number;
-  requests: number;
-  tokens: number;
-  by_model: { model: string; tokens: number }[];
-  enter_reason: string;
-  current?: boolean;
-}
-interface Acct {
-  acc: string;
-  /** 套餐。★ 看 `plan` 不看 label —— 老号从 Plus 升 Pro 时 label 一个字都不变。 */
-  plan: string;
-  color: string;
-  tokens: number;
-  requests: number;
-  top_model: { model: string; share: number } | null;
-  quota_pct: number | null;
-  /** 这个名字已不在账号池里：号被 `remove` 掉，或是改名后没被 `alias` 认领的旧名。
-   *  ★ 零活动的退役名字在 `rotation.py` 的数据层就整条丢掉了，能走到这里的**都有活动**。 */
-  retired?: boolean;
-}
-interface Marker { acc: string; t: number; kind: string }
-interface Ev { t: number; type: string; from: string | null; to: string | null; reason: string; text: string; accs: string[] }
-interface Rotation {
-  ok: boolean;
-  reason?: string;
-  detail?: string;
-  generated_at: number;
-  window: { start: number; end: number; hours: number };
-  accounts: Acct[];
-  segments: Seg0[];
-  markers: Marker[];
-  events: Ev[];
-  log: { t: number; text: string }[];
-  /**
-   * 每号 × 每天的在岗时长（用户 2026-09-21 选的口径：「优先级到底生效没」）。
-   * ★★ 格子**三态**，绝不合并：对象=这天用了它 · `null`=这天没选中它（确实是 0）
-   *    · `"unknown"`=这天我们没读到（在 `covers_from` 之前）。
-   *    把第三种画成 0 就是拿「没看到」冒充「没用过」，而那正是这张表要回答的问题。
-   */
-  daily: {
-    days: string[];
-    rows: { acc: string; rank: number | null; rotate_off: boolean;
-            cells: ({ secs: number; requests: number; tokens: number } | null | "unknown")[] }[];
-    /** 每天走**中转站**的 POST 数 —— 不进账号池，所以泳道里看不到。 */
-    relay: number[];
-  };
-  kpi: {
-    tokens: number; requests: number; avg_tokens: number;
-    rotations: number; avg_dwell: number; cool_429: number; stream_err: number;
-    pro_segs: number; pro_secs: number;
-  };
-  coverage: {
-    responses_seen: number; responses_with_tokens: number; responses_unplaced: number;
-    attributed_pct: number | null; undated_lines: number; in_window_lines: number;
-    /** ★ 三态，不是一个 bool：见 `windowNote()` 与 `rotation.py::_tail_covering`。 */
-    tail_truncated: boolean; window_covered: boolean; tail_bytes: number;
-    covers_from: number | null;
-    log_begins_at: number | null; log_begins_reason: "ok" | "undated_head" | "unreadable";
-  };
-}
-
-// 稿子 §2 的模型色：主 → 次 → 第三（同族三档青），之后接其它色相。
-const MODEL_SHADES = ["#2dd4bf", "#7fe8da", "#158f80", "#4d9fff", "#8b7cf6", "#E0A21C"];
-const COOL = "#2BA0C0";
-const WARN = "#E0901C";
-const GOOD = "#27B26B";
-const BAD = "#E0524D";
-const MONO = "'JetBrains Mono'";
-
-const fmtTok = (n: number): string =>
-  n >= 1e9 ? `${(n / 1e9).toFixed(2)}B`
-    : n >= 1e8 ? `${Math.round(n / 1e6)}M`
-      : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
-        : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(Math.round(n));
-
-const clock = (ts: number): string => {
-  const d = new Date(ts * 1000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-};
-/**
- * 服务日志的一行。`t` 为 `null` = **这一行没有可用的时间**，不是"时间是 0"。
- * `inferred` = 时间是**推出来的**，不是日志里写着的（见 `parseServiceLogs`）。
- */
-interface SvcLine { src: string; t: number | null; inferred: boolean; text: string }
-
 /** `[<源> …]` 行首的三种形态。`dawnprobe` 那份**一个时间戳都没有**。 */
 const RE_DATED = /^\[(\w[\w-]*) (\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\]/;   // [proxy 09-14 13:48:20]
 const RE_CLOCK = /^\[(\w[\w-]*) (\d{2}):(\d{2}):(\d{2})\]/;                   // [quotad 19:26:47]
@@ -144,21 +55,14 @@ const RE_CLOCK = /^\[(\w[\w-]*) (\d{2}):(\d{2}):(\d{2})\]/;                   //
 /**
  * 把 `read_logs` 的扁平文本解析成带来源与时间的行。
  *
- * ★★★ **`quotad.log` 只有 `HH:MM:SS`，没有日期。** 直接按时钟排序会把昨天 23:00 的行
- *   排到今天 01:00 前面；直接当"今天"更糟 —— 那是**编造**。
- *   这里用的是本会话验过的那个办法：`read_logs` 每个源给的是**倒序**（最新在前），
- *   所以沿着它往下走，**时间一旦变大就说明跨了一天**，把日期往前推一天。
- *   这样得到的时间是**推断**，所以逐行标 `inferred`，界面上给 `~` 前缀 ——
- *   本仓的老规矩：推断不许伪装成实测。
- *
- * ★ `proxy` 的行**跳过**：上面那张泳道图用的 `rot.log` 已经是它，而且那份带完整日期、
- *   还按窗口过滤过。合进来就是同一条日志画两遍。
+ * ★★★ **`quotad.log` 只有 `HH:MM:SS`，没有日期。** `read_logs` 每个源给的是**倒序**（最新在前），
+ *   所以沿着它往下走，**时间一旦变大就说明跨了一天**，把日期往前推一天。这样得到的时间是**推断**，
+ *   逐行标 `inferred`，界面上给 `~` 前缀 —— 推断不许伪装成实测。
+ * ★ `proxy` 的行**跳过**：`rot.log` 已经是它，而且带完整日期、按窗口过滤过。
  */
 function parseServiceLogs(raw: string, now: Date): SvcLine[] {
   const out: SvcLine[] = [];
-  // 按源分组，因为"时间倒退=跨日"只在**同一个文件内部**成立。
-  // ★ 来源由 Rust 侧以 `<job>\t` 前缀给出，**不在这里猜**：`dawnprobe.log` 的行
-  //   既没有 `[dawnprobe …]` 也没有时间戳，靠猜只会得到「其它」。
+  // ★ 来源由 Rust 侧以 `<job>\t` 前缀给出，**不在这里猜**。
   const bySrc = new Map<string, string[]>();
   for (const raw1 of raw.split("\n")) {
     if (!raw1.trim()) continue;
@@ -171,13 +75,12 @@ function parseServiceLogs(raw: string, now: Date): SvcLine[] {
     bySrc.set(src, arr);
   }
   for (const [src, lines] of bySrc) {
-    // 推断日期用的游标：从"今天"开始，遇到时间变大就往前退一天。
     let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     let prevSecs = Infinity;
     for (const text of lines) {
       const d = RE_DATED.exec(text);
       if (d) {
-        // 带日期的：直接用。★ 跨年时 `09-14` 可能属于去年 —— 比今天晚超过 1 天就退一年。
+        // ★ 跨年时 `09-14` 可能属于去年 —— 比今天晚超过 1 天就退一年。
         let dt = new Date(now.getFullYear(), +d[2] - 1, +d[3], +d[4], +d[5], +d[6]);
         if (dt.getTime() - now.getTime() > 86400_000) dt = new Date(dt.setFullYear(dt.getFullYear() - 1));
         out.push({ src, t: Math.floor(dt.getTime() / 1000), inferred: false, text: text.slice(d[0].length).trim() });
@@ -185,75 +88,36 @@ function parseServiceLogs(raw: string, now: Date): SvcLine[] {
       }
       const c = RE_CLOCK.exec(text);
       if (!c) {
-        // ★ 真的没有时间（dawnprobe.log）。写 `null`，**不编一个**。
-        out.push({ src, t: null, inferred: false, text });
+        out.push({ src, t: null, inferred: false, text });   // ★ 真的没有时间。写 `null`，不编一个。
         continue;
       }
       const secs = +c[2] * 3600 + +c[3] * 60 + +c[4];
       if (secs > prevSecs) cursor = new Date(cursor.getTime() - 86400_000);   // 时间倒退 ⇒ 跨日
       prevSecs = secs;
-      const dt = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(),
-                          +c[2], +c[3], +c[4]);
+      const dt = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), +c[2], +c[3], +c[4]);
       out.push({ src, t: Math.floor(dt.getTime() / 1000), inferred: true, text: text.slice(c[0].length).trim() });
     }
   }
   return out;
 }
 
-const dur = (secs: number): string => {
-  const m = Math.round(secs / 60), h = Math.floor(m / 60), mm = m % 60;
-  return (h ? `${h}h` : "") + (mm || !h ? `${mm}m` : "");
-};
+const fmtTok = (n: number): string => fmtTokL(n, 1);
+const plain = (s: string | undefined): string | undefined => s?.replace(/\*\*/g, "");
 
-/** 稿子 §1：额度 100% 绿 / <50% 琥珀 / 0% 红。★ 读不到是 `null`，走中性灰**不画成满额**。 */
-const quotaColor = (p: number | null, t: Theme): string =>
-  p === null ? t.muted : p === 0 ? BAD : p < 50 ? WARN : GOOD;
+const PLATS = [
+  { k: "codex" as const, name: "Codex", logo: "codex", color: "#2dd4bf" },
+  { k: "agy" as const, name: "Gemini", logo: "agy", color: "#4d9fff" },
+];
 
-const REASON_CN: Record<string, string> = {
-  cool_429: "429 冷却 → 故障转移",
-  stream_err: "断流 → 轮换",
-  quota_rotate: "额度轮换",
-  window_start: "窗口起点",
-  pro_fallback: "Plus 全部不可用 → Pro 保底接管",
-};
-const EV_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-  switch: { label: "切换", color: "#2dd4bf", bg: "rgba(45,212,191,.12)" },
-  failover: { label: "故障转移", color: COOL, bg: "rgba(43,160,192,.14)" },
-  cool_429: { label: "429 冷却", color: COOL, bg: "rgba(43,160,192,.14)" },
-  stream_err: { label: "断流", color: WARN, bg: "rgba(224,144,28,.14)" },
-  // ★★ 三类失败的计费含义完全不同,颜色必须一眼分得开(`CLAUDE.md` §8「计费相位分界」):
-  //   断流=已计费(琥珀) · **计费未知=可能已计费(红,唯一的危险级)** · 安全换号=没计费(中性)。
-  //   合并成一个"错误"色,用户就再也分不出「白花了钱」和「安全换了个号」。
-  billed_unknown: { label: "计费未知", color: BAD, bg: "rgba(224,82,77,.14)" },
-  safe_switch: { label: "安全换号", color: "#8a93a0", bg: "rgba(255,255,255,.06)" },
-  probe: { label: "探活", color: "#8a93a0", bg: "rgba(255,255,255,.06)" },
-  // ★ 「Pro 保底接管」用紫色(与卡片上的 PRO 徽章同色系),不用红 ——
-  //   它是**按设计工作**,不是故障;染红会训练用户忽略真正的告警。
-  pro_fallback: { label: "Pro 保底", color: "#8b7cf6", bg: "rgba(139,124,246,.16)" },
-};
-
-interface Tip {
-  xPct: number; laneIdx: number; flip: boolean;
-  range: string; dur: string; acc: string; tokens: number; requests: number;
-  models: { model: string; tokens: number; pct: number; color: string }[];
-  errs: number; why: string;
-}
-
-const LANE_H = 40;
-/** 下半区两栏的**最低**高度（两栏共用一个数 —— 各写一个迟早只改一边）。
- *  2026-10-14 起两栏撑满泳道下面的剩余高度（一屏仪表盘），原来写死 320。 */
-const PANEL_MIN = 120;
-/** 泳道左列宽。★ 字号从 13 提到 14.5 后 96px 会把 `plus4` 截成 `plu…`（截图实证）——
- *  **字号与列宽是同一件事的两半**，只改一边就是在制造截断。名字后面还要放「当前」徽章。 */
-/** 泳道左列宽。★ 三次被字号/徽章追着改，这次按**最坏情况**定死：
- *  圆点 8 + 名字 ~44（`plus4` 5 字符 @14.5px 等宽）+ `PRO` 徽章 ~34 + `当前` 徽章 ~40 + 3 个 gap 21
- *  = 147。取 152 留一点余量。
- *  ⚠️ 之前是 118：Pro 号同时挂 `PRO` 和 `当前` 两个徽章时，名字只剩 ~20px，被截成 `Pr…`
- *  （用户截图实证）。**认不出是哪个号，比时间轴窄 34px 严重得多** —— 让位者绝不能是名字。 */
-const NAME_W = 152;
-const STAT_W = 300;
-
-export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
+export default function LogsPage({ t, pools }: {
+  t: Theme;
+  /** 池里的号（池顺序）。泳道顺序固定 = 池顺序（稿「顺序固定」），不在池里的退役名按字母排在后面。 */
+  pools?: { codex: string[]; agy: string[] };
+}): React.ReactElement {
+  const p = tkPal(t);
+  const { L, W } = useWinDensity();
+  const lay = rotLayout(W);
+  const [intro] = useState(() => introEnabled());
   const [rot, setRot] = useState<Rotation | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [win, setWinState] = useState<WinH>(loadWin);
@@ -264,12 +128,8 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
   /** 后台正在重扫（快照已经画出来了，这只是个不打断阅读的小标记）。 */
   const [busy, setBusy] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
-  const [tip, setTip] = useState<Tip | null>(null);
-  const [filter, setFilter] = useState<string>("all");
-  /** ★ 2026-09-24 用户：「代理轮换改成 codex 和 gemini 两个版块」（选的是标题行分段切换）。
-   *  Gemini 那一版来自 `traffic/agy_rotation.py`：agy 没有代理，泳道 = agy **以这个号的身份
-   *  在运行**的时段（取自 agy 自己日志的 `applyAuthResult`），事件 = `agy.log` 的换号记录；
-   *  **没有按号的 token**（账本不带身份，按时间拼就是猜），那几格一律显示「—」并说明。 */
+  /** ★ 2026-09-24 用户：「代理轮换改成 codex 和 gemini 两个版块」。Gemini 那一版来自 `traffic/agy_rotation.py`：
+   *  agy 没有代理，泳道 = agy **以这个号的身份在运行**的时段，事件 = `agy.log` 的换号记录。 */
   const [plat, setPlatState] = useState<"codex" | "agy">(() => {
     try { return localStorage.getItem(PLAT_KEY) === "agy" ? "agy" : "codex"; } catch { return "codex"; }
   });
@@ -278,158 +138,93 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
     try { localStorage.setItem(PLAT_KEY, v); } catch { /* 无痕模式：本次不记住 */ }
   }, []);
   const isAgy = plat === "agy";
+  const pc = PLATS.find((x) => x.k === plat) ?? PLATS[0];
+  const num = numColor(t, pc.logo, pc.color);
+  const long = win >= 168;
 
+  // ★ 每次取数一个序号：换平台 / 换窗口后，上一次（可能是冷扫 30d）晚回来的结果不许盖掉当前视图，
+  //   它的 finally 也不许提前熄灭当前这次的「刷新中」（评审 gemini 阶段 5）。
+  const seqRef = useRef(0);
   const load = useCallback(async (hours: WinH) => {
+    const seq = ++seqRef.current;
+    const cur = () => seq === seqRef.current;
     if (plat === "agy") {
       // ★ Gemini 没有快照（冷路径实测 0.2s，不值得多一份缓存文件）。
       setBusy(true);
       try {
         const r = await invoke<Rotation>("read_agy_rotation", { hours });
+        if (!cur()) return;
         setRot(r.ok ? r : null);
         setErr(r.ok ? null : (r.detail ?? "读不到 agy 日志"));
       } catch (e: unknown) {
+        if (!cur()) return;
         setRot(null);
         setErr(String(e));
       } finally {
-        setBusy(false);
+        if (cur()) setBusy(false);
       }
       return;
     }
-    // ★★ 两段式:先把**成品快照**画出来(读盘 ~1ms),再后台重扫。
-    //    用户报的「太卡」就是缺这一段 —— 原来每次进页面/切窗口都同步等一次全扫
-    //    (实测 1h 0.9s / 24h 1.7s / 7d 3.3s,冷缓存下更久)。
-    // ★ 快照可能是**旧的**,所以重扫照跑;但先画出来的那一刻页面已经可读了。
+    // ★★ 两段式：先把**成品快照**画出来（读盘 ~1ms），再后台重扫。
     try {
       const snap = await invoke<Rotation | null>("read_rotation_snapshot", { hours });
-      if (snap && snap.ok) { setRot(snap); setErr(null); }
+      if (cur() && snap && snap.ok) { setRot(snap); setErr(null); }
     } catch { /* 没有快照是首次运行的正常状态，不是故障 */ }
+    if (!cur()) return;
 
     setBusy(true);
     try {
       const r = await invoke<Rotation>("read_proxy_rotation", { hours });
+      if (!cur()) return;
       setRot(r.ok ? r : null);
       setErr(r.ok ? null : (r.detail ?? "读不到 proxy/proxy.log"));
     } catch (e: unknown) {
-      // ★ 失败必须清空,**不能留着上一窗口的数** —— 换窗口失败后旧数字还挂在新标签下面,
-      //   看上去完全正常。同本仓「降级态恒 None,绝不写 0」。
+      if (!cur()) return;
+      // ★ 失败必须清空，**不能留着上一窗口的数** —— 旧数字挂在新标签下面，看上去完全正常。
       setRot(null);
       setErr(String(e));
     } finally {
-      // ★ 必须在 `finally`:失败时不熄灯的话,那盏「刷新中」会一直亮着 ——
-      //   长亮又灭不掉的灯是本仓判过死刑的形态。
-      setBusy(false);
+      // ★ 必须在 `finally`：失败时不熄灯，「刷新中」会一直亮着。只熄自己这一次的。
+      if (cur()) setBusy(false);
     }
   }, [plat]);
 
-  // ★ 换版块时先清空：不许把另一个平台的泳道留在新标签下面（同「换窗口失败必须清空」）。
-  useEffect(() => { setRot(null); setFocus(null); setTip(null); }, [plat]);
+  // ★ 换版块 / 换窗口先清聚焦：不许把另一个数据集的状态留在新标签下面。
+  useEffect(() => { setRot(null); setFocus(null); }, [plat]);
 
   useEffect(() => {
-    load(win);
-    const id = setInterval(() => load(win), 30_000);
+    void load(win);
+    const id = setInterval(() => { void load(win); }, 30_000);
     return () => clearInterval(id);
   }, [load, win]);
 
-  // 切窗口/切聚焦时浮层必须消失 —— 它存的是「某个数据集里的位置」,数据换了它就过期了,
-  // 而过期的浮层会理直气壮地描述另一段时间(本仓 StackedArea 那条同族教训)。
-  useEffect(() => { setTip(null); }, [win, rot?.generated_at]);
-
-  const W = rot?.window;
-  const span = W ? Math.max(1, W.end - W.start) : 1;
-  const pct = (ts: number): number => ((ts - (W?.start ?? 0)) / span) * 100;
-
-  const lanes = useMemo(() => {
-    if (!rot) return [];
-    const maxDensity = Math.max(
-      1e-9,
-      ...rot.segments.map(s => s.tokens / Math.max(60, s.end - s.start)));
-    return rot.accounts.map(a => {
-      const segs = rot.segments.filter(s => s.acc === a.acc);
-      return {
-        ...a,
-        current: segs.some(s => s.current),
-        segs: segs.map(s => ({
-          ...s,
-          left: pct(s.start),
-          width: Math.max(0, pct(s.end) - pct(s.start)),
-          // 稿子 §1：色块透明度 = token 密度（.45–1）
-          // ★ Gemini 没做过归属（`attributed_pct` 为 null）时密度无从谈起，统一中等透明度（不是「很淡 = 用得少」）。
-          op: isAgy && rot.coverage.attributed_pct == null ? 0.8
-            : 0.45 + (s.tokens / Math.max(60, s.end - s.start) / maxDensity) * 0.55,
-        })),
-        errs: rot.markers.filter(m => m.acc === a.acc && m.kind === "stream_err").map(m => pct(m.t)),
-        cools: rot.markers.filter(m => m.acc === a.acc && m.kind === "cool_429").map(m => pct(m.t)),
-      };
-    });
-  }, [rot]);
-
-  // 轴刻度：1h 每 10 分 / 6h 每小时 / 24h 每 6 小时 / 7d 每天（稿子 §6）
-  const axis = useMemo(() => {
-    if (!W) return [];
-    const stepSec = win === 1 ? 600 : win === 6 ? 3600 : win === 24 ? 6 * 3600 : 86400;
-    const out: { left: number; label: string }[] = [];
-    // 从窗口末端往回对齐,保证最后一格落在节拍上(全局 ui-design：刻度从末端起稀释)
-    for (let ts = W.end; ts >= W.start; ts -= stepSec) {
-      const d = new Date(ts * 1000);
-      out.unshift({
-        left: pct(ts),
-        label: win === 168
-          ? `${d.getMonth() + 1}/${d.getDate()}`
-          : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
-      });
-    }
-    // 首尾两格让位给「账号」表头与右端的「现在」——它们会重叠。中间的全留。
-    return out.filter(x => x.left > 3 && x.left < 88);
-  }, [W, win]);
-
-  const evs = useMemo(
-    () => (rot?.events ?? []).filter(e => !focus || e.accs.includes(focus)),
-    [rot, focus]);
-
-  /**
-   * ★★★ 服务日志（quotad / agy / dawnprobe / autosync）—— 2026-09-14 接线。
-   *
-   * 在那之前 `read_logs` 这条 Tauri 命令**一个前端调用方都没有**：它按 5 个文件收集、
-   * 后端一直在跑，而日志页读的是 `read_proxy_rotation`，那个解析器**只认 `[proxy` 开头的行**。
-   * 于是 quotad / agy / dawnprobe 的日志一行都到不了界面 —— 连这一页给 `✗` 染红的规则
-   * 都是为 agy 写的、却永远用不上。本仓管这叫「后端有字段 ≠ 已披露」。
-   * ⚠️ 其中 **dawnprobe 是全仓唯一会自动花钱的任务**，它的成败此前完全不可见。
-   */
+  /** 服务日志（quotad / agy / dawnprobe / autosync …）—— 原始日志与展开日志的另一半来源。
+   *  ⚠️ 其中 **dawnprobe 是全仓唯一会自动花钱的任务**，它的成败要看得见。 */
   const [svc, setSvc] = useState<SvcLine[]>([]);
   useEffect(() => {
     invoke<string>("read_logs")
       .then((raw) => { setSvc(parseServiceLogs(raw || "", new Date())); })
-      // 读不到就保持空 —— 泳道那半已经可用，不该被这半拖垮。
       .catch(() => { /* 服务日志读不到不影响本页其余部分 */ });
   }, [win]);
 
+  /** 每号实测 t/s（请求账本，与「请求」页同口径：只取 `est=false`、中位数）。账本只留近 2 天。 */
+  const { rows: reqs } = useReqLedger();
+
   const logs = useMemo(() => {
-    // ★ Gemini 版的 `rot.log` 就是 `agy.log` 的换号行，而服务日志里 `agy` 那一源**已经整份**
-    //   含着它们 —— 再并一次就每行两遍，还会被错标成 `proxy`。所以 Gemini 版不并。
+    // ★ Gemini 版的 `rot.log` 就是 `agy.log` 的换号行，而服务日志里 `agy` 那一源**已经整份**含着它们 —— 不并第二次。
     const proxy = isAgy ? [] : (rot?.log ?? []).map(
       (l): SvcLine => ({ src: "proxy", t: l.t, inferred: false, text: l.text }));
     // ★ 有时间的按时间倒序；**没有时间的排在最后**，不许给它们编一个时间去参与排序。
     const merged = [...proxy, ...svc];
-    const dated = merged.filter(l => l.t !== null).sort((a, b) => (b.t as number) - (a.t as number));
-    const undated = merged.filter(l => l.t === null);
-    const all = [...dated, ...undated];
-    if (filter === "all") return all;
-    return all.filter(l => l.text.toLowerCase().includes(filter));
-  }, [rot, svc, filter, isAgy]);
+    const dated = merged.filter((l) => l.t !== null).sort((a, b) => (b.t as number) - (a.t as number));
+    const undated = merged.filter((l) => l.t === null);
+    return [...dated, ...undated];
+  }, [rot, svc, isAgy]);
 
   const cov = rot?.coverage;
   /**
-   * 窗口完整性的一句话。★★ **三态各说各的，不许共用一句**（2026-09-21）。
-   *
-   * 在这之前这里写死一句「仅统计日志尾部」，由 `tail_truncated` 驱动，而那个标志的旧判据是
-   * **`文件大小 > 上限`** —— 与你选的窗口毫无关系。实测：proxy.log 长到 9.1MB 之后它
-   * **恒为真**，而 7d 窗口实际只需要 1.04MB、一条数据都没少。于是这句话天天挂着，
-   * **真被截断的那天反而看不出来** —— 一盏长亮的灯等于没有灯，用户学会的是忽略它。
-   *
-   * 现在三种结局分开说，而且每一句都说**下一步做什么**（本仓 §5d：别只说"坏了"）：
-   *   · 完整          → 一个字都不说（这是常态，说了就是噪音）
-   *   · 上限切进窗口  → 可补救，告诉用户换小一点的窗口
-   *   · 日志没那么早  → 不可补救，告诉用户数据从哪天开始才有
+   * 窗口完整性的一句话。★★ **三态各说各的，不许共用一句**（2026-09-21）：
+   *   完整 → 不说 · 上限切进窗口 → 换短窗口可补救 · 日志没那么早 → 数据从哪天开始才有。
    */
   const windowNote = (c: NonNullable<typeof cov>): string => {
     if (c.window_covered) return "";
@@ -442,39 +237,17 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
       return ` 日志从 ${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")} 才开始记录，`
         + `更早的时间段**确实没有数据**（不是没统计）。`;
     }
-    // ★ `log_begins_at` 为空还要分两种：读不到 vs 那段行本来就没时间戳。合并就又犯一次。
+    // ★ `log_begins_at` 为空还要分两种：读不到 vs 那段行本来就没时间戳。
     return c.log_begins_reason === "unreadable"
       ? " ⚠️ 读不到日志头部，窗口是否完整**无法判断** —— 这不等于数据完整。"
       : " 日志最早那批行是旧格式、没有时间戳，所以更早的时间段无法定位。";
   };
-  // 覆盖率说明。★ 去掉的是那**一行字**,不是那个**事实** —— 它改挂到 KPI 标签与 title 上。
-  /**
-   * ★★ 这段文案 2026-09-21 重写，因为它**用错误的原因解释了一个正确的数字**。
-   *
-   * 旧文案把 `501/558` 这个比例解释成「直连 codex 的请求不经过代理」—— 而那两件事
-   * 根本不相干：直连请求**连分母都进不去**（分母只数走过代理的响应），所以它影响的是
-   * 「合计是下界」，**不影响这个比例**。比例真正在说的是另一件事：走过代理、拿到了
-   * response_id，却在 rollout 里找不到 usage 记录。
-   *
-   * 2026-09-21 实测（24h 窗口）把它查清了：
-   *   · 缺的 57 个 response_id，去 `~/.codex/sessions` 逐个找 —— **57/57 根本没有记录**。
-   *     不是我们解析漏了，也不是窗口剪枝剪掉了：codex 压根没写。
-   *   · 按账号看缺失率与 `stream err` 率高度一致（Huo 39%/41% · Egan 19%/24% ·
-   *     Asen 3%/5%），**r = 0.98（n=6 个账号）**；窗口内 61 次 stream err vs 57 个缺失。
-   *   · 日志里能直接看到完整时序：`→ POST` → `← 200` → `affinity resp_…` →
-   *     40 秒后 `stream err … Broken pipe`。流断了，turn 没完成，codex 就不写 usage。
-   *
-   * ⚠️ **仍是相关不是逐请求对上**：proxy.log 给 affinity 行打的是 `#resp_…`、给 stream err
-   *   打的是代理自己的请求号，**两套 id 没有任何一行把它们连起来**。所以文案说「多数」
-   *   而不是「全部」—— 把 0.98 的相关写成因果，正是本仓禁止的那种"把推断写成实测"。
-   *   要坐实它，得让 proxy 在 stream err 行里也带上 response_id（未做，属改代理的活）。
-   *
-   * ★ 而这部分**是花了钱的**：按本仓的计费相位，`stream err` = 已送达上游 = **已计费**。
-   *   所以它不只是"统计不全"，是"这些钱看不见"。
-   */
-  /** ★ Gemini 的按号 token（2026-10-14）：后端按**会话 id** 精确归属（id 写在哪份 agy 日志里、那份日志是谁）。
-   *  只有后端真做过归属（`attributed_pct` 非 null）才显示数字；否则仍是「—」—— 「没有可归属的」不画成 0。 */
+  /** ★ Gemini 的按号 token：后端按**会话 id** 精确归属；只有后端真做过归属（`attributed_pct` 非 null）才显示数字。 */
   const agyTok = !isAgy || rot?.coverage.attributed_pct != null;
+  /**
+   * 覆盖率说明（挂在 Token 格的悬停提示上）。★ 未归属的那部分**多数是流式中断**：流断了 codex 就不写 usage，
+   * 而这部分**已经计费**（2026-09-21 实测：缺的 57 个 response_id 57/57 在 rollout 里没有记录，与 stream err 率 r=0.98）。
+   */
   const covNote = isAgy
     ? "Gemini 按**会话**统计：agy 没有代理，看不到逐请求记录。泳道是 agy 以这个号的身份在运行的时段"
       + "（取自 agy 自己日志里的 `applyAuthResult`），不是「在消耗」。"
@@ -495,43 +268,88 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
       + (cov.undated_lines > 0 ? ` 另有 ${cov.undated_lines} 行旧格式日志无时间戳、未计入。` : "")
       + windowNote(cov)
     : undefined;
+
+  /** 泳道（池顺序固定；退役名按字母排在后面）。 */
+  const lanes: Lane[] = useMemo(() => {
+    if (!rot) return [];
+    const order = (isAgy ? pools?.agy : pools?.codex) ?? [];
+    const rank = (a: string) => { const i = order.indexOf(a); return i < 0 ? 1e6 : i; };
+    const now = rot.generated_at;
+    return [...rot.accounts]
+      .sort((a, b) => rank(a.acc) - rank(b.acc) || a.acc.localeCompare(b.acc))
+      .map((a) => {
+        const segs = rot.segments.filter((s) => s.acc === a.acc);
+        return { ...a, segs, current: segs.some((s) => s.current),
+                 cooling: a.cooling_until != null && a.cooling_until > now };
+      });
+  }, [rot, pools, isAgy]);
+
+  const tps = useMemo(() => {
+    const m = new Map<string, number | null>();
+    const start = rot?.window.start ?? Infinity;
+    for (const l of lanes) {
+      m.set(l.acc, median(reqs.filter((r) => r.platform === plat && r.account === l.acc && !r.est && r.t_end >= start)
+                             .map((r) => r.tps)));
+    }
+    return m;
+  }, [lanes, reqs, plat, rot]);
+
+  const recs: Rec[] = useMemo(() => {
+    if (!rot) return [];
+    const all = recsOf(rot.events, rot.window.end);
+    // 长周期：KPI 按所选周期，记录只列最近 24h（稿 §4）。
+    const cut = long ? rot.window.end - 86400 : -Infinity;
+    return all.filter((r) => r.t >= cut && (!focus || r.accs.includes(focus)));
+  }, [rot, focus, long]);
+
+  // ★ agy 池只在总览 Gemini 档读（`useAgyPool` 读池会起子进程现读钥匙串）⇒ 这里拿到空表 = 「没读」不是「0 个号」。
+  const poolN = (isAgy ? pools?.agy : pools?.codex)?.length || null;
+  const k = rot?.kpi;
+  const n860 = L === 2;
+  const onDuty = lanes.filter((l) => l.segs.length > 0).length;
+  const noProxy = "agy 没有代理，没有 429 / 断流事件";
+  const kpis: TkKpi[] = [
+    { label: "Token", value: rot && agyTok ? fmtTokL(k!.tokens, L) : "—", full: rot && agyTok ? fmtTokL(k!.tokens, 0) : isAgy ? "agy 不上报 token" : undefined,
+      sub: !rot ? "读取中" : isAgy ? (agyTok ? "按会话归属" : n860 ? "不上报" : "agy 不上报") : n860 ? "代理" : "经代理",
+      tip: plain(covNote) },
+    { label: isAgy ? "会话" : "请求", value: rot ? String(k!.requests) : "—", full: rot ? String(k!.requests) : undefined,
+      sub: !rot ? "读取中" : isAgy ? "" : `均 ${fmtTokL(k!.avg_tokens, L)}/次` },
+    { label: "换号", value: rot ? String(k!.rotations) : "—", sub: !rot ? "读取中" : n860 ? "含故障转移" : "自动 + 故障转移",
+      tip: "账号**变了**才算一次；同号空闲后重新上岗不算".replace(/\*\*/g, "") },
+    { label: n860 ? "在岗" : "平均在岗", value: rot ? mins(k!.avg_dwell) : "—", full: rot ? `平均每次上号 ${mins(k!.avg_dwell)}` : undefined,
+      sub: !rot ? "读取中" : "每次上号" },
+    { label: n860 ? "账号" : "在岗账号", value: rot ? `${onDuty}/${poolN ?? lanes.length}` : "—",
+      sub: !rot ? "读取中" : n860 ? "上过号" : "本期上过号" },
+    // ★ 429 / 断流是代理才有的事件：Gemini 写「—」，不写 0（0 = 说它确实没发生过）。
+    { label: "429", value: !rot ? "—" : isAgy ? "—" : String(k!.cool_429), color: !isAgy && k && k.cool_429 > 0 ? BAD : undefined,
+      sub: !rot ? "读取中" : n860 ? "限流" : "被限流冷却", tip: isAgy ? noProxy : undefined },
+    { label: "断流", value: !rot ? "—" : isAgy ? "—" : String(k!.stream_err), color: !isAgy && k && k.stream_err > 0 ? WARN : undefined,
+      sub: !rot ? "读取中" : n860 ? "未必换号" : "流中断（未必换号）", tip: isAgy ? noProxy : undefined },
+  ];
+
   /**
-   * 「每号 · 每天在岗」浮层（用户 2026-09-21 选的口径：**优先级到底生效没**）。
-   *
-   * ★★★ 它存在的唯一理由：总览把拖拽顺序标成「轮换优先级」，而**它到底有没有被执行**
-   *   在任何既有视图上都看不出来。实测本机：排 #1/#2 的号被 `rotate_off` 挡在池外，
-   *   8 天一次都没跑过，而界面上它们看着是最优先的。
-   * ★★ 每格三态绝不合并：数字=这天用了它 · `—`=这天没选中它（确实是 0）
-   *   · `?`=这天我们没读到。把第三种画成 `—` 就是拿"没看到"冒充"没用过"。
-   * ★ 末行「中转站」不是装饰：实测 09-19 那天 40 次 POST 里 39 次走了中转站，
-   *   账号池只用了 1 次 —— 没有这一行，整列的 `—` 会被读成「这天没用 codex」。
-   * ★ 抽成变量而不内联进表头：它 80 多行，塞进表头那一行会把那段整个读不动。
+   * 「每号 · 每天在岗」浮层（用户 2026-09-21 选的口径：**优先级到底生效没**）。落点：泳道表头「账号」旁（同日用户定）。
+   * ★★★ 它回答的问题与账号 × 时段不同（那张答「几点」，这张答「哪天、优先级有没有被执行」），所以保留（偏离 P7-9）。
+   * ★★ 每格三态绝不合并：数字=这天用了它 · `—`=这天没选中它 · `?`=这天我们没读到。
+   * ★ 末行「中转站」：实测某天 40 次 POST 里 39 次走了中转站 —— 没有这一行，整列 `—` 会被读成「这天没用 codex」。
    */
   const dailyPop = rot?.daily && rot.daily.rows.length > 0 ? (
         <div data-daily className="cb-hoverwrap" style={{ marginLeft: 6 }}>
-          {/* ★ 字号 / 字距 / 大小写**显式写回**：表头整行是 9.5px + `uppercase` + 带字距，
-              继承过来会把「每天在岗」缩成读不动的一小条（本仓：表头是要读的内容不是装饰）。 */}
-          {/* ★ 同上：不挂 `title`。这句话浮层第一行已经逐字写着了。 */}
           <span data-daily-badge
                 style={{ display: "inline-flex", alignItems: "center", gap: 3,
                          padding: "1px 6px", borderRadius: 6, cursor: "help", userSelect: "none",
-                         fontSize: 10, letterSpacing: 0, textTransform: "none",
+                         fontSize: 10.5, letterSpacing: 0, textTransform: "none",
                          border: `1px solid ${t.ghostBorder}`, color: t.muted }}>
-            ⓘ<span style={{ fontWeight: 600 }}>每天在岗</span>
+            ⓘ<span style={{ fontWeight: 600 }}>{n860 ? "每天" : "每天在岗"}</span>
           </span>
-          {/* ★★ 浮层**内容仍在 DOM 里**，靠 CSS 控制可见性（`.cb-hoverpop`）——
-              条件渲染会让本仓所有基于 `--dump-dom` 的行为闸静默失效（§5c）。
-              ★ `maxWidth` 按窗口收：30d 档有 30 列，写死宽度会顶出容器（本仓：溢出算 bug）。 */}
-          {/* ★★ `textTransform` / `letterSpacing` **必须在浮层上重置**。浮层是表头单元格的
-              后代，而表头整行是 `uppercase` + 带字距 —— 不重置的话账号名会渲染成 `PLUS5`、
-              小时数变成 `1.5H`（2026-09-21 像素实测）。★ 这类**继承来的**样式缺陷在源码里
-              一个字都看不出来，只有截图能抓；本仓「UI 改动必须看像素」说的就是它。 */}
+          {/* ★★ 浮层内容仍在 DOM 里，靠 CSS 控制可见性（`.cb-hoverpop`）—— 条件渲染会让 `--dump-dom` 的闸静默失效（§5c）。
+              ★★ `textTransform` / `letterSpacing` 在浮层上重置：继承来的样式缺陷在源码里看不出来。 */}
           <div className="cb-hoverpop"
                style={{ maxWidth: "min(1100px, 92vw)", padding: "11px 13px", borderRadius: 10,
                         background: t.cardBg, border: `1px solid ${t.cardBorder}`,
                         boxShadow: t.shadow, textTransform: "none", letterSpacing: 0,
-                        color: t.text }}>
-            <div style={{ fontSize: 10, color: t.muted, marginBottom: 7 }}>
+                        color: t.text, zIndex: 20 }}>
+            <div style={{ fontSize: 10.5, color: t.muted, marginBottom: 7 }}>
               左列 <span style={{ fontFamily: MONO }}>#N</span> 是你在总览拖出来的轮换优先级 ——
               这张表是它有没有被执行的证据
             </div>
@@ -540,22 +358,20 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "3px 8px 5px 0", color: t.muted, fontWeight: 600 }}>号</th>
-                  {rot.daily.days.map(d => (
+                  {rot.daily.days.map((d) => (
                     <th key={d} style={{ padding: "3px 7px 5px", color: t.muted, fontWeight: 600,
                                          fontFamily: MONO, fontVariantNumeric: "tabular-nums" }}>{d}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {rot.daily.rows.map(r => (
+                {rot.daily.rows.map((r) => (
                   <tr key={r.acc} style={{ borderTop: `1px solid ${t.divider}` }}>
                     <td style={{ padding: "4px 8px 4px 0", display: "flex", alignItems: "center", gap: 5 }}>
                       <span style={{ fontFamily: MONO, fontSize: 9.5, color: t.muted, minWidth: 18 }}>
                         {r.rank ? `#${r.rank}` : ""}
                       </span>
                       <span style={{ color: t.text, fontWeight: 600 }}>{r.acc}</span>
-                      {/* ★ `⊘` 不挂 `title`：浮层底部的图例里逐字写着同一句，
-                          在**已经展开的浮层上**再弹一层原生提示就是第二个说法。 */}
                       {r.rotate_off && (
                         <span style={{ color: "#E0901C", fontWeight: 700 }}>⊘</span>
                       )}
@@ -566,8 +382,6 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
                                            color: c === "unknown" ? "#E0901C"
                                              : c === null ? t.muted : t.text }}>
                         {c === "unknown"
-                          /* ★ `?` 与 `—` 不挂 `title`：底部图例里逐字写着同一句，
-                             而在**已经展开的浮层上**再弹一层原生提示就是第二个说法。 */
                           ? "?"
                           : c === null
                             ? "—"
@@ -578,7 +392,7 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
                     ))}
                   </tr>
                 ))}
-                {rot.daily.relay.some(n => n > 0) && (
+                {rot.daily.relay.some((n) => n > 0) && (
                   <tr style={{ borderTop: `1px solid ${t.divider}` }}>
                     <td style={{ padding: "4px 8px 4px 0", color: t.muted }}>
                       中转站
@@ -604,409 +418,76 @@ export default function LogsPage({ t }: { t: Theme }): React.ReactElement {
         </div>
   ) : null;
 
-  const headRef = useRef<HTMLDivElement>(null);
-  const [statsOwnRow, setStatsOwnRow] = useState(false);
-  useLayoutEffect(() => {
-    const head = headRef.current;
-    if (!head) return;
-    const measure = () => {
-      const kids = Array.from(head.children) as HTMLElement[];
-      const gap = parseFloat(getComputedStyle(head).columnGap) || 0;
-      const natural = (el: HTMLElement) => el.dataset.rotStats != null
-        ? Array.from(el.children).reduce((s, c) => s + (c as HTMLElement).getBoundingClientRect().width, 0)
-        : el.getBoundingClientRect().width;
-      const need = kids.reduce((s, el) => s + natural(el), 0) + gap * (kids.length - 1);
-      setStatsOwnRow(need > head.clientWidth);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(head);
-    return () => ro.disconnect();
-  }, [rot, plat, busy]);
-
-  const card: React.CSSProperties = {
-    background: t.cardBg, border: `1px solid ${t.cardBorder}`, borderRadius: 13,
-  };
-
-  const openTip = (laneIdx: number, s: Seg0, errs: number): void => {
-    const mid = (pct(s.start) + pct(s.end)) / 2;
-    const total = s.by_model.reduce((x, m) => x + m.tokens, 0) || 1;
-    setTip({
-      xPct: mid, laneIdx, flip: mid > 55,
-      range: `${clock(s.start)} – ${clock(s.end)}`, dur: dur(s.end - s.start),
-      acc: s.acc, tokens: s.tokens, requests: s.requests,
-      models: s.by_model.slice(0, 4).map((m, i) => ({
-        ...m, pct: Math.round((m.tokens / total) * 100), color: MODEL_SHADES[i % MODEL_SHADES.length],
-      })),
-      errs, why: REASON_CN[s.enter_reason] ?? s.enter_reason,
-    });
-  };
+  // ★ 三种「没数字」必须说三句不同的话 —— 合成「暂无数据」就是把「我们没看到」伪装成「确实没有」。
+  const empty = err ? (isAgy ? `读不到 agy 日志（${err}）` : `读不到 proxy/proxy.log（${err}）`)
+    : !rot ? "读取中"
+      : (cov?.in_window_lines ?? 0) === 0 ? (isAgy ? `最近 ${winLabel(win)} agy 没有运行过` : `最近 ${winLabel(win)} 代理没有处理过请求`)
+        : "窗口内有日志，但没有可归属到账号的计费请求";
 
   return (
-    // 页面自带滚动容器：App 内容区是 overflow:hidden,不加这层超出部分会被静默裁掉。
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflowY: "auto" }}>
-      {/* ── 顶栏：标题 + 汇总条（左）｜图例 + 时间（右）─────────────────────
-          用户 2026-09-07 定：方案 B 的单行汇总**并进标题行**，右侧「在岗/断流/429」图例不动。
-          ★ 原来标题后面那句副标（`682M token · 371 次请求 · 6 个号`）**已删** ——
-            它和汇总条逐字重复。留着就是同一组数字在同一行说两遍。
-          ★ 整行允许 `flexWrap`：窄窗口下汇总条掉到第二行，而不是把标题挤没或横向溢出。
-            实测 960px 会折，1200 以上单行 —— 折了仍然可读，挤没了就不可读。 */}
-      <div ref={headRef} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12,
-                    flexShrink: 0, flexWrap: "wrap", rowGap: 8 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.01em", flexShrink: 0 }}>代理轮换</span>
-        <span data-rot-plat style={{ flexShrink: 0 }}>
-          <Seg opts={["codex", "agy"] as const} cur={plat} on={setPlat}
-               label={(v) => (v === "codex" ? "Codex" : "Gemini")} t={t} />
-        </span>
-
-        {/* ★★ 汇总条**整条不折**：放得下就跟标题同一行，放不下就**整条**移到标题下面单独一行
-            （`order` 排到最后 + 占满整行）。2026-10-14 前它在内部折行 —— 860px 下实测被挤成
-            **竖着的 6 行**，比整条下移难读得多（用户截图：「最小的画面都能标题一行处理完」）。
-            判据在 `statsOwnRow`：按各项的**自然宽度**算，不看当前排布，所以来回切不会抖。 */}
-        <div data-rot-stats={statsOwnRow ? "row" : "inline"}
-             style={{ display: "flex", alignItems: "center", flexWrap: "nowrap",
-                      ...(statsOwnRow ? { order: 1, flexBasis: "100%" } : { flex: "1 1 auto" }),
-                      minWidth: 0, fontFamily: MONO, fontSize: 11.5, color: t.text2 }}>
-          <Stat t={t} v={rot && agyTok ? fmtTok(rot.kpi.tokens) : "—"} k="token" title={covNote} />
-          <Stat t={t} v={rot ? String(rot.kpi.requests) : "—"} k={isAgy ? "会话" : "请求"} />
-          {!isAgy && <Stat t={t} v={rot ? fmtTok(rot.kpi.avg_tokens) : "—"} k="均/次" />}
-          <Stat t={t} v={rot ? String(rot.kpi.rotations) : "—"} k="轮换" />
-          <Stat t={t} v={rot ? dur(rot.kpi.avg_dwell) : "—"} k="驻留" />
-          {/* ★ 429 / 断流是代理才有的事件，Gemini 那一版不画（画成 0 = 说它确实没发生过）。 */}
-          {!isAgy && <Stat t={t} v={rot ? String(rot.kpi.cool_429) : "—"} k="429" c={COOL} />}
-          {!isAgy && <Stat t={t} v={rot ? String(rot.kpi.stream_err) : "—"} k="断流" c={WARN} />}
-          {/* ★ 汇总条上原有一格「Pro 保底 Nm」,用户 2026-09-07 要求去掉。
-              ⚠️ **信号本身没有删** —— 它仍在两个更合适的位置:
-                · 泳道上 Pro 号的紫色 `PRO` 徽章(哪个号是保底档,一眼可见);
-                · 轮换事件里独立的「Pro 保底」类型 + 「Plus 全部不可用 → Pro 保底接管」文案。
-              删的是顶栏那一格常驻数字,不是「Plus 池干了」这件事的可见性。
-              引擎侧 `kpi.pro_segs/pro_secs` 保留 —— 拿掉它等于把一个已经算好的事实丢掉,
-              而下次想在别处显示时又要重算。 */}
-        </div>
-
-        {busy && (
-          <span title="正在重扫（页面上现在显示的是上次的快照）"
-                style={{ fontSize: 10.5, color: t.accent, fontFamily: MONO, flexShrink: 0 }}>刷新中…</span>
-        )}
-
-        {/* 右侧三样打成**一个原子组**（用户点名图例要留在右边）。
-            ★ 不打成一组的话，flex 会把它们逐个往下换行 —— 实测「1h 6h 24h 7d」独占第二行，
-              看着像画错了。整组 `flexShrink: 0` ⇒ 让位者只可能是左边那条汇总。 */}
-        <div style={{ marginLeft: "auto", flexShrink: 0, display: "flex",
-                      alignItems: "center", gap: 12 }}>
-          <span style={{ display: "flex", gap: 12, fontSize: 10, color: t.text2 }}>
-            <Legend t={t}><span style={{ width: 13, height: 7, borderRadius: 2, background: t.accent, opacity: .85 }} />在岗</Legend>
-            {!isAgy && <Legend t={t}><span style={{ width: 6, height: 6, borderRadius: "50%", background: WARN }} />断流</Legend>}
-            {!isAgy && <Legend t={t}><span style={{ width: 8, height: 8, borderRadius: "50%", border: `2px solid ${COOL}` }} />429</Legend>}
-          </span>
-          {/* ★ 「现在 xx:xx · 当前号 X」已删（用户 2026-09-07）：两条信息在这一页都是**重复的** ——
-              时间轴右端本来就标着「现在」那条青竖线，而「当前号」在泳道上已经有「当前」徽章。
-              删掉它同时把这一行的宽度压力去掉了一大截（它是右侧最长的一项）。 */}
-          <Seg opts={WINDOWS} cur={win} on={setWin} label={winLabel} t={t} />
-        </div>
-      </div>
-
-      {/* ── 泳道时间轴（稿子 §1/§2/§3）───────────────── */}
-      <div style={{ ...card, padding: "12px 16px 10px", flexShrink: 0 }}>
-        <div style={{
-          display: "grid", gridTemplateColumns: `${NAME_W}px 1fr ${STAT_W}px`, gap: 14,
-          alignItems: "center", paddingBottom: 8, fontFamily: MONO, fontSize: 11,
-          letterSpacing: ".06em",
-          // ★★ 用 `text2` 不是 `muted`（用户 2026-09-07：「有些字体太灰了」）。
-          //   实算（深色，cardBg 底）：muted **4.55** / text2 **8.26**。muted 过得了 AA 4.5，
-          //   但 9.5px + 大写 + 字距下就是读不动 —— 而表头是**要读的内容**，不是装饰。
-          //   ★ 稿子写的 `#5b6470` 只有 **2.92**，连图形线的 3.0 都够不着，照抄就是把
-          //   本仓已经判过死刑的 `faint` 换个写法请回来。
-          //   ★ 修法是**改用三级里对的那一级**，不是新造一个色 —— 这个问题此前被
-          //   「就地留一句注释换个色」绕过两次（`.claude/rules/ui.md`），第三次才做成闸。
-          color: t.text2, textTransform: "uppercase",
-        }}>
-          <span style={{ display: "inline-flex", alignItems: "center" }}>
-            账号
-            {/* ★ 角标坐在**表头「账号」旁**（用户 2026-09-21：「现在位置不好」）：
-                下面泳道列的就是这批号、表里也是同一批，眼睛读泳道时本来就在这一列。
-                旧位置独占一行，还夹在两张卡之间的空档里。 */}
-            {dailyPop}
-          </span>
-          <div style={{ position: "relative", height: 14 }}>
-            {axis.map((a, i) => (
-              <span key={i} style={{ position: "absolute", left: `${a.left}%`, transform: "translateX(-50%)", letterSpacing: 0 }}>{a.label}</span>
-            ))}
-            {/* ★ 稿子写的是 `translateX(40%)`,但那是让它**探出容器右缘**;在真实布局里
-                量出来横向溢出 8px(harness overflow 探针报 608/600)。稿子的画布比这里宽,
-                所以那 40% 在它那儿不越界 —— 这是照抄稿子会带进来的缺陷,不是复刻不到位。 */}
-            <span style={{ position: "absolute", right: 0, color: t.accent, letterSpacing: 0 }}>现在</span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "58px 44px 1fr 74px", gap: 8, textAlign: "right" }}>
-            <span>TOKEN</span><span>{isAgy ? "会话" : "请求"}</span><span>主模型</span><span>额度</span>
-          </div>
-        </div>
-
-        <div style={{ position: "relative" }}>
-          {lanes.length === 0 && (
-            <div style={{ padding: "26px 0", textAlign: "center", color: t.muted, fontSize: 11 }}>
-              {/* ★ 三种「没数字」必须说三句不同的话 —— 合成「暂无数据」就是把「我们没看到」
-                  伪装成「确实没有」。 */}
-              {err ? `读不到 proxy/proxy.log（${err}）`
-                : !rot ? "读取中"
-                  : (cov?.in_window_lines ?? 0) === 0 ? `最近 ${winLabel(win)} 代理没有处理过请求`
-                    : "窗口内有日志，但没有可归属到账号的计费请求"}
-            </div>
-          )}
-          {lanes.map((l, li) => (
-            <div key={l.acc} style={{
-              display: "grid", gridTemplateColumns: `${NAME_W}px 1fr ${STAT_W}px`, gap: 14,
-              alignItems: "center", height: LANE_H, borderTop: `1px solid ${t.divider}`,
-              opacity: focus && focus !== l.acc ? .28 : 1, transition: "opacity .15s",
-            }}>
-              <div data-lane={l.acc}
-                   onClick={() => setFocus(focus === l.acc ? null : l.acc)}
-                   style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", minWidth: 0 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 2, background: l.color, flex: "none" }} />
-                {/* ★ `flexShrink: 0`：名字是这一行的**身份**，宁可徽章挤也不能把号名截掉。
-                    列宽已按最坏情况（名字+PRO+当前）算过，正常不会触发收缩。 */}
-                {/* ★★ 已移除的号（或改名后没被认领的旧名）画成中性色 + 一个 `title`。
-                    **只换颜色，不加徽章** —— 名字列宽写死 152px 且刻意不加省略号，
-                    多一个徽章会把名字截成 `Pr…`，而这类缺陷 harness 抓不到（DOM 文本仍完整）。
-                    它**不会被丢掉**：那些消耗/失败真的发生过，丢掉就是静默让合计变小。
-                    （零活动的退役名字已在 `rotation.py` 的数据层整条丢弃，这里只剩有活动的。） */}
-                <span title={l.retired ? "这个名字已不在账号池里（号被移除，或是改名前的旧名）——"
-                                       + "用 `codex-rotate alias <旧名> <号>` 把它并回去" : undefined}
-                      style={{ fontSize: 14.5, fontWeight: 700, fontFamily: MONO,
-                               flexShrink: 0, whiteSpace: "nowrap",
-                               color: l.retired ? t.muted : undefined }}>{l.acc}</span>
-                {/* ★ PRO 徽章:一眼看出这条泳道是**保底档**,它有流量就意味着 Plus 池当时不可用。
-                    不显示 PLUS —— 绝大多数号都是 Plus,画出来只是噪音(同卡片上 `PlanBadge` 的口径)。 */}
-                {l.plan === "pro" && (
-                  <span title="Pro 是保底档：只有 Plus 全部不可用时代理才会挑它"
-                        style={{ fontSize: 9, fontWeight: 700, color: "#8b7cf6", border: "1px solid #8b7cf655",
-                                 background: "rgba(139,124,246,.14)", padding: "1px 5px", borderRadius: 4, flexShrink: 0 }}>PRO</span>
-                )}
-                {l.current && (
-                  <span style={{ fontSize: 9.5, fontWeight: 700, color: t.accentText, background: t.accent, padding: "1px 6px", borderRadius: 4, flexShrink: 0 }}>当前</span>
-                )}
-              </div>
-
-              <div style={{ position: "relative", height: LANE_H }}>
-                <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: t.divider }} />
-                {l.segs.map((s, si) => (
-                  <div key={si}
-                       // ★ `data-seg` 是给 harness 的 `?tipseg=<n>` 用的选择器锚点。
-                       //   headless 里鼠标事件不会自己发生,而"悬浮才出现的读数"只能这样验。
-                       data-seg={`${l.acc}:${si}`}
-                       onMouseEnter={() => openTip(li, s, l.errs.filter(e => e >= s.left && e <= s.left + s.width).length)}
-                       onMouseLeave={() => setTip(null)}
-                       style={{
-                         position: "absolute", left: `${s.left}%`, width: `${s.width}%`,
-                         top: 10, height: 20, borderRadius: 4, background: l.color,
-                         opacity: s.op, cursor: "pointer", minWidth: 3,
-                       }} />
-                ))}
-                {l.errs.map((x, i) => (
-                  <div key={`e${i}`} style={{
-                    position: "absolute", left: `${x}%`, bottom: 2, width: 6, height: 6,
-                    borderRadius: "50%", background: WARN, transform: "translateX(-50%)", pointerEvents: "none",
-                  }} />
-                ))}
-                {l.cools.map((x, i) => (
-                  <div key={`c${i}`} style={{
-                    position: "absolute", left: `${x}%`, top: 2, width: 9, height: 9, borderRadius: "50%",
-                    border: `2px solid ${COOL}`, background: t.cardBg, transform: "translateX(-50%)", pointerEvents: "none",
-                  }} />
-                ))}
-              </div>
-
-              <div style={{
-                display: "grid", gridTemplateColumns: "58px 44px 1fr 74px", gap: 8,
-                alignItems: "center", textAlign: "right", fontFamily: MONO,
-              }}>
-                <span style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{agyTok ? fmtTok(l.tokens) : "—"}</span>
-                <span style={{ fontSize: 12.5, color: t.text2, fontVariantNumeric: "tabular-nums" }}>{l.requests}</span>
-                {/* ★ 模型名放不下时截省略号，全名走 title —— 模型名长度不可控
-                    （`gpt-5.3-codex-mini` 之类），为它加宽会挤掉右边的额度条。 */}
-                <span title={l.top_model ? `${l.top_model.model}（占该号已归属 token 的 ${Math.round(l.top_model.share * 100)}%）` : "该号没有归属到 token"}
-                      style={{ fontSize: 11.5, color: t.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {l.top_model ? `${l.top_model.model} ${Math.round(l.top_model.share * 100)}%` : "—"}
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-                  <div style={{ width: 34, height: 3, borderRadius: 2, background: t.divider, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${l.quota_pct ?? 0}%`, background: quotaColor(l.quota_pct, t) }} />
-                  </div>
-                  <span style={{ width: 36, fontSize: 12.5, fontWeight: 700, color: quotaColor(l.quota_pct, t), fontVariantNumeric: "tabular-nums" }}>
-                    {/* ★ 读不到额度画 `—`,**绝不画成 100%** —— 那是本仓的「不许编造满额」铁律。 */}
-                    {l.quota_pct === null ? "—" : `${Math.round(l.quota_pct)}%`}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {/* 右缘 1px 青竖线 = 现在（稿子 §1） */}
-          {lanes.length > 0 && (
-            <div style={{
-              position: "absolute", top: 0, bottom: 0, right: STAT_W + 14, width: 1,
-              background: t.accent, opacity: .7, pointerEvents: "none",
-            }} />
-          )}
-
-          {/* 悬浮明细（稿子 §2） */}
-          {tip && (
-            <div style={{
-              position: "absolute",
-              left: `calc(${NAME_W + 14}px + (100% - ${NAME_W + STAT_W + 28}px) * ${tip.xPct / 100})`,
-              top: tip.laneIdx * LANE_H + 34,
-              transform: tip.flip ? "translateX(calc(-100% - 8px))" : "translateX(8px)",
-              width: 170, background: "rgba(10,13,16,.6)", backdropFilter: "blur(6px)",
-              border: `1px solid ${t.ghostBorder}`, borderRadius: 8, padding: "7px 9px",
-              pointerEvents: "none", zIndex: 5, fontFamily: MONO,
-            }}>
-              <div style={{ fontSize: 9.5, color: "#8a93a0", marginBottom: 4 }}>{tip.range} · {tip.dur}</div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                <span style={{ color: "#c3cad3", fontWeight: 700 }}>{tip.acc}</span>
-                <span style={{ fontWeight: 700, color: t.accent }}>{agyTok ? fmtTok(tip.tokens) : ""}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
-                <span style={{ color: "#8a93a0" }}>{isAgy ? "会话" : "请求"}</span><span style={{ color: "#c3cad3" }}>{tip.requests} {isAgy ? "场" : "次"}</span>
-              </div>
-              <div style={{ marginTop: 5, paddingTop: 4, borderTop: "1px solid rgba(255,255,255,.1)" }}>
-                {tip.models.length === 0 && (
-                  // ★ 「这段没有归属到 token」不是 0 —— 请求可能失败(没有响应就没有 token 记录),
-                  //   或者那些响应没走代理。写 0 会被读成"这段白跑了"。
-                  <div style={{ fontSize: 9.5, color: "#8a93a0" }}>{agyTok ? "该时段无归属到的 token" : "窗口内没有可归属的生成"}</div>
-                )}
-                {tip.models.map((m, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9.5, marginTop: 2 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: 2, background: m.color, flexShrink: 0 }} />
-                    <span style={{ color: "#c3cad3", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.model}</span>
-                    <span style={{ marginLeft: "auto", fontWeight: 700 }}>{fmtTok(m.tokens)}</span>
-                    <span style={{ width: 34, textAlign: "right", color: "#6b7480" }}>{m.pct}%</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 5, paddingTop: 4, borderTop: "1px solid rgba(255,255,255,.1)" }}>
-                <span style={{ color: "#8a93a0" }}>断流</span><span style={{ color: WARN }}>{tip.errs} 次</span>
-              </div>
-              <div style={{ marginTop: 3, fontSize: 9.5, color: t.accent }}>切入 · {tip.why}</div>
-            </div>
-          )}
-        </div>
-
-        {/* ★ 两行说明按用户 2026-09-07 要求去掉（操作提示自解释，脚注太吵）。
-            ⚠️ 但**覆盖率这个事实不能跟着消失** —— 合计 token 只涵盖走过代理的响应，
-            直连 `codex` 的请求永远进不来。去掉的是那一行字，不是那个真相：
-            它改挂到 KPI 的「合计 token（已归属）」标签上（见下方 `covNote`），
-            **不占一行、也不用把下界说成总量**。 */}
-      </div>
-
-      
-
-      {/* ── 下半区双栏（稿子 §4）─────────────────────── */}
-      {/* ★★ 两栏**等高 + 各自滚动**（用户 2026-09-07：「等长…信息过多就改成滚动滑块」）。
-          ★ 高度写在**外层网格**上而不是各写一个 minHeight：两边各写一个数迟早只改一边，
-            而"两栏不等高"是肉眼一看就出戏、却没有任何检查会报错的那类。
-          ★ 列表用 `flex:1 + minHeight:0 + overflowY:auto`，标题行 `flexShrink:0` 钉住 ——
-            少了 `minHeight:0`，flex 子项的默认 `min-height:auto` 会让它撑破容器而**不滚动**
-            （本仓菜单栏那次「裁切比溢出更糟」同一个坑）。 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12,
-                    flex: "1 1 0", minHeight: PANEL_MIN }}>
-        <div style={{ ...card, padding: "12px 16px", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 14.5, fontWeight: 700 }}>轮换事件</span>
-            <span style={{ fontSize: 11, color: t.text2, fontFamily: MONO }}>
-              {evs.length} 条 · 新→旧{focus && ` · 仅 ${focus}`}
-            </span>
-          </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          {evs.length === 0 && <div style={{ fontSize: 12, color: t.text2, padding: "12px 0" }}>无轮换事件</div>}
-          {/* ★ 不再 `slice(0, 9)`：有了滚动条就没有理由把其余的**丢掉不给看** ——
-              截断会让「37 条」这个计数和实际能看到的对不上。 */}
-          {evs.map((e, i) => {
-            const st = EV_STYLE[e.type] ?? EV_STYLE.probe;
+    // 页面根不滚（一屏规则）：记录卡在自己的容器里滚。
+    <div data-rot-page className={intro ? "tk-intro" : undefined}
+         style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 12, whiteSpace: "nowrap",
+                  padding: `0 ${L < 2 ? 6 : 0}px 0` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, height: 34, flexShrink: 0, minWidth: 0 }}>
+        <h1 style={{ margin: 0, fontSize: titleSize(W), fontWeight: 700, flexShrink: 0 }}>代理轮换</h1>
+        <div data-rot-plat role="group" aria-label="平台" style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {PLATS.map((x) => {
+            const on = plat === x.k;
+            const n = (x.k === "agy" ? pools?.agy.length : pools?.codex.length) || null;
+            const showName = !n860 || on;
             return (
-              <div key={i} style={{
-                display: "grid", gridTemplateColumns: "44px 64px 1fr", gap: 10, alignItems: "center",
-                padding: "7px 0", borderTop: `1px solid ${t.divider}`, fontFamily: MONO, fontSize: 12,
-              }}>
-                <span style={{ color: t.muted, fontVariantNumeric: "tabular-nums" }}>{clock(e.t)}</span>
-                <span style={{ fontSize: 10, fontWeight: 700, textAlign: "center", padding: "3px 0", borderRadius: 999, color: st.color, background: st.bg }}>{st.label}</span>
-                <span title={e.text} style={{ color: t.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{e.text}</span>
-              </div>
+              <button key={x.k} type="button" data-rot-plat-chip={x.k} aria-pressed={on} title={x.name}
+                      onMouseDown={(e) => { if (e.button === 0 && !on) setPlat(x.k); }}
+                      onClick={(e) => { if (e.detail === 0 && !on) setPlat(x.k); }}
+                      style={{ height: 26, padding: "0 10px", boxSizing: "border-box", borderRadius: 13,
+                               border: `1px solid ${on ? `${x.color}99` : p.idleBorder}`, background: on ? `${x.color}24` : "transparent",
+                               color: on ? p.text : p.text2, fontSize: 12.5, fontWeight: 500, fontFamily: "inherit",
+                               display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer",
+                               transition: "background .2s ease-out, border-color .2s ease-out, color .2s ease-out" }}>
+                <PLogo k={x.logo} color={x.color} size={14} isDark={t.isDark} />
+                {showName && <span>{x.name}</span>}
+                {n != null && <span style={{ fontFamily: MONO, fontSize: 11, color: p.label }}>{n}</span>}
+              </button>
             );
           })}
-          </div>
         </div>
-
-        <div style={{ ...card, padding: "12px 16px", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 14.5, fontWeight: 700 }}>运行日志</span>
-            <span style={{ fontSize: 11, color: t.text2, fontFamily: MONO }}>{logs.length} 条</span>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 4, fontFamily: MONO, fontSize: 10.5 }}>
-              {["all", "refresh", "switch", "cool"].map(f => (
-                <span key={f} onClick={() => setFilter(f)} style={{
-                  padding: "2px 8px", borderRadius: 999, cursor: "pointer",
-                  color: filter === f ? t.accentText : t.text2,
-                  background: filter === f ? t.accent : "transparent",
-                  border: filter === f ? `1px solid ${t.accent}` : `1px solid ${t.ghostBorder}`,
-                  fontWeight: filter === f ? 700 : 400,
-                }}>{f === "all" ? "全部" : f}</span>
-              ))}
-            </div>
-          </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          {logs.length === 0 && <div style={{ fontSize: 12, color: t.text2, padding: "12px 0" }}>无匹配日志</div>}
-          {logs.map((l, i) => (
-            <div key={i} style={{
-              display: "grid", gridTemplateColumns: "50px 62px 1fr", gap: 10, padding: "6px 0",
-              borderTop: `1px solid ${t.divider}`, fontFamily: MONO, fontSize: 11.5,
-            }}>
-              {/* ★ `~` = 时间是**推出来的**（该源的日志只有 HH:MM:SS，没有日期，
-                    见 `parseServiceLogs`）；`—` = 这一行**真的没有时间**（dawnprobe.log）。
-                    推断不许伪装成实测，"没有"也不许伪装成 0 点。 */}
-              <span title={l.t === null ? "这一行日志没有时间戳"
-                            : l.inferred ? "该源的日志只有时分秒、没有日期，这个日期是按「时间倒退＝跨日」推出来的"
-                              : undefined}
-                    style={{ color: t.muted, fontVariantNumeric: "tabular-nums" }}>
-                {l.t === null ? "—" : (l.inferred ? "~" : "") + clock(l.t)}</span>
-              {/* ★ 来源。多源合流之后，不标来源就分不出「代理没换号」和「quotad 没扫到」——
-                  而这两件事的下一步动作完全不同。`[src …]` 前缀已在解析时剥掉，改由这一列承担。 */}
-              <span title={`来源：${l.src}`}
-                    style={{ color: t.muted, fontSize: 10.5, whiteSpace: "nowrap",
-                             overflow: "hidden", textOverflow: "ellipsis" }}>{l.src}</span>
-              <span title={l.text} style={{
-                // ★ `✗` 是 agy 那侧统一的失败标记（探针/健康/切号都用它）。
-                //   失败行和成功行同色，等于把"成功与否"藏起来 —— 用户点名要看的就是这个。
-                color: l.text.includes("✗") ? "#E0524D"
-                  : l.text.includes("cooled") ? COOL
-                    : l.text.includes("stream err") ? WARN
-                      : l.text.includes("switch") ? t.accent : t.text2,
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              }}>{l.text}</span>
-            </div>
-          ))}
-          </div>
+        <span style={{ flex: 1 }} />
+        {err && rot == null && <span title={err} style={{ fontSize: 12, color: p.down, flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>✗ 读取失败</span>}
+        <RefreshAgo t={t} generatedAt={rot?.generated_at ?? null} L={L} busy={busy} onRefresh={() => { void load(win); }}
+                    hint={isAgy ? "点击重读 agy 日志（只读本地文件）" : "点击重新扫描 proxy.log（只读本地文件，不消耗额度）"} />
+        <div data-rot-win role="group" aria-label="时间范围"
+             style={{ display: "inline-flex", padding: 3, borderRadius: 10, gap: 2, flexShrink: 0,
+                      border: `1px solid ${t.isDark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.12)"}`, background: p.panel }}>
+          {WINDOWS.map((h) => {
+            const on = win === h;
+            return (
+              <button key={h} type="button" data-win={h} aria-pressed={on}
+                      onMouseDown={(e) => { if (e.button === 0 && !on) setWin(h); }}
+                      onClick={(e) => { if (e.detail === 0 && !on) setWin(h); }}
+                      style={{ height: 28, padding: `0 ${lay.segPad}px`, borderRadius: 7, border: 0, fontSize: 13, cursor: "pointer",
+                               fontFamily: "inherit", background: on ? p.accent : "transparent", color: on ? p.accentOn : p.text2 }}>
+                {winLabel(h)}
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {/* ★ 7 格任何宽度都是一行（稿 §1.3）；原来的单行汇总条 `Stat` 与「整条下移」机制随之删除（不是删功能）。 */}
+      <div data-rot-stats style={{ flexShrink: 0 }}>
+        <KpiGrid t={t} items={kpis} borderColor={p.border} />
+      </div>
+
+      {long
+        ? <RotTod key={`${plat}:${win}`} t={t} rot={rot} lanes={lanes} lay={lay} color={pc.color} num={num}
+                  focus={focus} onFocus={setFocus} acctExtra={dailyPop} empty={empty} isAgy={isAgy} />
+        : <RotTimeline t={t} rot={rot} lanes={lanes} lay={lay} hours={win} color={pc.color} num={num}
+                       agyTok={agyTok} isAgy={isAgy} tps={tps} focus={focus} onFocus={setFocus}
+                       onZoom={(h) => setWin(h as WinH)} empty={empty} acctExtra={dailyPop} />}
+
+      <RotRecords key={`${plat}:${win}:${focus ?? ""}`} t={t} recs={recs} logs={logs} lay={lay} num={num} isAgy={isAgy}
+                  focus={focus} long={long} />
     </div>
   );
-}
-
-/** 汇总条上的一格：`值 + 标签`，右侧一条发丝竖线。★ 定义在**模块作用域** ——
- *  写在页面 render 里每次渲染都是新组件类型，React 会整组卸载重建（本仓 `Seg` 那条）。 */
-function Stat({ v, k, c, title, last, t }: {
-  v: string; k: string; c?: string; title?: string; last?: boolean; t: Theme;
-}): React.ReactElement {
-  return (
-    <span title={title} style={{
-      padding: "0 11px", whiteSpace: "nowrap",
-      borderRight: last ? "none" : `1px solid ${t.divider}`,
-    }}>
-      <b style={{ color: c ?? t.text, fontWeight: 700, fontSize: 13,
-                  fontVariantNumeric: "tabular-nums" }}>{v}</b>
-      <span style={{ color: c ?? t.text2, marginLeft: 5 }}>{k}</span>
-    </span>
-  );
-}
-
-function Legend({ children, t }: { children: React.ReactNode; t: Theme }): React.ReactElement {
-  return <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: t.text2 }}>{children}</span>;
 }

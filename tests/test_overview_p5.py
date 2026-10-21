@@ -262,7 +262,17 @@ class RenderedInteractions(unittest.TestCase):
         """计费探针的在途锁（四方评审 codex#3 / Opus M1）：同一个号在途时，卡上再点、其它动作熄掉转圈之后再点、
         ⌘K 再发，都不许发第二次；全池在途时单号也不发。"""
         pg = self.page(q="&probe_delay=6000")
-        nxt = pg.evaluate("() => { const c = [...document.querySelectorAll('[data-cards-grid] > [data-aid]')].find(c => !c.querySelector('[data-ov-ab=inuse]')); return c && c.dataset.aid; }")
+        # ★ 选 ⌘K「探针 · 下一个号（X）」打的那个号（`board.next`）。原来取「第一张不在用的卡」，两者只在夹具
+        #   某个时刻碰巧是同一个号 —— 夹具的额度窗口按真实时间走，过了某个钟点就分开，⌘K 那一下打到另一个号上，
+        #   闸就红了（2026-10-22 06 点实测：卡 5530 vs ⌘K qq55）。
+        pg.keyboard.press("Meta+k"); pg.keyboard.type("探针"); pg.wait_for_timeout(200)
+        lab = pg.locator("[data-cmdk-item=probe]").inner_text() if pg.locator("[data-cmdk-item=probe]").count() else ""
+        pg.keyboard.press("Escape"); pg.wait_for_timeout(200)
+        node = lab.split("（")[-1].split("）")[0] if "（" in lab else ""
+        nxt = pg.evaluate("""(n) => { const c = [...document.querySelectorAll('[data-cards-grid] > [data-aid]')]
+            .find(c => c.innerText.split('\\n').map(x => x.trim()).includes(n));
+            return c && c.dataset.aid; }""", node)
+        self.assertTrue(nxt, "⌘K 里没有「探针 · 下一个号」，或那个号没有卡 —— 打谁无从核对（%r）" % lab)
         card = pg.locator(f"[data-cards-grid] > [data-aid='{nxt}']")
         card.hover(); card.locator("[data-ov-ab=probe]").click()
         pg.wait_for_timeout(1700)                                    # 过了 1.5 s 的连点窗口

@@ -44,12 +44,14 @@ export function Stat({ t, k, v, sub, dim }: {
 //   见 `components/RelayUsage.tsx`）。**不留骨架** —— 一份没人调用的图表组件会让
 //   下一个人以为还有第二条渲染路径。要恢复请从 git 历史取。
 
-export function RelayForm({ t, editing, setEditing, onSave, acting }: {
+export function RelayForm({ t, editing, setEditing, onSave, acting, groups }: {
   t: Theme;
   editing: Partial<RelayRow> | null;
   setEditing: (v: Partial<RelayRow> | null) => void;
   onSave: (p: unknown) => Promise<unknown>;
   acting: boolean;
+  /** 已有的平台名（AICoop P8 多账户）：同一平台的第二把 key 填同一个平台名，就落进同一个节点。 */
+  groups?: string[];
 }): React.ReactElement {
   const card = relayCard(t);
   const btn = relayBtn(t);
@@ -72,7 +74,7 @@ export function RelayForm({ t, editing, setEditing, onSave, acting }: {
     if (editing) {
       setF({
         id: editing.id ?? "", label: editing.label ?? "",
-        base_url: editing.base_url ?? "", key: "",
+        base_url: editing.base_url ?? "", key: "", group: editing.group ?? "",
       });
     }
   }, [editing]);
@@ -94,6 +96,10 @@ export function RelayForm({ t, editing, setEditing, onSave, acting }: {
                disabled={!!editing?.id} />
         <label style={{ fontSize: 11.5, color: t.muted }}>显示名</label>
         <input data-f="label" style={input} value={f.label ?? ""} onChange={set("label")} placeholder="TokenDun" />
+        <label style={{ fontSize: 11.5, color: t.muted }}>平台</label>
+        <input data-f="group" style={input} value={f.group ?? ""} onChange={set("group")} list="relay-groups"
+               placeholder="可选 · 同一平台的多把 key 填同一个名字（留空 = 按域名自动归组）" />
+        <datalist id="relay-groups">{(groups ?? []).map((g) => <option key={g} value={g} />)}</datalist>
         <label style={{ fontSize: 11.5, color: t.muted }}>base_url</label>
         <input data-f="base_url" style={input} value={f.base_url ?? ""} onChange={set("base_url")}
                placeholder="https://api.example.com/v1（只到 /v1，不要带 /chat/completions）" />

@@ -1,0 +1,8 @@
+/* 中转站路由图（AICoop P8）：当前出口那条连线流动。减弱动态效果时停掉流动、去掉位移过渡（只留瞬时切换）。 */
+@keyframes rlFlow { to { stroke-dashoffset: -24; } }
+.rl-flow { animation: rlFlow .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .rl-flow { animation: none; }
+  /* ★ 只去掉过渡：卡片的纵向位置就在 transform 里，`transform: none` 会把每张卡都钉回顶上（评审 codex 阶段 5）。 */
+  [data-relay-page] [data-route-hover] { transition: opacity .12s linear !important; }
+}

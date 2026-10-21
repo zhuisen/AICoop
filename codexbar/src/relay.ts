@@ -39,6 +39,8 @@ export interface RelayRow {
   model: string | null;
   key_fp: string;
   added_at?: string;
+  /** 平台分组（AICoop P8）。`null` / 缺省 = 按 base_url 的 host 自动成组。 */
+  group?: string | null;
 }
 
 /** `/usage` 归一化后的形状。**读不到的字段一律 `null`，绝不是 0。** */
@@ -75,6 +77,8 @@ export interface RelayUsage {
     cost: number; actual_cost: number;
   }>;
   runway: { days: number | null; per_active_day: number | null; sample_days: number; reason: string | null };
+  /** 取数确实看过的日期区间（`monitor.merge_covered`）。旧快照没有这个键 ⇒ 判不了「本月是否整月」。 */
+  covered?: [string, string][] | null;
   usage_path: string;
   fetched_at: number;
 }
@@ -159,7 +163,8 @@ export function relayRouteNote(r: RouteStatus): { tone: "ok" | "warn" | "bad"; t
 /** 金额显示。★ `null` 显 `—` 而不是 `$0.00` —— 「读不到」和「真的是 0」是两件事。 */
 export function money(v: number | null | undefined, unit: string | null | undefined): string {
   if (v === null || v === undefined) return "—";
-  const n = v.toFixed(v < 1 ? 4 : 2);
+  // 小于 1 的金额留 4 位（$0.0863 这种每天几分钱的实扣）；读到的 0 就是 $0.00，`$0.0000` 读着像精度问题。
+  const n = v.toFixed(v !== 0 && Math.abs(v) < 1 ? 4 : 2);
   if (unit === "USD") return `$${n}`;
   // ★★ **币种读不到时绝不默认 `$`**（2026-09-10 修）。`monitor.py` 明写着
   //    「读不到就 None，不许默认 USD —— 国内中转站不少按 CNY 或"额度"计，

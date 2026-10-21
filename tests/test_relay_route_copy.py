@@ -310,22 +310,23 @@ class OnlyTheChargedAmountIsShown(unittest.TestCase):
 
 
 class TheKeyIsNeverRenderedInFull(unittest.TestCase):
-    # 列表在「总览」的 RelaySection；输入框在共用的 RelayBits。
-    PAGE = (ROOT / "codexbar" / "src" / "components" / "RelaySection.tsx").read_text(encoding="utf-8")
+    # AICoop P8（2026-10-22）：账户表在 `relay/RelayDetail.tsx`，路由图节点在 `relay/RouteMap.tsx`；输入框在共用的 RelayBits。
+    PAGE = (ROOT / "codexbar" / "src" / "components" / "relay" / "RelayDetail.tsx").read_text(encoding="utf-8")
     FORM = (ROOT / "codexbar" / "src" / "components" / "relay" / "RelayBits.tsx").read_text(encoding="utf-8")
 
     def test_the_list_shows_only_the_fingerprint(self):
         """★ 列表里绝不出现完整 key。
 
-        ⚠️ 2026-09-10 起列表在 `RelayTable.tsx`（`RelaySection` 改成表格版式），
+        ⚠️ 2026-10-22 起列表在 `RelayDetail.tsx` 的账户表（P8；之前是 `RelayTable.tsx`），
            而且行里只画指纹的**可读前缀**（`sk-73a1…`），括号里的 sha256 前 12 位
            进 `title` —— 它的用途是跨机器比对，不是一眼认人。
         """
-        table = (ROOT / "codexbar" / "src" / "components" / "relay"
-                 / "RelayTable.tsx").read_text(encoding="utf-8")
-        self.assertIn("key_fp", table)
-        self.assertNotIn("{r.key}", table, "列表里出现了完整 key")
-        self.assertNotIn("r.key}", table.replace("r.key_fp}", ""), "列表里出现了完整 key")
+        node = (ROOT / "codexbar" / "src" / "components" / "relay" / "RouteMap.tsx").read_text(encoding="utf-8")
+        for table in (self.PAGE, node):
+            self.assertNotIn("{r.key}", table, "列表里出现了完整 key")
+            self.assertNotIn("r.key}", table.replace("r.key_fp}", ""), "列表里出现了完整 key")
+            self.assertNotIn("r?.key}", table, "列表里出现了完整 key")
+        self.assertIn('(r.key_fp ?? "").split(" (")[0]', self.PAGE, "★ 账户表没有只出指纹前缀")
 
     def test_the_key_input_is_a_password_field_and_starts_empty(self):
         """★★ 绝不把 `key_fp` 回填进 key 框 —— 那串指纹**非空**、会通过校验、

@@ -222,6 +222,9 @@
 .ov-chip-none { background: transparent; border-color: var(--line2); color: var(--tx3); cursor: default; }
 .ov-chip-none:hover { box-shadow: none; }
 .ov-chip .ov-chip-short { display: none; }
+/* ★ 重置卡只剩几小时时 chip 写「剩 20小时」，比「剩 1天」宽 ~40px，带「· 直连」的那张卡底栏被省略（2026-10-22 实测 860/1000/1200 三档都裁）。
+   让「· 直连」先让位：悬停时操作组里有「直连」徽章，到期日的 title 也写着。 */
+[data-ov-foot]:has(.ov-chip-hrs) .ov-direct { display: none; }
 @container (width < 226px) { .ov-chip-warn .ov-chip-word, .ov-chip-open .ov-chip-word { display: none; } }
 @container (width < 250px) { .ov-chip-hrs .ov-chip-word { display: none; } }
 .ov-card:hover .ov-chip .ov-chip-long, .ov-card.ov-hov .ov-chip .ov-chip-long, .ov-card:focus-within .ov-chip .ov-chip-long,

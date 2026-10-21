@@ -22,5 +22,5 @@
 @media (prefers-reduced-motion: reduce) {
   .tk-dir, .tk-intro .tk-entk, .tk-intro .tk-entc { animation: none !important; }
   /* 减弱动态效果：位移类过渡（浮层滑动、条宽、行高）一并关掉，只留瞬时切换（评审）。 */
-  [data-token-page] *, [data-token-detail] * { transition: none !important; }
+  [data-token-page] *, [data-token-detail] *, [data-rot-page] * { transition: none !important; }
 }

@@ -282,6 +282,8 @@ def _upsert_locked(relay):
         # 伪装成「已知是这个」。
         "usage_path": relay.get("usage_path"),
         "model": (relay.get("model") or "").strip() or None,
+        # 平台分组（AICoop P8：同一平台的多把 key = 一个平台节点下的几个账户）。None = 按 base_url 的 host 自动成组。
+        "group": (relay.get("group") or "").strip() or None,
     }
     olds = [r for r in cfg["relays"] if r.get("id") == rid]
     # ★★ **key 的"沿用旧值"也必须在锁内。** 调用方原来在锁外 `get()` 再 `upsert()`,
@@ -289,11 +291,11 @@ def _upsert_locked(relay):
     #    `_keep_key` 由调用方置位:它只表达"这次没给新 key",具体沿用哪个由这里决定。
     if relay.get("_keep_key") and olds:
         row["key"] = olds[0].get("key") or row["key"]
-    # ★★ **payload 里缺席的字段沿用旧值。** 前端编辑表单只送 id/label/base_url/key/model,
+    # ★★ **payload 里缺席的字段沿用旧值。** 前端编辑表单只送 id/label/base_url/key（+ group）,
     #    整行重建会把 `usage_path` 清回 None（下次白跑 3 个探测）、把 CLI 里停用的中转站
     #    **静默重新启用** —— 后者是"用户明确关掉的东西自己回来了",最不该发生的一类。
     if olds:
-        for k in ("usage_path", "enabled"):
+        for k in ("usage_path", "enabled", "group"):
             if k not in relay:
                 row[k] = olds[0].get(k, row[k])
     row["added_at"] = olds[0].get("added_at") if olds else time.strftime("%Y-%m-%dT%H:%M:%S%z")

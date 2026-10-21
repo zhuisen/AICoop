@@ -231,15 +231,18 @@ class RetiredNamesDoNotPoseAsAccounts(unittest.TestCase):
     def test_the_ui_only_recolours_and_never_adds_a_badge(self):
         """★★ 泳道名字列宽写死 152px 且**刻意不加省略号**，多一个徽章会把名字截成 `Pr…`,
         而这类缺陷 harness 抓不到（`textOverflow` 只改渲染，DOM 文本仍完整）。"""
-        ts = (ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx").read_text(encoding="utf-8")
+        # AICoop P7：泳道名字在 `components/rot/RotTimeline.tsx`。
+        ts = (ROOT / "codexbar" / "src" / "components" / "rot" / "RotTimeline.tsx").read_text(encoding="utf-8")
         # ⚠️ 第一版断言的是**字符串** `color:`，而把条件删成 `color: undefined` 之后
         #    那个字符串还在 ⇒ 闸照样绿（变异工具当场拦下）。判据必须打在**绑定**上：
         #    颜色是不是由 `retired` 决定，而不是"这行里出现过 color 这个词"。
         self.assertRegex(ts, r"color:\s*l\.retired\s*\?",
                          "★ 名字颜色不再由 retired 决定 —— 这个状态在界面上就不存在了")
-        i = ts.index("color: l.retired")
-        seg = ts[max(0, i - 400):i + 200]
-        self.assertNotIn("borderRadius", seg, "★ 加了徽章 —— 名字列会被挤到截断")
+        # AICoop P7 起名字后面本来就有「当前 / 冷却中 / PRO」标签（可收缩，名字不收缩）。
+        # 判据改成：退役这个状态**不产生标签** —— 标签表里不许出现 retired。
+        i = ts.index("const tags = (l: Lane) =>")
+        body = ts[i:ts.index("return out;", i)]
+        self.assertNotIn("retired", body, "★ 给退役名加了标签 —— 名字列会被挤")
 
 
 def _store(slots):

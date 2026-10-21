@@ -91,6 +91,9 @@ STUB = """
     //   `?ovhover=<序号|aid>` 把那张卡钉在悬停态（headless 里 JS 事件不激活 `:hover`，见 verification.md）·
     //   `?ovoff=1` 已停用 / 失效那两条折叠条默认展开。
     if (p.get('ovplat')) localStorage.setItem('codexbar_provider', p.get('ovplat'));
+    // 代理轮换页的时间档 / 平台（`?rotwin=168` 直开账号 × 时段；`?rotplat=agy` 直开 Gemini）。不给就清掉，默认 24h / Codex 恒定。
+    if (p.get('rotwin')) localStorage.setItem('codexbar_rot_win', p.get('rotwin')); else localStorage.removeItem('codexbar_rot_win');
+    if (p.get('rotplat')) localStorage.setItem('codexbar_rot_plat', p.get('rotplat')); else localStorage.removeItem('codexbar_rot_plat');
     if (p.get('ovhover') != null) localStorage.setItem('codexbar_ov_hover', p.get('ovhover'));
     else localStorage.removeItem('codexbar_ov_hover');
     if (p.get('ovoff') === '1') localStorage.setItem('codexbar_ov_stripopen', '1');
@@ -170,6 +173,11 @@ STUB = """
       for (var k = 1; k <= 9; k++) { ANON['plus' + k] = '号' + String.fromCharCode(64 + k); ANON['pro' + k] = '号P' + k; }
     }
   })();
+  // `?rotname=<名>`：把轮换夹具里的 Pro1 换成一个长名字 —— 名字列最坏情况（长名 + 当前 + PRO）要能复现。
+  function rotNamed(v) {
+    var nm = p.get('rotname');
+    return nm && v ? JSON.parse(JSON.stringify(v).split('"Pro1"').join(JSON.stringify(nm))) : v;
+  }
   function anonDeep(v, map) {
     if (p.get('anon') !== '1' || v == null) return v;
     var txt = JSON.stringify(v);
@@ -511,6 +519,8 @@ STUB = """
     var C = { plus5: '#4d9fff', plus4: '#2dd4bf', Pro1: '#8b7cf6', plus7: '#27B26B',
               plus6: '#E0A21C', plus3: '#E0784F' };
     var Q = { plus5: 100, plus4: 100, Pro1: 100, plus7: 98, plus6: 100, plus3: 0 };
+    // ★ P7 右列是 **5h 窗口**剩余（不是最紧窗口）：Pro 没有 5h ⇒ null，画「—」不画满。三档色各出现一次（<10 / <50 / ≥50）。
+    var Q5 = { plus5: 82, plus4: 44, Pro1: null, plus7: 96, plus6: 61, plus3: 7 };
     return Object.keys(by).map(function (k) {
       var a = by[k], top = null;
       Object.keys(a.models).forEach(function (m) {
@@ -518,7 +528,10 @@ STUB = """
       return { acc: k, plan: k.toLowerCase().indexOf('pro') === 0 ? 'pro' : 'plus',
                color: C[k], tokens: a.tokens, requests: a.requests,
                top_model: top ? { model: top[0], share: top[1] / a.tokens } : null,
-               quota_pct: Q[k] === undefined ? null : Q[k] };
+               quota_pct: Q[k] === undefined ? null : Q[k],
+               quota_5h: Q5[k] === undefined ? null : Q5[k],
+               // ★ plus3 此刻仍在冷却（`冷却中` 标签 + 斜纹块的终点用真的 `cooling_until`）。
+               cooling_until: k === 'plus3' ? _NOW + 40 * 60 : null };
     }).sort(function (x, y) { return y.tokens - x.tokens; });
   }
   function _rotEvents() {
@@ -527,7 +540,9 @@ STUB = """
                         pro_fallback: 'Plus 全部不可用 → Pro 保底接管' };
     for (var i = 1; i < ROT_SEGS.length; i++) {
       var s = ROT_SEGS[i], p = ROT_SEGS[i - 1], is429 = s.enter_reason === 'cool_429';
-      var ty = s.enter_reason === 'pro_fallback' ? 'pro_fallback' : (is429 ? 'failover' : 'switch');
+      // ★ 形状同 `rotation.py::_events`：Pro 保底是换号的**原因**，`type` 仍是 switch；同号重入不算换号。
+      if (p.acc === s.acc) continue;
+      var ty = is429 ? 'failover' : 'switch';
       out.push({ t: s.start, type: ty, from: p.acc, to: s.acc,
                  reason: s.enter_reason, accs: [p.acc, s.acc],
                  text: p.acc + ' → ' + s.acc + ' · ' + R[s.enter_reason] + ' · 上号 ' +
@@ -543,6 +558,9 @@ STUB = """
   }
   var ROT_LOG = [
     { t: _NOW - 60, text: '[quotad] activity → plus4:HTTP 200 · 1.9M tok' },
+    // ★ 最新一条记录（plus3 → plus4，48 分钟前）前后 90 s 内的原文 —— 展开日志默认展开它，没有这几行就验不到「对应那一行用平台色」。
+    { t: _NOW - 48 * 60 + 3, text: '429 → cooled [plus3], failing over' },
+    { t: _NOW - 48 * 60 - 40, text: 'stream err [plus3]: IncompleteRead(2280 bytes read)' },
     { t: _NOW - 2600, text: "headers x-codex 头集合变化 -['x-codex-turn-state']" },
     { t: _NOW - 3100, text: 'cooled 429 → cooled [plus7], failing over' },
     { t: _NOW - 3300, text: '[quotad] window reset crossed → sweep now' },
@@ -597,6 +615,45 @@ STUB = """
     };
     for (var k in o) base[k] = o[k];
     return base;
+  }
+  // ★ 7d / 14d / 30d 夹具（账号 × 时段）：每天固定几段，晚上 20–23 点最密 —— 「常用时段」与结论行要算得出确定值。
+  function _rotLong(hours) {
+    var days = Math.round(hours / 24), segs = [], marks = [], st0 = _NOW - hours * 3600;
+    var day0 = new Date(st0 * 1000); day0.setHours(0, 0, 0, 0);
+    var PLAN = [['plus5', 9, 11], ['plus4', 14, 15.5], ['plus7', 20.5, 23.5], ['plus6', 1, 2], ['Pro1', 16, 16.5]];
+    for (var d = 0; d <= days; d++) {
+      PLAN.forEach(function (q, j) {
+        if (q[0] === 'Pro1' && d % 3) return;
+        if (q[0] === 'plus6' && d % 2) return;
+        var b = day0.getTime() / 1000 + d * 86400, s0 = b + q[1] * 3600, e0 = b + q[2] * 3600;
+        if (e0 <= st0 || s0 >= _NOW) return;
+        segs.push({ acc: q[0], start: Math.max(s0, st0), end: Math.min(e0, _NOW), requests: 20 + j, tokens: (30 + j * 7) * 1e6,
+                    by_model: _M(20e6, 8e6, 2e6), enter_reason: 'quota_rotate', current: false });
+        if (q[0] === 'plus7' && s0 + 3600 < _NOW && s0 + 3600 > st0) marks.push({ acc: 'plus7', t: s0 + 3600, kind: 'stream_err' });
+        if (q[0] === 'plus4' && d % 2 === 0 && s0 + 1200 < _NOW && s0 + 1200 > st0) marks.push({ acc: 'plus4', t: s0 + 1200, kind: 'stream_err' });
+      });
+    }
+    segs.sort(function (a, b) { return a.start - b.start; });
+    if (segs.length) segs[segs.length - 1].current = true;
+    var evs = [];
+    for (var i = 1; i < segs.length; i++) {
+      if (segs[i].acc === segs[i - 1].acc) continue;
+      evs.push({ t: segs[i].start, type: 'switch', from: segs[i - 1].acc, to: segs[i].acc, reason: 'quota_rotate',
+                 accs: [segs[i - 1].acc, segs[i].acc],
+                 text: segs[i - 1].acc + ' → ' + segs[i].acc + ' · 额度轮换 · 上号 ' + Math.round((segs[i - 1].end - segs[i - 1].start) / 60) + 'm / 30.0M / 20 次' });
+    }
+    marks.forEach(function (m) { evs.push({ t: m.t, type: 'stream_err', from: m.acc, to: null, reason: 'stream_err', accs: [m.acc],
+                                            text: 'stream err [' + m.acc + '] · 已 200 后断流,**已计费**' }); });
+    evs.sort(function (a, b) { return b.t - a.t; });
+    var by = {};
+    segs.forEach(function (x) { var a = by[x.acc] || (by[x.acc] = { t: 0, r: 0 }); a.t += x.tokens; a.r += x.requests; });
+    var accs = _rotAccounts().filter(function (a) { return by[a.acc]; }).map(function (a) {
+      var y = {}; for (var k in a) y[k] = a[k]; y.tokens = by[a.acc].t; y.requests = by[a.acc].r; y.cooling_until = null; return y; });
+    var tok = segs.reduce(function (s1, x) { return s1 + x.tokens; }, 0), req = segs.reduce(function (s1, x) { return s1 + x.requests; }, 0);
+    return _rot({ window: { start: st0, end: _NOW, hours: hours }, segments: segs, markers: marks, events: evs, accounts: accs,
+                  kpi: { tokens: tok, requests: req, avg_tokens: tok / Math.max(1, req), rotations: evs.filter(function (e) { return e.type === 'switch'; }).length,
+                         avg_dwell: segs.reduce(function (s1, x) { return s1 + x.end - x.start; }, 0) / Math.max(1, segs.length),
+                         cool_429: 0, stream_err: marks.length, pro_segs: 0, pro_secs: 0 } });
   }
   var ROT = {
     ok: _rot({}),
@@ -673,6 +730,7 @@ STUB = """
   })();
 
   var relayCalls = [];
+  window.__relayCalls = relayCalls;   // 渲染闸要数「真发了几次 remove」（只有 sub+arg，没有 payload）
   var agyPushed = false;
 
 // ── 中转站（relay）夹具 ──────────────────────────────────────────────────────
@@ -681,6 +739,12 @@ STUB = """
 //   本仓已经栽过三次「不打桩 ⇒ 落 default 返 null ⇒ 页面画空 ⇒ 假绿」。
 // ★ `cost` 与 `actual_cost` 用**真实的两个数**（0.36 / 0.0863,差 4.2 倍）——
 //   夹具里让它们相等的话,"两列合并成一列"的实现也能绿。
+// ★ 中转站的 `daily.date` 是**本机自然日**（`monitor.py` 用 localtime 判今天，前端 `todayOf` 同口径）。
+//   夹具原来用 `toISOString()`（UTC）：新加坡 00:00–08:00 之间「今天」那一行变成昨天，
+//   默认夹具就画出「今天的按模型明细没取到」（评审 gemini 阶段 5）。
+function localYmd(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 var RELAY_USAGE_OK = {
   balance: 69.88, unit: 'USD', plan: '钱包余额', valid: true, mode: 'unrestricted',
   today: { cost: 0.36, actual_cost: 0.0863, requests: 1, total_tokens: 39513 },
@@ -697,7 +761,7 @@ var RELAY_USAGE_OK = {
     var out = [];
     for (var k = 19; k >= 0; k--) {
       var d = new Date(Date.now() - k * 86400000);
-      var date = d.toISOString().slice(0, 10);
+      var date = localYmd(d);
       var old = k >= 15;                       // 最早 5 天
       // ★★ **每天必须不一样。** 各天相同的话走势线画出来是一条直线,
       //    而"画的是这条序列"与"画的是一个常数"**在图上完全一样** —— 那条闸是空的。
@@ -739,6 +803,8 @@ var RELAY_USAGE_OK = {
       cost: 14.2, actual_cost: 3.51 }
   ],
   runway: { days: 30.1, per_active_day: 2.32, sample_days: 7, reason: null },
+  // 取数看过的区间：夹具 daily 的 20 天（月初之后建的快照 ⇒ 本月不完整，KPI 写「≥」）。
+  covered: [[localYmd(new Date(Date.now() - 19 * 86400000)), localYmd(new Date())]],
   usage_path: '/usage', fetched_at: Math.floor(Date.now() / 1000)
 };
 // ★★ 2026-09-09「一个 provider,两种上游」之后 `path` 恒指向**账号池那一份** ——
@@ -780,7 +846,7 @@ function relaySparseDaily() {
   var out = [], offsets = [0, 2, 9, 16, 23];   // 今天/2/9/16/23 天前
   for (var i = 0; i < offsets.length; i++) {
     var d = new Date(Date.now() - offsets[i] * 86400000);
-    out.push({ date: d.toISOString().slice(0, 10), requests: 10,
+    out.push({ date: localYmd(d), requests: 10,
                total_tokens: 1000000, input_tokens: 200000, output_tokens: 20000,
                cache_read_tokens: 780000, cache_write_tokens: 0,
                cost: 5, actual_cost: 1.25,
@@ -797,6 +863,18 @@ function relaySparseDaily() {
 //    不属于任何一种货币，而它长得和一个正常金额一模一样。
 //    ⚠️ 单家夹具下"相加"与"不相加"**结果完全相同**，那条闸恒绿 —— 空守卫。
 //    这份夹具专门让两者分开（另一半："读不到币种"也自成一类，与 USD 同样不可加）。
+// ★ `?relay=pair`：同一平台（同 host）两把 key、同币种 ⇒ 一个平台节点下两个账户，「合计 / 单个」视角才出现。
+var RELAY_ROW2 = { id: 'tokendun2', label: 'TokenDun-备用', base_url: 'https://api.tokendun.com/v1',
+                   enabled: true, usage_path: '/usage', model: null,
+                   key: 'sk-DECOY-must-never-be-rendered-1111111111',
+                   key_fp: 'sk-9c0e…a17 (5b1d2e7f9a30)', added_at: '2026-10-01T09:00:00+0800' };
+function relayPairEntries() {
+  return [Object.assign({ id: 'tokendun', label: 'TokenDun', base_url: RELAY_ROW.base_url, key_fp: RELAY_ROW.key_fp,
+                          ok: true, state: 'ok' }, { data: RELAY_USAGE_OK }),
+          { id: 'tokendun2', label: RELAY_ROW2.label, base_url: RELAY_ROW2.base_url, key_fp: RELAY_ROW2.key_fp,
+            ok: true, state: 'ok', data: Object.assign({}, RELAY_USAGE_OK, { balance: 12.4,
+              today: { cost: 0.9, actual_cost: 0.21, requests: 3, total_tokens: 98000 } }) }];
+}
 function relayMixedEntries() {
   var mk = function (id, label, unit, bal) {
     return { id: id, label: label, base_url: RELAY_ROW.base_url, key_fp: RELAY_ROW.key_fp,
@@ -809,6 +887,10 @@ function relayMixedEntries() {
 
 function relayEntry() {
   var m = relayMode();
+  // ★ `?relay=zero`：出口账户余额 = 0（P8 横幅最高优先级）。`balance: 0` 是**读到了 0**，不是读不到。
+  if (m === 'zero') return { id: 'tokendun', label: 'TokenDun', base_url: RELAY_ROW.base_url, key_fp: RELAY_ROW.key_fp,
+    ok: true, state: 'ok', data: Object.assign({}, RELAY_USAGE_OK, { balance: 0,
+      runway: { days: 0, per_active_day: 2.32, sample_days: 7, reason: null } }) };
   if (m === 'sparse') {
     return { id: 'tokendun', label: 'TokenDun', base_url: RELAY_ROW.base_url,
              key_fp: RELAY_ROW.key_fp, ok: true, state: 'ok',
@@ -1356,7 +1438,8 @@ function relayEntry() {
         var rs = p.get('rot') || 'ok';
         if (rs === 'fail' || rs === 'nosnap') return Promise.resolve(null);
         if (rs === 'snaponly') return Promise.resolve(anonDeep(ROT.ok, ANON));
-        return Promise.resolve(anonDeep(ROT[rs] || ROT.ok, ANON));
+        if ((rs === 'ok' || !ROT[rs]) && args && args.hours >= 168) return Promise.resolve(anonDeep(_rotLong(args.hours), ANON));
+        return Promise.resolve(rotNamed(anonDeep(ROT[rs] || ROT.ok, ANON)));
       }
       // ★ Gemini 版「代理轮换」（2026-09-24）。夹具由 **真的 `traffic/agy_rotation.py::collect`**
       //   在生成 harness 时跑一份合成日志算出来（见文件末尾 `agy_rot_fixture`）——
@@ -1373,7 +1456,8 @@ function relayEntry() {
         //     指望它也证不了)。
         if (rk === 'snaponly') return new Promise(function () {});
         if (rk === 'fail') return Promise.reject('读不到 proxy/proxy.log');
-        return Promise.resolve(anonDeep(ROT[rk] || ROT.ok, ANON));
+        if ((rk === 'ok' || !ROT[rk]) && args && args.hours >= 168) return Promise.resolve(anonDeep(_rotLong(args.hours), ANON));
+        return Promise.resolve(rotNamed(anonDeep(ROT[rk] || ROT.ok, ANON)));
       }
       case 'set_dock_visible':
       case 'set_main_visible':
@@ -1469,22 +1553,36 @@ function relayEntry() {
         reqCalls++;
         if (rq === 'errfirst' || (rq === 'error' && reqCalls > 1))
           return Promise.reject('读 traffic/requests-ledger 失败：Resource temporarily unavailable');
-        return Promise.resolve(JSON.stringify(REQ_FIXTURE(rq)));
+        var rqf = REQ_FIXTURE(rq);
+        // ★ 代理轮换页的 t/s 列按号取实测中位数：账本里要有这几个号的行（plus6 只有估值行 ⇒ 必须画「—」）。
+        if ((p.get('nav') || '') === 'logs') {
+          [['plus4', [88, 102, 140]], ['plus5', [71, 95]], ['plus7', [120]], ['Pro1', [64, 66]], ['plus6', [300]]].forEach(function (q, j) {
+            q[1].forEach(function (v, i) {
+              rqf.requests.push({ key: 'codex:rot' + j + ':' + i, platform: 'codex', t_start: _NOW - 900 - i * 60 - 30, t_end: _NOW - 900 - i * 60,
+                model: 'gpt-6-sol', source: '交互', session: 's', session_title: 'demo-project', account: q[0], input: 1000, cached: 0,
+                output: 900, reasoning: null, ttft_ms: 900, gen_ms: 8000, total_ms: 9000, tool_ms: null, tps: v,
+                est: q[0] === 'plus6', session_req_n: 1 });
+            });
+          });
+        }
+        return Promise.resolve(JSON.stringify(anonDeep(rqf, ANON)));
       }
       case 'read_relay_snapshot':
       case 'run_relay_usage': {
         if (relayMode() === 'empty') return Promise.resolve(JSON.stringify({ ok: true, relays: [], route: relayRoute(), fetched_at: Math.floor(Date.now()/1000) }));
         return Promise.resolve(JSON.stringify({ ok: true,
-          relays: relayMode() === 'mixed' ? relayMixedEntries() : [relayEntry()],
+          relays: relayMode() === 'mixed' ? relayMixedEntries() : relayMode() === 'pair' ? relayPairEntries() : [relayEntry()],
           route: relayRoute(), fetched_at: Math.floor(Date.now()/1000) }));
       }
       case 'relay_ctl': {
         // ★ 记下调用(sub+arg),**不记 payload** —— 它含 key。
         relayCalls.push(String((args && args.sub) || '') + ((args && args.arg) ? ':' + args.arg : ''));
         var sub = args && args.sub;
+        // `?relayfail=set|remove`：CLI 正常返回但 `ok:false`（写盘失败）—— 页面不许照样报「已停用 / 已删除」。
+        if (p.get('relayfail') === sub) return Promise.resolve(JSON.stringify({ ok: false, state: 'invalid', detail: '写盘失败（夹具）' }));
         if (sub === 'status') {
           return Promise.resolve(JSON.stringify({ ok: true, v: 1,
-            relays: relayMode() === 'empty' ? [] : [RELAY_ROW], route: relayRoute() }));
+            relays: relayMode() === 'empty' ? [] : relayMode() === 'pair' ? [RELAY_ROW, RELAY_ROW2] : [RELAY_ROW], route: relayRoute() }));
         }
         if (sub === 'test') return Promise.resolve(JSON.stringify({ ok: true, id: 'tokendun', state: 'ok', model_count: 22 }));
         return Promise.resolve(JSON.stringify({ ok: true, route: relayRoute() }));

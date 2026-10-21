@@ -572,6 +572,9 @@ def classify_enter(segs, markers, plans=None):
             s["enter_reason"] = "window_start"
             continue
         prev = segs[i - 1]["acc"]
+        if prev == s["acc"]:
+            s["enter_reason"] = "resume"      # 同号空闲 > SEG_GAP_SECS 后继续，不是换号
+            continue
         lo = bisect.bisect_left(times, s["start"] - 120)
         hi = bisect.bisect_right(times, s["start"])
         recent = [k for (_t, a, k) in ms[lo:hi] if a == prev]
@@ -659,14 +662,20 @@ def assign_colors(labels):
     return out
 
 
-def _quota_pct(slot):
-    """剩余百分比,取**最紧**的窗口。读不到返回 None(绝不当成满额)。"""
+def _quota_pct(slot, minutes=None):
+    """剩余百分比,取**最紧**的窗口。读不到返回 None(绝不当成满额)。
+
+    `minutes` 给定时只看那一个窗口（AICoop P7 的「5h 额度」列 = `window_minutes == 300`，
+    与 `helpers.ts::winRem` 同一判据）；Pro 没有 5h 窗口 ⇒ None。
+    """
     q = (slot or {}).get("quota") or {}
     cap = q.get("captured_at")
     worst = None
     for key in ("primary", "secondary"):
         w = q.get(key) or {}
         if not (w.get("window_minutes") or 0):
+            continue
+        if minutes is not None and int(w.get("window_minutes") or 0) != minutes:
             continue
         u = w.get("used_percent")
         if u is None:
@@ -677,6 +686,20 @@ def _quota_pct(slot):
         rem = max(0.0, 100.0 - float(u))
         worst = rem if worst is None else min(worst, rem)
     return worst
+
+
+def _switches(segs):
+    """换号次数 = 相邻两段**账号不同**的次数（同号空闲后重新上岗不算）。"""
+    return sum(1 for i in range(1, len(segs)) if segs[i]["acc"] != segs[i - 1]["acc"])
+
+
+def _cooling_until(slot, now):
+    """proxy `_cool` 写的 `cooling_until`。只有**晚于现在**才算在冷却；读不到 / 已过 ⇒ None。"""
+    try:
+        u = float((slot or {}).get("cooling_until") or 0)
+    except (TypeError, ValueError):
+        return None
+    return u if u > now else None
 
 
 def _day_bounds(start, end):
@@ -867,6 +890,10 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
             #   没归属上的那部分我们不知道它是什么模型,不能替它假设。
             "top_model": ({"model": top[0], "share": top[1] / a["tokens"]} if top and a["tokens"] else None),
             "quota_pct": _quota_pct(slots.get(a["acc"])),
+            # AICoop P7：右列只画 5h 窗口（读不到 / 没有 5h 窗口 ⇒ None，画「—」）。
+            "quota_5h": _quota_pct(slots.get(a["acc"]), 300),
+            # 此刻在冷却 ⇒ 给终点（标签「冷却中」+ 斜纹块的终点）；没在冷却 ⇒ None。
+            "cooling_until": _cooling_until(slots.get(a["acc"]), now),
             # ★ 不在当前池里 = 已移除的号（或改名后没被认领的旧名）。
             #   前端据此把名字画成中性色 —— **只换颜色不加徽章**：泳道名字列宽写死 152px
             #   且刻意不加省略号，多一个徽章会把名字截成 `Pr…`，而那种缺陷 harness 抓不到。
@@ -900,7 +927,9 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
             "tokens": tot_tok,
             "requests": tot_req,
             "avg_tokens": (tot_tok / tot_req) if tot_req else 0,
-            "rotations": max(0, len(segs) - 1),
+            # ★ 换号 = **账号变了**（AICoop P7 评审前自查）：同一个号隔了 > SEG_GAP_SECS 再上岗
+            #   也会断成两段，但那不是换号；算进来会让 KPI 与接力线对不上（agy 版本来就只数 changes）。
+            "rotations": _switches(segs),
             "avg_dwell": (sum(dwell) / len(dwell)) if dwell else 0,
             "cool_429": sum(1 for (_t, _a, k) in markers if k == "cool_429"),
             # ★ 「Pro 保底接管」单独成一个 KPI:它等价于「Plus 池干了多久」,
@@ -965,6 +994,8 @@ def _events(segs, markers):
         if i == 0:
             continue
         p = segs[i - 1]
+        if p["acc"] == s["acc"]:
+            continue                      # 同号空闲后重新上岗，不是换号（见 kpi.rotations）
         is429 = s["enter_reason"] == "cool_429"
         evs.append({
             "t": s["start"],
