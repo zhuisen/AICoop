@@ -90,9 +90,10 @@ def _render_pairs():
         n = pg.locator("[data-card-badge]").count()
         for i in range(n):
             b = pg.locator("[data-card-badge]").nth(i)
-            m = re.search(r"剩\s*(\d+)\s*(天|小时)", b.inner_text())
+            # 2026-10-21 短写（用户选「短重置卡」）：`重置卡 3 · 1天`，没有「剩」字
+            m = re.search(r"·\s*(\d+)\s*(天|小时)", b.inner_text())
             if not m:
-                continue                       # 没到「快到期」档的角标不带「剩 N 天」
+                continue                       # 没到「快到期」档的角标不带「· N 天」
             if not pg.evaluate("""(i) => { const c = document.querySelectorAll('[data-card-badge]')[i].closest('[data-ov-card]');
                   const it = c && c.querySelector('[data-ov-mi="credit"]'); if (it) it.click(); return !!it; }""", i):
                 pairs.append((m.group(1) + m.group(2), "（这张卡没有「使用重置卡」入口）"))

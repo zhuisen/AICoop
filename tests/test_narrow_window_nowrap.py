@@ -116,7 +116,8 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         # 2026-10-19：这些原子都在 `.ov-root` 下，由根规则 `white-space: nowrap` 统一兜住；这里守「它们还在」
         #   且「不会被 flex 压扁」。真折没折由 `test_overview_5b` 在 1200 / 860 实量（文本节点的行数）。
         self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", self.css)
-        self.assertRegex(self.card, r"到期 \{a\.exp\}", "找不到卡片上的「到期」那段 —— 断言可能打空了")
+        # 2026-10-21 短日期（用户「到期日期挡住了」）：`{shortDate(a.exp, …)} 到期`，完整日期进悬浮
+        self.assertRegex(self.card, r"\{shortDate\(a\.exp, Date\.now\(\)\)\} 到期", "找不到卡片上的「到期」那段 —— 断言可能打空了")
         # ★ 「临时借用」角标：左列收窄后实测被劈成「临时借 / 用」（2026-09-21 截图）。要让的是旁边带省略号的邮箱。
         mb = re.search(r"<span data-runway-borrowed[\s\S]*?>临时借用", self.hero)
         self.assertIsNotNone(mb, "找不到「临时借用」角标 —— 断言可能打空了")

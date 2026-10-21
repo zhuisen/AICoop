@@ -117,7 +117,7 @@ static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
 /// 两种展开各自的面板高度（4e 卡片 / 空闲格子）。★ 分开存：共用一份时，换种类那一下窗口与命中区
 /// 先用上一种的高度，要等网页收到 `notch-mode`、再一次 IPC 来回才更正（三方评审 2026-10-21）。
 static PANEL_H: Mutex<f64> = Mutex::new(420.0);
-static PANEL_H_IDLE: Mutex<f64> = Mutex::new(86.5);
+static PANEL_H_IDLE: Mutex<f64> = Mutex::new(116.5);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
 static MONITORS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -195,6 +195,11 @@ fn cached() -> Option<Notch> {
     GEOM.lock().unwrap().and_then(|(v, _)| v)
 }
 
+/// 这一轮展开的面板宽：空闲额度格子 = 托盘悬停面板同宽（用户 2026-10-21「刘海屏版本也要改」⇒ 同一套 1.5×），4e 卡片 = `CARD_W`。
+fn card_w() -> f64 {
+    if OPEN_IDLE.load(Ordering::SeqCst) { crate::tps_hover::IDLE_PANEL_W } else { CARD_W }
+}
+
 fn card_h() -> f64 {
     if OPEN_IDLE.load(Ordering::SeqCst) { *PANEL_H_IDLE.lock().unwrap() } else { *PANEL_H.lock().unwrap() }
 }
@@ -209,7 +214,7 @@ fn rect(g: &Notch, open: bool) -> (f64, f64, f64, f64) {
 fn rect_h(g: &Notch, open: bool, ch: f64) -> (f64, f64, f64, f64) {
     if open {
         let glow_w = g.width + (FLARE + GLOW_X) * 2.0;
-        let w = (CARD_W + CARD_SHADOW_X * 2.0).max(glow_w);
+        let w = (card_w() + CARD_SHADOW_X * 2.0).max(glow_w);
         let h = (g.height + CARD_GAP + ch + CARD_SHADOW_B).max(g.height + GLOW_Y);
         (g.left + g.width / 2.0 - w / 2.0, g.top, w, h)
     } else {
@@ -220,7 +225,8 @@ fn rect_h(g: &Notch, open: bool, ch: f64) -> (f64, f64, f64, f64) {
 
 /// 卡片在桌面坐标里的矩形（不含命中边）。
 fn card_rect(g: &Notch, ch: f64) -> (f64, f64, f64, f64) {
-    (g.left + g.width / 2.0 - CARD_W / 2.0, g.top + g.height + CARD_GAP, CARD_W, ch)
+    let cw = card_w();
+    (g.left + g.width / 2.0 - cw / 2.0, g.top + g.height + CARD_GAP, cw, ch)
 }
 
 /// 光标到刘海矩形的距离（在里面为 0）。
@@ -760,8 +766,10 @@ mod tests {
         *PANEL_H_IDLE.lock().unwrap() = 86.5;
         OPEN_IDLE.store(true, Ordering::SeqCst);
         assert_eq!(card_h(), 86.5);
+        assert_eq!(card_w(), crate::tps_hover::IDLE_PANEL_W, "★ 刘海格子与托盘面板同宽（用户「刘海屏版本也要改」）");
         OPEN_IDLE.store(false, Ordering::SeqCst);
         assert_eq!(card_h(), 400.0);
+        assert_eq!(card_w(), CARD_W);
     }
     #[test]
     fn the_near_glow_only_promises_what_a_touch_would_open() {

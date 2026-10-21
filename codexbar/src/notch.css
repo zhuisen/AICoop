@@ -176,7 +176,7 @@ body {
 .nh-bar > span { display: block; height: 100%; }
 .nh-qpct { font-size: 11.5px; font-weight: 600; width: 30px; text-align: right; flex-shrink: 0; }
 
-/* AICoop P11 刘海屏版 · 空闲（`P11_NotchHover`，1.5× 画 ÷1.5；数值见 `notchIdle.ts`）。
+/* AICoop P11 刘海屏版 · 空闲（`P11_NotchHover`；光晕按画板 ÷1.5，格子面板 2026-10-21 起与托盘面板同一套 1.5×；数值见 `notchIdle.ts`）。
    中性冷白光晕：刘海形那层只有 box-shadow（刘海本身没有像素），下面再垫一团椭圆柔光；不透明度由组件给。 */
 .ni-glow { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .ni-glow .s { position: absolute; left: 0; top: 0; width: var(--nw); height: var(--nh); border-radius: 0 0 12px 12px; transition: box-shadow .25s ease-out; }
@@ -189,20 +189,20 @@ body {
   background: #FF8A73; box-shadow: 0 0 6.67px 1.33px rgba(255, 138, 115, .6);
 }
 .ni-panel {
-  position: absolute; top: calc(var(--nh) + 10px); left: calc(50% - 150px); width: 300px; box-sizing: border-box;
-  border-radius: 12px; background: rgba(28, 33, 40, .98); z-index: 6; transform-origin: 50% 0;
+  position: absolute; top: calc(var(--nh) + 10px); left: calc(50% - 217.5px); width: 435px; box-sizing: border-box;
+  border-radius: 15px; background: rgba(28, 33, 40, .98); z-index: 6; transform-origin: 50% 0;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 16px 40px rgba(0, 0, 0, .55);
 }
 .ni-bridge {
   position: absolute; left: calc(50% - .75px); top: -10px; width: 1.5px; height: 10px;
   background: linear-gradient(rgba(233, 237, 243, 0), rgba(233, 237, 243, .5));
 }
-.ni-cell { position: absolute; border-radius: 8px; cursor: pointer; transition: filter .15s; }
+.ni-cell { position: absolute; border-radius: 10.5px; cursor: pointer; transition: filter .15s; }
 .ni-cell:hover { filter: brightness(1.3); }
 .ni-ring { position: absolute; }
-.ni-logo { position: absolute; display: flex; width: 13px; height: 13px; }
-.ni-reset { position: absolute; right: 5.33px; top: 4px; font-size: 7px; color: var(--tx2); }
-.ni-main { position: absolute; left: 0; right: 0; top: 53.33px; text-align: center; font-size: 10px; font-weight: 700; }
+.ni-logo { position: absolute; display: flex; width: 20px; height: 20px; }
+.ni-reset { position: absolute; right: 7.5px; top: 5px; font-size: 10.5px; color: var(--tx2); }
+.ni-main { position: absolute; left: 0; right: 0; top: 73.5px; text-align: center; font-size: 15px; font-weight: 700; }
 
 /* 飞入的 logo（覆盖层，刘海坐标）：落地后交给行自己画。 */
 .nh-flylayer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 5; pointer-events: none; transition: opacity 150ms; }

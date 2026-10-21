@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import PlatformLogo, { type LogoPlatform } from "../PlatformLogo";
-import HoldProbe from "../mb/HoldProbe";
+import ProbeBtn from "../mb/ProbeBtn";
 import { IcMore, IcRefresh } from "./OvCard";
 import { MONO } from "./ovVars";
 import type { OvLayout } from "../../overview";
@@ -84,11 +84,11 @@ export function RefreshBtn({ onClick, busy, labels, title, text = "刷新全池"
   );
 }
 
-/** 探针（计费）—— 按住 0.6 s，复用菜单栏那颗 `HoldProbe`（同一状态机、同一套琥珀）。 */
-export function ProbeHold({ onFire, loading, hint }: { onFire: () => void; loading: boolean; hint: string }) {
+/** 探针（计费）—— 点一下就执行，复用菜单栏那颗 `ProbeBtn`（同一个连点判据、同一套琥珀）。 */
+export function ProbeHead({ onFire, loading, hint }: { onFire: () => void; loading: boolean; hint: string }) {
   return (
     <span data-ov-head="probe" data-head-action="" style={{ position: "relative", display: "block", width: 112, height: 32, flexShrink: 0 }}>
-      <HoldProbe onFire={onFire} loading={loading} hint={hint} />
+      <ProbeBtn onFire={onFire} loading={loading} hint={hint} />
     </span>
   );
 }

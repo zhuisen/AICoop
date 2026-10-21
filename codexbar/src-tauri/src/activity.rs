@@ -13,8 +13,8 @@
 //!   一轮之内的静默间隔 p99 99 s、p99.9 600 s）。纯判定在 `glow`。
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 /// 活动检测的周期，以及「最近这么多秒内写过 = 叫醒实时循环」（也是 live 不可用时光晕的退路）。
@@ -37,6 +37,33 @@ static WATCHER_SEQ: AtomicU64 = AtomicU64::new(0);
 static ACTIVITY: Mutex<Activity> = Mutex::new(IDLE);
 /// 四家各自最近一次写入的时刻（秒，0 = 没见过），下标见 `Roots::classify`。FSEvents 回调写，检测线程读。
 static LAST_WRITE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+/// ★ 写入叫醒实时循环（用户 2026-10-21「t/s 更新太慢」）：FSEvents 一有这四家的写入就叫醒，不再等满 2 s 的 tick。
+///   实测（n=34）一条 Claude 响应结束后要 p50 2.24 s 才换成实测值，其中 tick 平均占 ~1 s。
+///   叫醒后先去抖 `WAKE_DEBOUNCE`（一次写入常是一串事件），且两次 `--live` 之间至少隔 `LIVE_MIN_GAP`
+///   （一次 0.15–0.16 s 子进程；流式写入不停时这条上限 = 每秒最多 1 次）。
+static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+const WAKE_DEBOUNCE: Duration = Duration::from_millis(150);
+const LIVE_MIN_GAP: Duration = Duration::from_millis(1000);
+
+fn wake() {
+    let (m, cv) = &WAKE;
+    *m.lock().unwrap() = true;
+    cv.notify_one();
+}
+
+/// 睡到下一 tick，或被写入叫醒（返回 true）。
+fn wait_wake(tick: Duration) -> bool {
+    let (m, cv) = &WAKE;
+    let g = m.lock().unwrap();
+    let (mut g, _) = cv.wait_timeout_while(g, tick, |woke| !*woke).unwrap();
+    std::mem::replace(&mut *g, false)
+}
+
+/// 被写入叫醒之后还要再等多久才跑下一次：至少去抖，且离上一次开跑不少于 `LIVE_MIN_GAP`。
+pub fn early_delay(since_last_run: Duration) -> Duration {
+    WAKE_DEBOUNCE.max(LIVE_MIN_GAP.saturating_sub(since_last_run))
+}
+
 /// 实时循环正在跑一次 `--live`（防止慢的一次没跑完下一 tick 又起一个）。
 static LIVE_BUSY: AtomicBool = AtomicBool::new(false);
 /// 最近一次 `--live` 的结果里**还有平台在跑**。实时循环要等它也说「停了」才停。
@@ -179,7 +206,7 @@ fn watch_activity(app: &AppHandle) {
             if !is_write(&ev.kind) { return; }
             let now = now_secs();
             for p in &ev.paths {
-                if let Some(i) = r2.classify(p) { LAST_WRITE[i].store(now, Ordering::Relaxed); }
+                if let Some(i) = r2.classify(p) { LAST_WRITE[i].store(now, Ordering::Relaxed); wake(); }
             }
         });
         // 建不起监听器（极少见）：光晕与胶囊一直不亮，记一条日志，不影响刘海面板本身
@@ -198,12 +225,13 @@ fn watch_activity(app: &AppHandle) {
         };
         // ★ 起头当作「刚停」：订阅那一刻先跑一次 live —— 长工具调用中途打开刘海 / t/s 时没有新写入来叫醒它
         let mut was_live = true;
+        let mut last_run = Instant::now();
         while WATCHER.load(Ordering::SeqCst) == me && CONSUMERS.load(Ordering::SeqCst) != 0 {
             let fs = publish(&app);
             let (run, live) = loop_step(fs.any(), LIVE_ANY.load(Ordering::SeqCst), was_live);
             was_live = live;
-            if run { run_live_soon(&app, fs); }
-            std::thread::sleep(ACTIVITY_TICK);
+            if run { run_live_soon(&app, fs); last_run = Instant::now(); }
+            if wait_wake(ACTIVITY_TICK) { std::thread::sleep(early_delay(last_run.elapsed())); }
         }
         // 被接管时状态归新的那条管，不清
         if WATCHER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
@@ -329,6 +357,25 @@ mod loop_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_write_wakes_the_loop_but_live_runs_at_most_once_a_second() {
+        use super::{early_delay, LIVE_MIN_GAP, WAKE_DEBOUNCE};
+        use std::time::Duration;
+        assert_eq!(early_delay(Duration::ZERO), LIVE_MIN_GAP, "刚跑过 ⇒ 等满 1 s 再跑");
+        assert_eq!(early_delay(Duration::from_millis(400)), Duration::from_millis(600));
+        assert_eq!(early_delay(Duration::from_secs(5)), WAKE_DEBOUNCE, "很久没跑 ⇒ 只去抖 150 ms");
+        assert!(early_delay(Duration::from_millis(900)) >= WAKE_DEBOUNCE, "去抖是下限");
+    }
+
+    #[test]
+    fn the_watcher_callback_wakes_the_loop() {
+        let src = include_str!("activity.rs");
+        let cb = src.split("recommended_watcher(").nth(1).unwrap().split("});").next().unwrap();
+        assert!(cb.contains("wake();"), "FSEvents 回调不叫醒实时循环 ⇒ 又回到等满 2 s");
+        let lp = src.split("let mut last_run").nth(1).unwrap().split("// 被接管时").next().unwrap();
+        assert!(lp.contains("wait_wake(ACTIVITY_TICK)"), "循环还在死睡 ACTIVITY_TICK");
+    }
+
     use super::*;
 
     #[test]

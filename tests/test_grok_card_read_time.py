@@ -37,7 +37,8 @@ PROBE = """() => {
            below: card.getBoundingClientRect().bottom - (e.closest('[data-ov-foot]') || foot).getBoundingClientRect().bottom };
 }"""
 CODEX = """() => {
-  const exp = [...document.querySelectorAll('[data-cards-grid] span')].find(s => /^到期 /.test(s.textContent));
+  // 2026-10-21 短日期（`MM-DD 到期`）：认 `data-ov-exp` 这个结构标记，不再认文字开头
+  const exp = document.querySelector('[data-cards-grid] [data-ov-exp]');
   const foot = exp.closest('[data-ov-foot]') || exp.parentElement;
   let card = foot; while (card && parseFloat(getComputedStyle(card).borderBottomWidth) === 0) card = card.parentElement;
   return card.getBoundingClientRect().bottom - foot.getBoundingClientRect().bottom;

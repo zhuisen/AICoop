@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { fmtEta, type Account } from "../helpers";
 import type { PlatformPrefs, TrafficData } from "../traffic";
-import { agyShown, agyWinRows, type AgySnapshot } from "../agy";
+import { agyResetText, agyShown, agyWinRows, type AgySnapshot } from "../agy";
 import { grokLastGoodRemPct, grokRemPct, type GrokSnapshot } from "../grok";
 import { parseClaudeQuota, type ClaudeQuota, type ClaudeWin } from "../mbLogic";
 import { useAgyPool } from "./useAgyPool";
@@ -11,13 +11,18 @@ import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
 import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
          type IdlePanelData, type PanelIn } from "../idleTray";
 
-/** Claude 额度转写只在 Claude Code 刷新状态栏时才变，托盘瞄一眼的东西 5 分钟读一次足够（另在托盘弹出时读）。 */
-const CLAUDE_EVERY_MS = 5 * 60_000;
+/** Claude 额度转写只在 Claude Code 刷新状态栏时才变：与总览 `useClaudeQuota` 同一个间隔（60 s）。
+ *  ★ 原来 5 分钟：刚停手就悬停，面板比总览旧最多 5 分钟（2026-10-21 复查 B1）。另在托盘弹出 / 光标靠近托盘时读。 */
+const CLAUDE_EVERY_MS = 60_000;
+/** 光标靠近托盘（`idle-near`）时补读一次本机额度，最多每 30 s 一次。 */
+const NEAR_READ_GAP_MS = 30_000;
 /** 没有数据变化时也要按时重算：跨午夜重排、24 h 动态位过期。 */
 const TICK_MS = 60_000;
 
 /** 今天冻结的常驻 + 上一次打招呼（epoch 秒）。记进 localStorage：重启 / 部署后不重排、不再打一次招呼。 */
 const FROZEN_KEY = "codexbar_idle_frozen";
+/** 本 webview 内部事件：`idle-near` 变真 ⇒ 补读额度（两个 effect 之间传话，不出 webview）。 */
+const NEAR_READ = "codexbar-idle-near-read";
 const HELLO_KEY = "codexbar_idle_hello";
 type Frozen = { day: string; keep: string[]; sig: string };
 
@@ -65,7 +70,10 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
   useEffect(() => {
     const subs = [
       listen(IDLE_TRAY_EVENT, () => setCfg(getSettings())),
-      listen<boolean>("idle-near", (e) => { near.current = !!e.payload; }),
+      listen<boolean>("idle-near", (e) => {
+        near.current = !!e.payload;
+        if (near.current) window.dispatchEvent(new Event(NEAR_READ));
+      }),
       listen<number>("idle-hello", (e) => {
         try { localStorage.setItem(HELLO_KEY, String(e.payload)); } catch (_e: unknown) { /* 存不下：重启后可能再打一次 */ }
       }),
@@ -97,12 +105,20 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     };
     readClaude(); readGrok(); readAgy();
     const id = window.setInterval(readClaude, CLAUDE_EVERY_MS);
+    // 悬停面板是另一个 webview，这里收不到它打开；光标靠近托盘（Rust 推 `idle-near`）就是「马上要看」的信号
+    let lastNear = 0;
+    const onNear = () => {
+      const t = Date.now();
+      if (t - lastNear < NEAR_READ_GAP_MS) return;
+      lastNear = t; readClaude(); readGrok(); readAgy();
+    };
+    window.addEventListener(NEAR_READ, onNear);
     const subs = [
       listen("menubar-shown", readClaude),
       listen("grok-quota-updated", readGrok),
       listen("agy-quota-updated", readAgy),
     ];
-    return () => { window.clearInterval(id); subs.forEach((p) => { void p.then((f) => f()); }); };
+    return () => { window.clearInterval(id); window.removeEventListener(NEAR_READ, onNear); subs.forEach((p) => { void p.then((f) => f()); }); };
   }, []);
 
   const agyCur = agyPool.accounts.find((a) => a.sub === agyPool.liveSub);
@@ -123,6 +139,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const g = grok?.accounts[0];
     const gNow = g ? grokRemPct(g) : null;
     const gRem = g ? gNow ?? grokLastGoodRemPct(g) : null;
+    const gPeriodEnd = g ? (gNow === null ? g.last_good?.period_end : g.quota?.period_end) : null;
     const rem: Record<string, (number | null)[]> = {
       codex: live ? live.windows.map((w) => w.pct) : [],
       claude: [c5, claudeRem(claude?.week, now)],
@@ -133,13 +150,17 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const main: Record<string, [number | null, string]> = {
       codex: [w5?.pct ?? null, w5 ? w5.reset : ""],
       claude: [c5, c5 === null || !claude?.fiveH ? "" : claude.fiveH.idle ? "未启动" : fmtEta(claude.fiveH.resetsAt ?? undefined)],
-      agy: [a5?.remaining ?? null, a5?.reset_at ? fmtEta(a5.reset_at) : ""],
-      grok: [gRem, g?.quota?.period_end ? fmtEta(g.quota.period_end) : ""],
+      // ★ 倒计时走 `agyResetText`（与总览 AgyCard 同一个真源）：窗口没启动时它说「未启动」，
+      //   直接 fmtEta 会画出一个跟着「现在」滑、永远走不到 0 的 ↻4h59m（复查 B3）。
+      agy: [a5?.remaining ?? null, a5?.reset_at ? agyResetText(a5).text : ""],
+      // 降级时 `quota` 是 null ⇒ 倒计时取上一次读数的周期末（同 GrokCard / OvHeroRO，复查 B4）
+      grok: [gRem, gPeriodEnd ? fmtEta(gPeriodEnd) : ""],
     };
     // 候选 = 托盘认得的六家去掉设置里停用的（停用的已被 `applyPlatformPrefs` 移出快照）。快照里还没有的一家照样是候选：
     // 用量记 0（不进排名），额度照读 —— 否则「固定」与「全部 + 未接入的平台」对它静默失效。
     // 这一次没读到、拿的是上一次的读数（agy `last_good` / grok 上一次成功）⇒ 面板上降一级灰
-    const stale: Record<string, boolean> = { agy: agyStale, grok: gNow === null && gRem !== null };
+    // agy 的 5h 行是沿用的旧读数（`seen_at`：这次没返回这个桶）⇒ 同样降一级灰（同刘海 / AgyCard，复查 B7）
+    const stale: Record<string, boolean> = { agy: agyStale || a5?.seen_at != null, grok: gNow === null && gRem !== null };
     return TRAY_KEYS.filter((k) => !!traffic?.platforms[k] || !prefs.by[k]?.off).map((k) => {
       const [m, r] = main[k] ?? [null, ""];
       return { key: k, remaining: rem[k] ?? [], ...usageOf(traffic?.platforms[k], cfg.idleDays, now),

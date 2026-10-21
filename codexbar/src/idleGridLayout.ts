@@ -1,30 +1,31 @@
 /**
- * 空闲额度面板的版面与动画编排（AICoop P11 §6；画板 `P11_Final` ④ 是 2× 画的，这里一律 ÷2）。
+ * 空闲额度面板的版面与动画编排（AICoop P11 §6；画板 `P11_Final` ④ 是 2× 画的）。
+ * ★ 用户 2026-10-21「悬浮显示的内容太小了」⇒ 选 **1.5×**：画板数值一律 × 0.75（原来 ÷2 = 1×）。
  * ★ 零 import：测试用 `node --experimental-strip-types` 直接加载（CLAUDE.md §4）。
  *
- * 画板（2×）→ 这里（1×）：
- *   面板宽 580 → 290 · 外圆角 20 → 10 · 内边距 11 → 5.5 · 格间距 8 → 4 · 一行 4 格 ⇒ 格宽 (290 − 11 − 12)/4 = 66.75
- *   格高 134 → 67（不显示「窗口明细」那行；P9 S1「不再有窗口明细」）· 格圆角 14 → 7
- *   环 64 → 32（r 27 → 13.5，线宽 5 → 2.5，顶 26 → 13）· 大数字 20 → 10 px（顶 98 → 49）
- *   右上角重置 11.5 → 7 px（画板 ÷2 是 5.75，读不清；取刘海版 `P11_NotchHover` 1.5× 画的 10.5 ÷ 1.5 = 7 —— 偏离记 PLAN）
- *   在菜单栏的白点 7 → 4（左上 10 → 5）· 落进环心的 logo 26 → 13
- *   ★ 白点取 4 不取 3.5：浏览器按 **CSS 像素**取整元素的边，3.5 宽会随格子坐标被取成 3 或 4（实测第 3 格 8 物理像素宽、
- *     其余 6，高都是 6 —— 扁圆）；4 在任何坐标下都是 4×4。格子左上角另吸到 0.5 px（Retina 整物理像素）。
+ * 画板（2×）→ 这里（1.5×）：
+ *   面板宽 580 → 435 · 外圆角 20 → 15 · 内边距 11 → 8（8.25 吸整）· 格间距 8 → 6 · 一行 4 格 ⇒ 格宽 (435 − 16 − 18)/4 = 100.25
+ *   格高 134 → 100.5（不显示「窗口明细」那行；P9 S1「不再有窗口明细」）· 格圆角 14 → 10.5
+ *   环 64 → 48（r 27 → 20.25，线宽 5 → 3.75，顶 26 → 19.5）· 大数字 20 → 15 px（顶 98 → 73.5）
+ *   右上角重置 11.5 → 10.5 px（× 0.75 是 8.6；取刘海版 `P11_NotchHover` 画板原值 10.5 —— 偏离记 PLAN）
+ *   在菜单栏的白点 7 → 6（5.25 吸整，左上 10 → 7）· 落进环心的 logo 26 → 20（19.5 吸整）
+ *   ★ 白点取整数：浏览器按 **CSS 像素**取整元素的边，非整数宽会随格子坐标被取成两种宽（1× 时 3.5 实测扁圆）。
+ *     格子左上角另吸到 0.5 px（Retina 整物理像素）。
  * 动画：格子依次弹入（每格差 45 ms，首格 80 ms）；托盘 logo 420 ms 弹簧飞进环心，相邻错开 25 ms；
  *   托盘以外的几家 120 ms 后原位淡入；文字与环 200 ms 时出现。
  */
 
-export const PANEL_W = 290;
-export const PAD = 5.5;
-export const GAP = 4;
+export const PANEL_W = 435;
+export const PAD = 8;
+export const GAP = 6;
 export const COLS = 4;
-export const CELL_H = 67;
-export const RING = 32;
-export const RING_R = 13.5;
-export const RING_SW = 2.5;
-export const RING_TOP = 13;
+export const CELL_H = 100.5;
+export const RING = 48;
+export const RING_R = 20.25;
+export const RING_SW = 3.75;
+export const RING_TOP = 19.5;
 export const RING_C = 2 * Math.PI * RING_R;
-export const LOGO = 13;
+export const LOGO = 20;
 /** 托盘里 logo 的边长（Rust `tray_idle::LOGO`）。飞行用的图按它画，落进环心时缩到 `LOGO`。 */
 export const PILL_LOGO = 14;
 export const FLY_MS = 420;

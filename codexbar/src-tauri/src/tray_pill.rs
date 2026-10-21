@@ -18,18 +18,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 pub const KEYS: [&str; 4] = ["codex", "claude", "agy", "grok"];
-pub const H: f64 = 18.0;
-const RADIUS: f64 = 9.0;
-pub const LOGO: f64 = 12.0;
+/// ★ 用户 2026-10-21「胶囊内容需要放大，AI svg 和字体放大，优先 AI svg」：高 18 → 20、logo 12 → 16（+33%）、
+///   字 11.5 → 12.5（+9%）。菜单栏高 22–24 pt，20 是不顶边的上限。段间距 / 内边距不变。
+pub const H: f64 = 20.0;
+const RADIUS: f64 = 10.0;
+pub const LOGO: f64 = 16.0;
 const INNER_GAP: f64 = 3.0;
 /// logo 与数字之间。交接包是段内统一 3；真机上 logo 贴着数字（用户 2026-10-19「1 家状态下 svg 和速度太近」），放到 5。
 pub const LOGO_GAP: f64 = 5.0;
-/// 基准宽 W =「1 家 · Claude · 3 个会话」的实测宽度，设计稿取 96 pt。2 家起胶囊 min-width = W。
-pub const W_MIN: f64 = 96.0;
+/// 基准宽 W =「1 家 · Claude · 3 个会话」的宽度（设计稿 96 pt；放大后按同一式子 = 4 + 16 + 5 + 3×7.5 + 3 + 3×7.5 + 3 + 3×7.5 + 7 ≈ 106）。
+/// 2 家起胶囊 min-width = W。
+pub const W_MIN: f64 = 106.0;
 /// 停下：那一段降到 40%、保持最后的数字 3 s，然后退出。
 pub const HOLD_SECS: f64 = 3.0;
 pub const STOP_ALPHA: f64 = 0.4;
-pub const FONT_SIZE: f64 = 11.5;
+pub const FONT_SIZE: f64 = 12.5;
 /// 「t/s」「· N」：#f2f4f7 @ .62（Main.html）
 const SUFFIX_ALPHA: f64 = 0.62;
 
@@ -931,7 +934,7 @@ pub mod draw {
             let probe = NSString::from_str("0000000000");
             let sz: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(f500, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
-            Res { logos, ghosts, f500, f600, cw: if sz.width > 0.0 { sz.width / 10.0 } else { 6.9 }, icon }
+            Res { logos, ghosts, f500, f600, cw: if sz.width > 0.0 { sz.width / 10.0 } else { 7.5 }, icon }
         })
     }
 
@@ -1309,7 +1312,8 @@ pub mod draw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const CW: f64 = 6.9;
+    /// JetBrains Mono 步进 0.6 em：11.5 pt 实测 6.9 ⇒ 12.5 pt 7.5。
+    const CW: f64 = 7.5;
 
     fn run(tps: Option<f64>, n: u32) -> PlatformIn { PlatformIn { running: true, tps, n_sessions: n, stopping_since: None } }
     fn off() -> PlatformIn { PlatformIn::default() }
@@ -1328,9 +1332,9 @@ mod tests {
         let s = &l.segs[0];
         assert_eq!(s.num.as_deref(), Some("178"));
         assert_eq!(s.sess, None, "1 个会话不加 · N");
-        // 4 + logo 12 + LOGO_GAP 5 + 178 + 3 + t/s + 7（交接包 logo 后是 3 ⇒ ≈ 70；用户 2026-10-19 拉开到 5 ⇒ ≈ 72）
-        assert!(close(l.width, 4.0 + 12.0 + LOGO_GAP + 3.0 * CW + 3.0 + 3.0 * CW + 7.0));
-        assert!((l.width - 72.0).abs() < 1.0, "1 家 ≈ 72 pt（交接包 70 + logo 间距多 2），实得 {}", l.width);
+        // 4 + logo + LOGO_GAP 5 + 178 + 3 + t/s + 7（交接包 logo 12 / 字 11.5 时 ≈ 72；2026-10-21 放大到 logo 16 / 字 12.5 ⇒ ≈ 80）
+        assert!(close(l.width, 4.0 + LOGO + LOGO_GAP + 3.0 * CW + 3.0 + 3.0 * CW + 7.0));
+        assert!((l.width - 80.0).abs() < 1.0, "1 家 ≈ 80 pt，实得 {}", l.width);
         assert!(close(s.x, 4.0));
     }
 
@@ -1338,7 +1342,7 @@ mod tests {
     fn one_ai_with_three_sessions_matches_the_reference_width() {
         let l = layout(&inp([off(), run(Some(190.0), 3), off(), off()]), Appearance::Light, CW, 0.0).unwrap();
         assert_eq!(l.segs[0].sess.as_deref(), Some("· 3"));
-        assert!((l.width - 96.0).abs() < 1.0, "带会话数 ≈ 96 pt（交接包 94 + logo 间距多 2），实得 {}", l.width);
+        assert!((l.width - W_MIN).abs() < 1.0, "带会话数 ≈ W（{}），实得 {}", W_MIN, l.width);
         // W = 96 取的就是这一档（交接包）；logo 间距多出的 2 不改 W（2 家起的胶囊宽照交接包）
         assert!(l.width <= W_MIN + LOGO_GAP - INNER_GAP + 1e-9, "W 取的就是这一档");
     }

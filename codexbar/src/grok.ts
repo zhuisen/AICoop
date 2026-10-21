@@ -80,8 +80,13 @@ export function grokRemPct(a: GrokAccount | null | undefined): number | null {
  * 陈旧读数的剩余百分比。**换向只在这里做一次** —— 调用点写 `100 - lg.used_percent`
  * 就等于把方向知识复制了一份，而复制出去的那份迟早漏改（这条闸在 `tests/test_grok_direction.py`）。
  */
-export function grokLastGoodRemPct(a: GrokAccount | null | undefined): number | null {
-  return a?.last_good ? 100 - a.last_good.used_percent : null;
+export function grokLastGoodRemPct(a: GrokAccount | null | undefined, nowSec: number = Date.now() / 1000): number | null {
+  const lg = a?.last_good;
+  if (!lg) return null;
+  // ★ 那次读数所在的周期已经结束 ⇒ 「已用」属于上一个周期 ⇒ 读不到（不是 0，也不是满）。
+  //   不判它，token 一直刷不新时，周期末之后各处仍画上周的 0% 红，而倒计时同时写「已重置」（2026-10-21 复查）。
+  if (lg.period_end != null && lg.period_end <= nowSec) return null;
+  return 100 - lg.used_percent;
 }
 
 export type GrokTone = "amber" | "red" | "muted";

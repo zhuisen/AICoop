@@ -12,7 +12,7 @@ import { fmtTokens, fmtTps } from "../live";
 import type { DragWiring } from "./DragHandle";
 import StaleMark from "./StaleMark";
 import AgyActionLink from "./AgyActionLink";
-import { Ab, DynText, HoldAb, IcRefresh, IcSwap, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
+import { Ab, DynText, ProbeAb, IcRefresh, IcSwap, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
 import type { LiveLine } from "./AccountCard";
 
 /**
@@ -189,7 +189,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
         </Ab>
       )}
       {onProbe && state !== "off" && (
-        <HoldAb loading={!!probing} onFire={onProbe}
+        <ProbeAb loading={!!probing} onFire={onProbe}
                 hint={`起一次 agy 让 ${label} 真跑一句，验它是否真能干活。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token、约 30s）`} />
       )}
       <Ab onClick={onRefresh} disabled={busy} data="refresh" title="重新取一次这一池的额度（云端按账号读，零消耗）">

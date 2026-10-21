@@ -96,8 +96,8 @@ class TheFooterCannotSpendAnotherPlatformsQuota(unittest.TestCase):
 
     def test_the_probe_button_is_gated(self):
         c = code(MB)
-        # ★ 2026-10-19（交接包 4f）：菜单栏探针改成「按住 0.6 s」（`mb/HoldProbe`），取代两段确认。
-        self.assertIn("{codexActions && <HoldProbe", c,
+        # ★ 2026-10-21（用户「探针的功能 修改点击即可」）：菜单栏探针是 `mb/ProbeBtn`，点一下就执行。
+        self.assertIn("{codexActions && <ProbeBtn", c,
                       "★★★ 探针没有按档收起 —— 它扣的是 codex 的额度")
         self.assertRegex(c, r'const codexActions = tab === "acc" && plat === "codex";',
                          "★★★ 探针的出现条件不再是「codex 档 + 账号 Tab」")

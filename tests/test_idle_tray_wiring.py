@@ -194,10 +194,14 @@ def _node(expr):
 class GridGeometry(unittest.TestCase):
     def test_board_geometry_at_1x(self):
         g = _node("m.gridLayout(6)")
-        self.assertAlmostEqual(g["cw"], 66.75, places=2, msg="画板 2×：(580 − 22 − 24)/4 ÷ 2")
-        self.assertEqual(g["ch"], 67)
-        self.assertEqual(g["h"], 5.5 + 2 * 67 + 4 + 5.5, "两行：内边距 + 2 格 + 间距 + 内边距")
-        self.assertEqual(g["pos"][4], {"x": 5.5, "y": 5.5 + 67 + 4}, "★ 第 5 格换到第二行行首")
+        # 用户 2026-10-21 选 1.5×：画板 2× 数值 × 0.75
+        self.assertAlmostEqual(g["cw"], 100.25, places=2, msg="(435 − 2×8 − 3×6)/4")
+        self.assertEqual(g["ch"], 100.5)
+        self.assertEqual(g["h"], 8 + 2 * 100.5 + 6 + 8, "两行：内边距 + 2 格 + 间距 + 内边距")
+        self.assertEqual(g["pos"][4], {"x": 8, "y": 8 + 100.5 + 6}, "★ 第 5 格换到第二行行首")
+        self.assertEqual(_node("[m.PANEL_W, m.RING, m.LOGO]"), [435, 48, 20], "★ 画板 580 / 64 / 26 × 0.75（logo 19.5 吸整）")
+        rs = (ROOT / "codexbar" / "src-tauri" / "src" / "tps_hover.rs").read_text(encoding="utf-8")
+        self.assertIn("pub const IDLE_PANEL_W: f64 = 435.0;", rs, "★ Rust 摆窗口用的宽必须与前端同值")
         self.assertEqual(_node("m.gridLayout(0).h"), 0, "没有格子 ⇒ 面板不出现")
 
     def test_tray_logos_fly_into_ring_centres_in_tray_order(self):
@@ -207,7 +211,7 @@ class GridGeometry(unittest.TestCase):
         f = _node("m.planIdleFlights(%s, ['claude','codex','grok'], m.gridLayout(3), 40, 30)" % json.dumps(lay))
         self.assertEqual([x["fromTray"] for x in f], [True, True, False], "★ 托盘以外的那家不飞，原位淡入")
         self.assertEqual(f[0]["pill"], {"x": 319, "y": 5, "s": 1}, "从托盘里那个 logo 的位置起飞")
-        cx = 40 + 1 + 5.5 + 66.75 / 2
+        cx = 40 + 1 + 8 + 100.25 / 2
         self.assertAlmostEqual(f[0]["cell"]["x"] + 7, cx, places=6, msg="★★ 落在第一格的环心（含面板描边 1）")
         self.assertEqual([f[0]["delay"], f[1]["delay"]], [25, 0], "按托盘顺序错开 25 ms（Codex 在托盘第 1 位先走）")
         self.assertEqual([f[0]["delayBack"], f[1]["delayBack"]], [0, 25], "飞回倒序：最右的先走")

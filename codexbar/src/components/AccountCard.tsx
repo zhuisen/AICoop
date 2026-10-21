@@ -8,7 +8,8 @@ import { fmtTokens, fmtTps } from "../live";
 import type { DragWiring } from "./DragHandle";
 import StaleMark from "./StaleMark";
 import { isCardExpiring } from "./CardBadge";
-import { Ab, DynText, HoldAb, IcRefresh, IcSwap, IcTicket, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
+import { shortDate } from "../mbLogic";
+import { Ab, DynText, ProbeAb, IcRefresh, IcSwap, IcTicket, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
 
 /**
  * Codex 账号卡（交接包 page5「账号卡」，5 行槽位 + 底栏，固定 148 高）。外壳在 `ov/OvCard.tsx`，
@@ -18,7 +19,7 @@ import { Ab, DynText, HoldAb, IcRefresh, IcSwap, IcTicket, OvCard, OvMenu, OvTag
  *   | 原来                         | 现在                                   |
  *   |------------------------------|----------------------------------------|
  *   | 切换                         | 底栏主按钮「切换」（在用号不出）           |
- *   | 探针（两段确认）              | 底栏「探针」，按住 0.6 s（与菜单栏同一状态机）|
+ *   | 探针（两段确认）              | 底栏「探针」，点一下就执行（与菜单栏同一连点判据）|
  *   | 置顶 / 轮换开关 / 改名 / 详情 / 删除（两段）| ⋯ 菜单                         |
  *   | 页脚重置卡角标 → 确认弹窗     | 页脚角标原样可点（`data-card-badge-use`）+ ⋯「使用重置卡」|
  *   | 拖拽手柄                      | 右上角，悬停出现                          |
@@ -138,7 +139,6 @@ export default function AccountCard({ a, t, state, isDirect, borrowOff, bestPct,
   );
 
   const expiring = isCardExpiring(a);
-  const some = expiring && a.cardsExpiring > 0 && a.cardsExpiring < a.cards;
   const canUse = !!a.cardExp;
   const cardTitle = (a.cardExp
     ? `共 ${a.cards} 张 · 最早一张到期 ${a.cardExp}${a.cardsExpiring ? ` · ${a.cardsExpiring} 张在 ${CARD_WARN_DAYS} 天内作废` : ""}`
@@ -157,7 +157,8 @@ export default function AccountCard({ a, t, state, isDirect, borrowOff, bestPct,
           style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace",
                    fontVariantNumeric: "tabular-nums", color: expiring ? "var(--ovWarnTx)" : "var(--ovNum)",
                    flexShrink: 0 }}>
-      <IcTicket />{usingCredit ? "使用中…" : `重置卡 ×${a.cards}${expiring ? ` · ${some ? `${a.cardsExpiring}张` : ""}剩 ${cardLeftText(a.cardDays ?? 0)}` : ""}`}
+      {/* 短写（用户 2026-10-21「到期日期挡住了」选「短日期 + 短重置卡」）：几张快作废、哪天作废在悬浮与「快到期」堆叠里 */}
+      <IcTicket />{usingCredit ? "使用中…" : `重置卡 ${a.cards}${expiring ? ` · ${cardLeftText(a.cardDays ?? 0)}` : ""}`}
     </span>
   ) : <span style={{ color: "var(--ovPh)", fontFamily: "'JetBrains Mono', monospace", flexShrink: 0 }}>无重置卡</span>;
 
@@ -181,7 +182,7 @@ export default function AccountCard({ a, t, state, isDirect, borrowOff, bestPct,
         </Ab>
       )}
       {state !== "off" && (
-        <HoldAb loading={probing} onFire={onProbe}
+        <ProbeAb loading={probing} onFire={onProbe}
                 hint={`对 ${a.node} 发一次真实补全（问 hi 要求答 ok），证明"真的还能干活"。⚠️ 计费：消耗周额度（实测单次 <1%）`} />
       )}
       <Ab onClick={onRefresh} disabled={refreshing} data="refresh"
@@ -205,8 +206,8 @@ export default function AccountCard({ a, t, state, isDirect, borrowOff, bestPct,
   return (
     <OvCard id={a.aid} t={t} state={state} ringPct={pct} head={head} right={right}
             email={maskId(a.email, privacy) || "—"} dyn={dyn} w5={toWin(five, "5h")} ww={toWin(week, "w")}
-            footLeft={<span title={a.expStale ? "OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。" : "订阅到期日"}>
-              到期 {a.exp}{a.expStale && <span style={{ color: "var(--ovWarnTx)" }}>*</span>}{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}
+            footLeft={<span data-ov-exp={a.exp} title={a.expStale ? `订阅到期 ${a.exp}。OpenAI 上次复核订阅早于这个日期,所以「已过期」是拿陈旧快照下的结论 —— 续费不在它视野里。` : `订阅到期日 ${a.exp}`}>
+              {shortDate(a.exp, Date.now())} 到期{a.expStale && <span style={{ color: "var(--ovWarnTx)" }}>*</span>}{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}
             </span>}
             footRight={footRight} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
   );

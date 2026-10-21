@@ -9,6 +9,8 @@ import { agyAction, agyProbeToast, agyShown, agyTightest } from "../../agy";
 import type { GrokSnapshot } from "../../grok";
 import { grokLastGoodRemPct, grokRemPct } from "../../grok";
 import type { ClaudeQuota } from "../../mbLogic";
+import { SUB_WARN_DAYS, expiryWarnings } from "../../mbLogic";
+import { CARD_WARN_DAYS } from "../../helpers";
 import type { LiveSnapshot } from "../../live";
 import type { Integration } from "../../hooks/useIntegration";
 import type { CardDragWiring } from "../../hooks/useCardDrag";
@@ -24,8 +26,9 @@ import DawnChip from "../DawnChip";
 import ClaudeCard from "./ClaudeCard";
 import { ClaudeHero, GrokHero } from "./OvHeroRO";
 import { HeroShell, PoolHero, type PlatColors } from "./OvHero";
-import { AutoSwitchItem, GroupDivider, HeadMore, OvTabs, ProbeHold, RefreshBtn, ToggleGroup, type OvTab } from "./OvHeader";
+import { AutoSwitchItem, GroupDivider, HeadMore, OvTabs, ProbeHead, RefreshBtn, ToggleGroup, type OvTab } from "./OvHeader";
 import { OvStrip } from "./OvStrip";
+import ExpiryStack from "./ExpiryStack";
 import { useRotationDay } from "./useRotationDay";
 import { ovVars, MONO } from "./ovVars";
 import "../../menubar.css";
@@ -190,7 +193,7 @@ export default function Overview(p: OverviewProps) {
     actions = (<>
       <RefreshBtn labels={layout.labels} busy={p.loadingAction === "refresh-all"} title={`刷新全池（零消耗）· ${codexFresh}`}
                   onClick={() => void p.run("refresh-all", ["refresh-all", "--notify"], `已刷新全池 · ${p.accounts.length} 个号`)} />
-      <ProbeHold loading={p.loadingAction === "probe-all"} onFire={() => void p.run("probe-all", ["probe", "--all"], "探针 全池")}
+      <ProbeHead loading={p.loadingAction === "probe-all"} onFire={() => void p.run("probe-all", ["probe", "--all"], "探针 全池")}
                  hint={`对 ${p.accounts.length} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"。⚠️ 计费：消耗周额度(实测单次 <1%),约 ${p.accounts.length * 7}s`} />
       <ToggleGroup>
         <DawnChip t={p.t} kind="codex" active={codexOn} look="switch" showLabel={layout.labels} />
@@ -208,7 +211,7 @@ export default function Overview(p: OverviewProps) {
     actions = (<>
       <RefreshBtn labels={layout.labels} busy={p.agyPool.busy} title={`刷新全池（agy-rotate quota，零消耗）${agyFresh ? ` · ${agyFresh}` : ""}`}
                   onClick={() => { p.agyPool.refresh(); p.showToast(`已刷新 Gemini · ${p.agyPool.accounts.length} 个号`); }} />
-      <ProbeHold loading={(p.agyPool.running ?? "").startsWith("probe:")}
+      <ProbeHead loading={(p.agyPool.running ?? "").startsWith("probe:")}
                  onFire={() => { p.showToast("探针 全池…"); void p.agyPool.probe().then((r) => r && p.showToast(agyProbeToast(r), 8000)); }}
                  hint={`对 ${p.agyPool.accounts.length} 个号各起一次 agy 真跑一句（问 hi 要求答 ok）。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token），每号约 30s`} />
       <ToggleGroup>
@@ -321,7 +324,10 @@ export default function Overview(p: OverviewProps) {
   );
   if (codexOn) {
     const c = ovCounts([...cMain.map(cState), ...cDead.map(() => "dead" as const), ...cOff.map(() => "off" as const)]);
-    title = <AccountsTitle name="Codex" c={c} mode={codexMode} canCustom={!!savedCodex?.length} onMode={(m) => setSortFor("codex", m)} />;
+    // 快到期（重置卡 / 订阅）：与菜单栏通知条同一套判据；失效号不算（卡与订阅对它已无意义）
+    const warns = expiryWarnings(p.accounts.filter((a) => a.status !== "dead"), nowMs, CARD_WARN_DAYS, SUB_WARN_DAYS);
+    title = <AccountsTitle name="Codex" c={c} mode={codexMode} canCustom={!!savedCodex?.length} onMode={(m) => setSortFor("codex", m)}
+                           warn={<ExpiryStack items={warns} />} />;
     grid = grid0(codexShown.map((a, i) => codexCard(a, i, true)));
     below = (<>
       {cOff.length > 0 && (
@@ -401,8 +407,10 @@ const Chev = () => (
 );
 
 /** 账号区标题行：`Codex 账号 · 5 可用 · 1 冷却中 · 1 需处理 · 3 已停用`，右侧排序。0 的项不写。 */
-function AccountsTitle({ name, c, mode, canCustom, onMode, readOnly }: {
+function AccountsTitle({ name, c, mode, canCustom, onMode, readOnly, warn }: {
   name: string; c?: ReturnType<typeof ovCounts>; mode?: SortMode; canCustom?: boolean; onMode?: (m: SortMode) => void; readOnly?: boolean;
+  /** 计数后面的「快到期」堆叠警告（只有 Codex 有）。 */
+  warn?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
@@ -427,6 +435,7 @@ function AccountsTitle({ name, c, mode, canCustom, onMode, readOnly }: {
           {item(c.off, "已停用", "var(--tx3)")}
         </>)}
       </span>
+      {warn}
       {readOnly ? (
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--tx2)" }}>只读</span>
       ) : onMode && (

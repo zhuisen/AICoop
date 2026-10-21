@@ -101,39 +101,64 @@ class NoticesMergeIntoOne(unittest.TestCase):
                          ["号D 订阅 今天到期（x）", "号D 订阅 3 天后到期（x）"])
 
 
-class TheHoldProbeNeverFiresEarly(unittest.TestCase):
-    """★★ 探针花钱：按住不满 600 ms 永远不执行；一次按住最多执行一次；正在探测时按下无效。"""
+class TheProbeFiresOncePerClick(unittest.TestCase):
+    """★★ 探针花钱。用户 2026-10-21「探针的功能 修改点击即可」：点一下就执行（取代按住 0.6 s）。
+    护栏只剩两条，都在 `probeShouldFire`：正在探测时点击无效；`PROBE_GAP_MS` 内的连点（双击 / 手抖）只算一次。"""
 
-    RUN = ("(evs => { let s = m.HOLD_IDLE; const out = []; for (const e of evs) { s = m.holdReduce(s, e); "
-           "out.push(s.phase); } return out; })")
+    def test_first_click_fires(self):
+        self.assertTrue(node("m.probeShouldFire(null, 0, false)"))
 
-    def phases(self, evs):
-        return node("%s(%s)" % (self.RUN, evs))
+    def test_loading_blocks(self):
+        self.assertFalse(node("m.probeShouldFire(null, 0, true)"), "★★ 探测中再点又发了一次")
+        self.assertFalse(node("m.probeShouldFire(0, 99999, true)"))
 
-    def test_release_before_600_retreats(self):
-        got = self.phases("[{type:'down',now:0},{type:'tick',now:300},{type:'tick',now:599},"
-                          "{type:'up',now:599},{type:'tick',now:700},{type:'tick',now:748},{type:'tick',now:749}]")
-        self.assertEqual(got, ["holding", "holding", "holding", "retreat", "retreat", "retreat", "idle"])
-        self.assertNotIn("fired", got)
+    def test_a_double_click_fires_once(self):
+        self.assertEqual(node("m.PROBE_GAP_MS"), 1500)
+        self.assertFalse(node("m.probeShouldFire(1000, 1000 + 250, false)"), "★★ 双击发了两次计费请求")
+        self.assertFalse(node("m.probeShouldFire(1000, 1000 + 1499, false)"))
+        self.assertTrue(node("m.probeShouldFire(1000, 1000 + 1500, false)"), "隔够了就该能再点")
 
-    def test_leave_also_cancels(self):
-        got = self.phases("[{type:'down',now:0},{type:'leave',now:200},{type:'tick',now:900}]")
-        self.assertEqual(got, ["holding", "retreat", "idle"])
 
-    def test_fires_once(self):
-        got = self.phases("[{type:'down',now:0},{type:'tick',now:600},{type:'tick',now:700},"
-                          "{type:'up',now:800},{type:'down',now:900},{type:'reset'}]")
-        # fired 是终态：再 tick / 松手 / 按下都不会回到 holding 再 fired 一次，只有 reset 能出去
-        self.assertEqual(got, ["holding", "fired", "fired", "fired", "fired", "idle"])
+class ExpiryWarnings(unittest.TestCase):
+    """总览「快到期」堆叠警告的取数（用户 2026-10-21）：与菜单栏通知条同一套判据。"""
+    NOW = "new Date(2026, 9, 21, 8, 0).getTime()"
 
-    def test_disabled_down_is_ignored(self):
-        got = self.phases("[{type:'down',now:0,disabled:true},{type:'tick',now:5000}]")
-        self.assertEqual(got, ["idle", "idle"])
+    def acct(self, aid, **kw):
+        base = {"aid": aid, "node": aid, "exp": "2026-12-30", "expStale": False, "cards": 0, "cardsExpiring": 0}
+        base.update(kw)
+        return json.dumps(base, ensure_ascii=False)
 
-    def test_fill_follows_the_handoff(self):
-        got = node("[m.holdFill({phase:'holding',since:0}), m.holdFill(m.HOLD_IDLE)]")
-        self.assertEqual(got, [{"width": 100, "transition": "width 600ms linear"},
-                               {"width": 0, "transition": "width 150ms ease-out"}])
+    def warns(self, *accts):
+        return node("m.expiryWarnings([%s], %s, 3, 7)" % (",".join(accts), self.NOW))
+
+    def test_cards_and_subs_sorted_by_days(self):
+        got = self.warns(self.acct("A", cards=3, cardDays=1.3, cardExp="2026-10-22", cardsExpiring=2),
+                         self.acct("B", exp="2026-10-24"),
+                         self.acct("C", cards=1, cardDays=0.4, cardExp="2026-10-21"))
+        self.assertEqual([(w["aid"], w["kind"], w["count"]) for w in got],
+                         [("C", "card", 1), ("A", "card", 2), ("B", "sub", 1)])
+
+    def test_what_does_not_warn(self):
+        got = self.warns(self.acct("far", cards=2, cardDays=10),          # 卡还远
+                         self.acct("unk", cards=2),                         # 到期未知 ⇒ 不编
+                         self.acct("stale", exp="2026-10-22", expStale=True),  # 日期不可信
+                         self.acct("past", exp="2026-10-19"),               # 已过（不是「快到期」）
+                         self.acct("later", exp="2026-10-30"))              # 8 天后，窗口外
+        self.assertEqual(got, [])
+
+    def test_count_is_clamped_to_the_cards_held(self):
+        got = self.warns(self.acct("A", cards=1, cardDays=1, cardsExpiring=5))
+        self.assertEqual(got[0]["count"], 1)
+
+    def test_one_rule_for_the_badge(self):
+        """`isCardExpiring`（角标 / 边框 / 横幅）与堆叠走同一个 `cardExpiring`，不各写一份。"""
+        src = strip_comments((SRC / "components" / "CardBadge.tsx").read_text(encoding="utf-8"))
+        self.assertIn("return cardExpiring(a.cards, a.cardDays, CARD_WARN_DAYS);", src)
+
+    def test_short_date(self):
+        got = node("[m.shortDate('2026-11-24', %s), m.shortDate('2028-01-05', %s), m.shortDate('—', %s)]"
+                   % (self.NOW, self.NOW, self.NOW))
+        self.assertEqual(got, ["11-24", "2028-01-05", "—"])
 
 
 class ClaudeQuotaParse(unittest.TestCase):
@@ -195,7 +220,7 @@ class SourceShape(unittest.TestCase):
         rd = lambda p: strip_comments((SRC / p).read_text(encoding="utf-8"))
         cls.qrow = rd("components/mb/QuotaRow.tsx")
         cls.mb = rd("MenuBar.tsx")
-        cls.hold = rd("components/mb/HoldProbe.tsx")
+        cls.hold = rd("components/mb/ProbeBtn.tsx")
         cls.claude = rd("components/mb/ClaudeRow.tsx")
         cls.css = re.sub(r"/\*[\s\S]*?\*/", "", (SRC / "menubar.css").read_text(encoding="utf-8"))
 
@@ -218,12 +243,11 @@ class SourceShape(unittest.TestCase):
             self.assertNotIn(bad, self.mb, "弹窗里又出现了日夜切换（交接包 4f 已移出）：%s" % bad)
         self.assertIn('"theme-changed"', self.mb, "主题仍要跟着设置页走")
 
-    def test_probe_only_fires_through_the_state_machine(self):
-        self.assertIn("useReducer(holdReduce", self.hold)
-        self.assertIn("holdFill(", self.hold)
-        self.assertIn("HOLD_MS", self.hold)
-        self.assertNotRegex(self.hold, r"setTimeout\([^)]*\b600\b", "手写了 600 ms，绕开了 HOLD_MS")
-        self.assertRegex(self.mb, r"<HoldProbe[\s\S]{0,300}?onFire=\{\(\) => run\(\"probe-all\"",
+    def test_probe_only_fires_through_the_click_guard(self):
+        self.assertRegex(self.hold, r"if \(!probeShouldFire\(last\.current, now, loading\)\) return;\s*last\.current = now;\s*onFire\(\);",
+                         "★★ 探针绕开了连点判据")
+        self.assertNotIn("onFire()", self.hold.replace("    onFire();", "", 1), "除了判据后面那一处，还有别的地方直接 onFire")
+        self.assertRegex(self.mb, r"<ProbeBtn[\s\S]{0,300}?onFire=\{\(\) => run\(\"probe-all\"",
                          "探针按钮没接到全池探针")
 
     def test_no_cross_ai_speed_anywhere(self):

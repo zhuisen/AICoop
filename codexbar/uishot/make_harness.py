@@ -79,15 +79,13 @@ STUB = """
     if (p.get('mbplat')) localStorage.setItem('codexbar_mb_plat', p.get('mbplat'));
     // ★ 菜单栏弹窗 4f（交接包 2026-10-19）的几个开关 —— 不给的话这些态一个像素都截不到：
     //   `?mbstrip=1` 在跑条展开（默认折叠，与真实默认一致）· `?mbtheme=light` 浅色（日夜切换已移出弹窗，
-    //   弹窗只读 `codexbar_theme`）· `?probehold=1` 把探针钉在「按住中途」那一帧（只给截图用）。
+    //   弹窗只读 `codexbar_theme`）。（`?probehold` 随「按住 0.6 s」一起删了：探针 2026-10-21 起点一下就执行。）
     localStorage.setItem('codexbar_mb_strip', p.get('mbstrip') === '1' ? '1' : '0');
     // ★ `?theme=light`（主窗口）与 `?mbtheme=light`（菜单栏）现在写同一个键：日夜切换 2026-10-19 移进设置页，
     //   所有 webview 共读 `codexbar_theme`（`SettingsPage.tsx::loadTheme`）。在 bundle 之前写，App 首帧就是浅色。
     var themeQ = p.get('mbtheme') || p.get('theme');
     if (themeQ) localStorage.setItem('codexbar_theme', themeQ);
     else localStorage.removeItem('codexbar_theme');
-    if (p.get('probehold') === '1') localStorage.setItem('codexbar_mb_probehold', '1');
-    else localStorage.removeItem('codexbar_mb_probehold');
     // ★ 总览（交接包 page5，2026-10-19）的几个开关 —— 不给的话这些态一个像素都截不到：
     //   `?ovplat=codex|claude|gemini|grok` 停在哪一档（真源是 localStorage `codexbar_provider`）·
     //   `?ovhover=<序号|aid>` 把那张卡钉在悬停态（headless 里 JS 事件不激活 `:hover`，见 verification.md）·
@@ -210,6 +208,13 @@ STUB = """
     sh.textContent = '.mb-row-switch-wrap{opacity:1 !important;pointer-events:auto !important}'
       + '.cb-hoverpop{opacity:1 !important;visibility:visible !important}';
     document.head.appendChild(sh);
+  }
+  // ★ 总览「快到期」堆叠警告展开态（`?ovxs=1`）：headless 下 JS 事件不激活 `:hover`，给它加 `ov-xs-on`
+  //   （与 `.ov-xs:hover` 同一条规则），截的是展开后的排版与遮挡，不验悬停触发本身。
+  if (p.get('ovxs') === '1') {
+    new MutationObserver(function () {
+      document.querySelectorAll('.ov-xs:not(.ov-xs-on)').forEach(function (e) { e.classList.add('ov-xs-on'); });
+    }).observe(document.documentElement, { childList: true, subtree: true });
   }
   // ★ 菜单栏 4f 账号行悬停（`?mbhover=<n>`：第 n 个可切换的行，从 1 数）。headless 下 JS 事件不激活
   //   `:hover`，所以给那一行加 `qhov` 并注入与 `.qrow:not(.qro):hover` 同值的样式 ——
@@ -1524,10 +1529,10 @@ function relayEntry() {
     return { v: 1, generated_at: _NOW, platforms: { codex: P('codex', codex), claude: P('claude', claude), agy: P('agy', agy), grok: P('grok', grok) },
              today: { tokens: 48.7e6, avg_tps: 58.4, n: 312 } };
   }
-  // 版面夹具：与 `tps_hover.rs::window_rect` 同形（面板在窗口内 (40, 30)，胶囊右沿 = 面板右沿 − 8）。
+  // 版面夹具：与 `tps_hover.rs::window_rect` 同形（面板在窗口内 (40, 30)，胶囊在面板正上方居中 —— 用户 2026-10-21「居中弹窗」）。
   function HV_LAYOUT(mode) {
     var keys = String(mode) === '4' ? ['codex', 'claude', 'agy', 'grok'] : (String(mode) === '2' ? ['codex', 'agy'] : ['codex']);
-    var pw = keys.length === 1 ? 70 : (keys.length === 2 ? 96 : 104), px = 40 + 300 - 8 - pw, py = 3;
+    var pw = keys.length === 1 ? 70 : (keys.length === 2 ? 96 : 104), px = 40 + 300 / 2 - pw / 2, py = 3;
     var segs = keys.map(function (k, i) {
       var x = 6 + i * ((pw - 12) / Math.max(1, keys.length));
       return { platform: k, x: x, w: 12, logo: { x: px + x, y: py + 3, size: 12 } };
@@ -1536,7 +1541,7 @@ function relayEntry() {
              pill: { x: px, y: py, w: pw, h: 18 }, segments: segs };
   }
   // ★ 空闲额度格子（AICoop P11 §6）：`?hv=idle` 发 `mode: "idle"` 的打开事件（托盘里 Codex / Claude / Gemini 三家，
-  //   logo 14 pt、胶囊宽 61，面板 290、右沿比胶囊右沿多 10）。格子夹具 `?hvcells=4`（默认：托盘三家 + Grok；
+  //   logo 14 pt、胶囊宽 63，面板 435（1.5×）、在胶囊正下方居中）。格子夹具 `?hvcells=4`（默认：托盘三家 + Grok；
   //   Gemini 剩 6% 是插队）· `8` 两行（再加 Kimi / DeepSeek 未接入 + 两个重复填充不可能出现，所以只到 6 家）· `1` 只一家。
   function HV_IDLE_CELLS(mode) {
     var C = function (key, main, reset, inBar) { return { key: key, main: main, reset: reset, inBar: inBar, low: main !== null && Math.round(main) < 10, stale: false }; };
@@ -1546,9 +1551,9 @@ function relayEntry() {
     return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4 };
   }
   function HV_IDLE_LAYOUT() {
-    var keys = ['codex', 'claude', 'agy'], pw = 4 + 3 * 14 + 2 * 5 + 7, px = 40 + 290 - 10 - pw, py = 3;
+    var keys = ['codex', 'claude', 'agy'], pw = 4 + 3 * 14 + 2 * 5 + 7, px = 40 + 435 / 2 - pw / 2, py = 3;
     var segs = keys.map(function (k, i) { var x = 4 + i * 19; return { platform: k, x: px + x, w: 14, logo: { x: px + x, y: py + 2, size: 14 } }; });
-    return { mode: 'idle', window: { w: 370, h: 260 }, menubar_h: 24, panel: { x: 40, y: 30, w: 290, h: 78 },
+    return { mode: 'idle', window: { w: 515, h: 330 }, menubar_h: 24, panel: { x: 40, y: 30, w: 435, h: 118 },
              pill: { x: px, y: py, w: pw, h: 18 }, segments: segs };
   }
   if (location.pathname.indexOf('harness-tpshover') >= 0) {

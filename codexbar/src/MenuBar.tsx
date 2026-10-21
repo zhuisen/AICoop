@@ -10,7 +10,7 @@ import AgyRow from "./components/AgyRow";
 import ClaudeRow from "./components/mb/ClaudeRow";
 import RunStrip from "./components/mb/RunStrip";
 import NoticeBar from "./components/mb/NoticeBar";
-import HoldProbe from "./components/mb/HoldProbe";
+import ProbeBtn from "./components/mb/ProbeBtn";
 import { useTodayTps } from "./components/mb/useTodayTps";
 import { mbVars, MONO } from "./components/mb/vars";
 import { agyAction, agyShown, agyTightest, agyWinRows, agyResetText } from "./agy";
@@ -168,9 +168,6 @@ const IconMore = () => (
     <circle cx="5" cy="12" r="1.7" fill="currentColor" /><circle cx="12" cy="12" r="1.7" fill="currentColor" /><circle cx="19" cy="12" r="1.7" fill="currentColor" />
   </svg>
 );
-
-/** harness 专用开关（`?probehold=1` 截「按住中途」那一帧）。生产里恒 false。 */
-const FORCE_HOLD = (() => { try { return localStorage.getItem("codexbar_mb_probehold") === "1"; } catch { return false; } })();
 
 export default function MenuBar() {
   const { accounts, currentNode, inUseNode, lastRefreshAt, cardAlert, loadingAction, toast, refresh, run, showToast } = useStore();
@@ -674,7 +671,7 @@ export default function MenuBar() {
       </div>
       )}
 
-      {/* 底栏：刷新全池（免费）· 探针（计费，按住 0.6 s）/ 工作台 → · ⋯ */}
+      {/* 底栏：刷新全池（免费）· 探针（计费，点一下就执行）/ 工作台 → · ⋯ */}
       <div className="mb-actions" style={{ position: "relative", display: "flex", gap: 8, padding: "10px 12px",
                                            borderTop: "1px solid var(--line)", flexShrink: 0 }}>
         <span className="mb-foot-btn" data-mb-refresh="" onClick={refreshing ? undefined : refreshPool}
@@ -692,7 +689,7 @@ export default function MenuBar() {
         </span>
         <span style={{ position: "relative", width: 132, height: 34, flexShrink: 0 }}>
           {/* ★★★ 探针扣的是 **codex** 的额度。只在 codex 档的账号 Tab 出现。 */}
-          {codexActions && <HoldProbe forceHolding={FORCE_HOLD}
+          {codexActions && <ProbeBtn
             hint={`对 ${alive.length} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"——token 有效但订阅到期/模型权限被撤/被限流,只有这个测得出来。⚠️ 消耗周额度(实测单次 <1%)`}
             loading={loadingAction === "probe-all"}
             onFire={() => run("probe-all", ["probe", "--all"], "探针 全池")} />}

@@ -1367,11 +1367,17 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
             s["tokens"] += (r.get("input") or 0) + (r.get("output") or 0)
             if s["_last"] is None or r["t_end"] > s["_last"]["t_end"]:
                 s["_last"] = r
+            if r.get("tps") is not None and not r.get("est") and (
+                    s.get("_meas") is None or r["t_end"] > s["_meas"]["t_end"]):
+                s["_meas"] = r
         lst = []
         for s in sess.values():
-            last = s.pop("_last")
+            last, meas = s.pop("_last"), s.pop("_meas", None)
             if last is not None:
-                s["last_t_end"], s["tps"] = last["t_end"], last.get("tps")
+                # ★★ 速度取最近一条**实测**（用户 2026-10-21「数字偏低」）：Claude 的 transcript 占位估值
+                #   约 2 s 后才被 OTel 实测覆盖，`agent_summary` 旁路请求只能估（p50 5.1）且挂在主会话上 ——
+                #   直接取最新一条，就是让这些估值盖住上一条实测。一条实测都没有才退回估值。
+                s["last_t_end"], s["tps"] = last["t_end"], (meas or last).get("tps")
                 if s["title"] is None:
                     s["title"] = last.get("session_title")
             if s["active"] or last is not None:

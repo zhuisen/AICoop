@@ -25,31 +25,42 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 BASE = "http://127.0.0.1:3304/harness-notch.html?notrans=1"
 
 
-def node(expr):
-    js = "import('%s').then(m => console.log(JSON.stringify(%s)))" % (MOD.as_posix(), expr)
+def node(expr, mod=None):
+    src = (MOD.parent / mod) if mod else MOD
+    js = "import('%s').then(m => console.log(JSON.stringify(%s)))" % (src.as_posix(), expr)
     r = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "-e", js],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-800:]
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-class TheBoardDividedByOnePointFive(unittest.TestCase):
-    def test_four_cells_in_one_row_of_a_300_panel(self):
+class TheGridMatchesTheTrayPanel(unittest.TestCase):
+    """★ 用户 2026-10-21「刘海屏版本也要改」（选「和托盘一样 1.5×」）：格子面板与托盘悬停面板同一套尺寸。"""
+
+    def test_four_cells_in_one_row_of_a_435_panel(self):
         g = node("m.notchGrid(4)")
-        self.assertEqual(g["cw"], 69, "(300 − 2×6 − 3×4) / 4")
-        self.assertEqual([p["x"] for p in g["pos"]], [6, 79, 152, 225])
-        self.assertEqual(g["h"], 6 + 74.5 + 6)
+        self.assertAlmostEqual(g["cw"], 100.25, places=6, msg="(435 − 2×8 − 3×6) / 4")
+        self.assertEqual([p["x"] for p in g["pos"]], [8, 114.25, 220.5, 326.75])
+        self.assertEqual(g["h"], 8 + 100.5 + 8)
 
     def test_eight_cells_make_two_rows_and_none_make_no_panel(self):
-        self.assertEqual(node("m.notchGrid(8).h"), 6 + 74.5 * 2 + 4 + 6)
-        self.assertEqual(node("m.notchGrid(8).pos[4]"), {"x": 6, "y": 6 + 74.5 + 4})
+        self.assertEqual(node("m.notchGrid(8).h"), 8 + 100.5 * 2 + 6 + 8)
+        self.assertEqual(node("m.notchGrid(8).pos[4]"), {"x": 8, "y": 8 + 100.5 + 6})
         self.assertEqual(node("m.notchGrid(0).h"), 0)
 
-    def test_panel_width_is_the_4e_card_width(self):
-        """★ Rust 命中区按 `CARD_W` 算（空闲格子直接复用），两边不一致 = 面板的一侧点不到 / 移出去不收。"""
-        self.assertEqual(node("m.PANEL_W"), 300)
+    def test_same_numbers_as_the_tray_panel(self):
+        keys = "PANEL_W PAD GAP COLS CELL_H RING RING_R RING_SW RING_TOP LOGO".split()
+        expr = "[%s]" % ",".join("m.%s" % k for k in keys)
+        tray = node(expr, mod="idleGridLayout.ts")
+        self.assertEqual(node(expr), tray, "★ 刘海格子与托盘面板的尺寸又分叉了")
+
+    def test_rust_hit_area_uses_the_same_width(self):
+        """★ Rust 命中区宽按 `card_w()`：空闲格子 = `tps_hover::IDLE_PANEL_W`。两边不一致 = 面板的一侧点不到 / 移出去不收。"""
+        self.assertEqual(node("m.PANEL_W"), 435)
         rs = (ROOT / "codexbar" / "src-tauri" / "src" / "notch.rs").read_text(encoding="utf-8")
-        self.assertRegex(rs, r"pub const CARD_W: f64 = 300\.0;")
+        self.assertRegex(rs, r"if OPEN_IDLE\.load\(Ordering::SeqCst\) \{ crate::tps_hover::IDLE_PANEL_W \} else \{ CARD_W \}")
+        css = (ROOT / "codexbar" / "src" / "notch.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.ni-panel \{[^}]*left: calc\(50% - 217\.5px\); width: 435px;", "CSS 面板宽与 PANEL_W 不一致")
 
 
 class TheNeutralGlow(unittest.TestCase):
@@ -133,10 +144,10 @@ class OnTheRealBundle(unittest.TestCase):
     def test_idle_open_shows_the_grid_not_the_4e_card(self):
         h = dom("")
         i = body_json(h, "data-nt-idle")
-        self.assertEqual((i["x"], i["y"], i["w"], i["h"], i["op"]), ((179 - 300) / 2, 42, 300, 86.5, 1),
-                         "面板在刘海下沿下 10 pt、居中、300 × 86.5、看得见")
+        self.assertEqual((i["x"], i["y"], i["w"], i["h"], i["op"]), ((179 - 435) / 2, 42, 435, 116.5, 1),
+                         "面板在刘海下沿下 10 pt、居中、435 × 116.5、看得见")
         self.assertEqual([c["k"] for c in i["cells"]], ["codex", "claude", "agy", "grok"])
-        self.assertEqual([round(c["w"], 2) for c in i["cells"]], [69] * 4)
+        self.assertEqual([round(c["w"], 2) for c in i["cells"]], [100.25] * 4)
         self.assertIn('data-notch-open="0"', h, "★ 空闲那种展开不许同时冒出 4e 卡片")
         self.assertEqual(body_json(h, "data-nt-errors"), [])
 
@@ -194,7 +205,7 @@ class OnTheRealBundle(unittest.TestCase):
 
     def test_each_kind_reports_its_own_height(self):
         calls = [json.loads(c.split("=", 1)[1]) for c in body_json(dom(""), "data-nt-calls") if c.startswith("notch_card_resize=")]
-        self.assertIn({"h": 86.5, "mode": "idle"}, calls)
+        self.assertIn({"h": 116.5, "mode": "idle"}, calls)
         self.assertTrue(any(c.get("mode") == "run" for c in calls), "4e 那份也照报（Rust 各存一份）")
         self.assertNotIn(0, [c["h"] for c in calls], "0 格不报高度")
 

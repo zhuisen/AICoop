@@ -1,7 +1,7 @@
 // 菜单栏弹窗（交接包 2026-10-19 page4 · 4f）的纯逻辑。★ 零 import —— 测试用
 // `node --experimental-strip-types` 直接跑（CI 没有 node_modules，见 CLAUDE.md §4）。
 //
-// 这里只放「判据」：低额度、排序、通知合并、按住探针的状态机、Claude 额度解析。
+// 这里只放「判据」：低额度、排序、通知合并、探针连点判据、Claude 额度解析。
 // 怎么画在组件里；判据只有这一份，组件与测试共用。
 
 // ── 低额度 ───────────────────────────────────────────────────────────────
@@ -124,63 +124,72 @@ export function daysUntil(isoDate: string, nowMs: number): number | null {
   return Math.floor((end - nowMs) / 86_400_000);
 }
 
+/** 重置卡「快作废」的唯一判据（`CardBadge.tsx::isCardExpiring` 调它）。`cardDays` 未知 ⇒ 不算快作废（不编）。 */
+export function cardExpiring(cards: number, cardDays: number | undefined, warnDays: number): boolean {
+  return cards > 0 && cardDays != null && cardDays <= warnDays;
+}
+
+/**
+ * 卡片底栏的短日期（用户 2026-10-21「到期日期挡住了」⇒ 选「短日期」）：一年内的写 `MM-DD`，更远的才写全。
+ * 认不出的原样返回（`—` 之类）。完整日期放悬浮。
+ */
+export function shortDate(iso: string, nowMs: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(y, m - 1, d).getTime();
+  return Math.abs(t - nowMs) <= 300 * 86_400_000 ? iso.slice(5) : iso;
+}
+
+export interface ExpiryAcct {
+  aid: string; node: string; exp: string; expStale: boolean;
+  cards: number; cardDays?: number; cardExp?: string; cardsExpiring: number;
+}
+export interface ExpiryWarn {
+  key: string; aid: string; node: string;
+  kind: "card" | "sub";
+  /** 还剩几天（卡是小数天，订阅是整日历天，0 = 今天）。排序用：越近越靠前。 */
+  days: number;
+  date: string;
+  /** 卡：几张快作废（明细只给到最早那张时按 1 张算，同菜单栏横幅）。订阅恒 1。 */
+  count: number;
+}
+
+/**
+ * 总览「快到期」堆叠警告的条目（用户 2026-10-21：快到期的做成悬浮堆叠警告）。
+ * 判据与菜单栏通知条**同一套**：卡 = `cardExpiring`（≤ warnDays 天），订阅 = `daysUntil` 在 0…subDays（日期不可信的不算）。
+ * 调用方传活号与停用号（卡会过期，停不停用都一样），不传失效号。
+ */
+export function expiryWarnings(accts: readonly ExpiryAcct[], nowMs: number, warnDays: number, subDays: number): ExpiryWarn[] {
+  const out: ExpiryWarn[] = [];
+  for (const a of accts) {
+    if (cardExpiring(a.cards, a.cardDays, warnDays)) {
+      out.push({ key: `card:${a.aid}`, aid: a.aid, node: a.node, kind: "card", days: a.cardDays ?? 0,
+                 date: a.cardExp ?? "", count: Math.min(a.cards, a.cardsExpiring || 1) });
+    }
+    const left = a.expStale ? null : daysUntil(a.exp, nowMs);
+    if (left != null && left >= 0 && left <= subDays) {
+      out.push({ key: `sub:${a.aid}`, aid: a.aid, node: a.node, kind: "sub", days: left, date: a.exp, count: 1 });
+    }
+  }
+  return out.sort((x, y) => x.days - y.days || (x.kind === y.kind ? 0 : x.kind === "card" ? -1 : 1));
+}
+
 export function subNotice(id: string, name: string, days: number, date: string): Notice {
   const when = days <= 0 ? "今天" : `${days} 天后`;
   return { id: `sub:${id}`, tone: "warn", urgency: days + 0.5, text: `${name} 订阅 ${when}到期（${date}）` };
 }
 
-// ── 按住探针（计费，按住 0.6 s 才执行） ─────────────────────────────────────
+// ── 点击探针（计费） ────────────────────────────────────────────────────────
+// ★ 用户 2026-10-21「探针的功能 修改点击即可」：取代交接包 4f 的「按住 0.6 s」（再往前是两段确认）。
+//   花钱的控件仍和免费按钮长得不一样（琥珀 + ⚡ +「计费」），只是不再要求确认动作。
 
-export const HOLD_MS = 600;
-/** 中途松手：进度 150 ms 退回、不执行。 */
-export const RETREAT_MS = 150;
+/** 同一颗按钮两次执行至少隔这么久：双击、手抖连点只算一次（单号一次 <1% 周额度，全池 = 号数倍）。 */
+export const PROBE_GAP_MS = 1500;
 
-export type HoldState =
-  | { phase: "idle" }
-  | { phase: "holding"; since: number }
-  | { phase: "retreat"; since: number }
-  | { phase: "fired"; at: number };
-
-export type HoldEvent =
-  | { type: "down"; now: number; disabled?: boolean }
-  | { type: "up"; now: number }
-  | { type: "leave"; now: number }
-  | { type: "tick"; now: number }
-  | { type: "reset" };
-
-export const HOLD_IDLE: HoldState = { phase: "idle" };
-
-/**
- * 状态机。不变量（有行为闸）：
- *  · 按住不满 `HOLD_MS` 就松手 / 移出 ⇒ 永远不会进 `fired`；
- *  · 一次按住最多 `fired` 一次（`fired` 之后再 tick 不会再 fired，必须 `reset` 回 idle）；
- *  · `disabled`（正在探测）时按下无效。
- */
-export function holdReduce(s: HoldState, e: HoldEvent): HoldState {
-  switch (e.type) {
-    case "reset":
-      return HOLD_IDLE;
-    case "down":
-      if (e.disabled) return s;
-      if (s.phase === "idle" || s.phase === "retreat") return { phase: "holding", since: e.now };
-      return s;
-    case "up":
-    case "leave":
-      if (s.phase !== "holding") return s;
-      if (e.now - s.since >= HOLD_MS) return { phase: "fired", at: e.now };
-      return { phase: "retreat", since: e.now };
-    case "tick":
-      if (s.phase === "holding" && e.now - s.since >= HOLD_MS) return { phase: "fired", at: e.now };
-      if (s.phase === "retreat" && e.now - s.since >= RETREAT_MS) return HOLD_IDLE;
-      return s;
-  }
-}
-
-/** 琥珀填充的目标宽度（%）与过渡 —— 照抄 P4PopRows `holdW/holdT`。 */
-export function holdFill(s: HoldState): { width: number; transition: string } {
-  return s.phase === "holding"
-    ? { width: 100, transition: `width ${HOLD_MS}ms linear` }
-    : { width: 0, transition: `width ${RETREAT_MS}ms ease-out` };
+/** 这一下点击该不该真的执行。`last` = 这颗按钮上一次执行的时刻（`null` = 还没执行过）。 */
+export function probeShouldFire(last: number | null, now: number, loading: boolean): boolean {
+  if (loading) return false;
+  return last == null || now - last >= PROBE_GAP_MS;
 }
 
 // ── Claude 额度（`read_statusline_quota`，契约 PLAN §2.2） ──────────────────

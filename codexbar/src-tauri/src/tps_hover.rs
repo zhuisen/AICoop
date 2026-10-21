@@ -18,9 +18,10 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 pub const LABEL: &str = "tpshover";
 /// 面板宽 300（比菜单栏弹窗 352 窄）。
 pub const PANEL_W: f64 = 300.0;
-/// 空闲额度面板（P11 §6 格子）：画板 2× 下宽 580 ⇒ 290；右沿比托盘胶囊右沿多出 10（画板 `pX = CAPR + 20 - pW`）。
-pub const IDLE_PANEL_W: f64 = 290.0;
-const IDLE_RIGHT_OVERHANG: f64 = 10.0;
+/// 空闲额度面板（P11 §6 格子）：画板 2× 下宽 580；用户 2026-10-21 选 1.5× ⇒ 435。与 `idleGridLayout.ts::PANEL_W` 同值。
+/// ★ 用户 2026-10-21「改为居中弹窗」（选「托盘正下方居中」，随后「运行中的悬浮弹窗也要改」）：
+///   两种面板都是中线 = 状态栏按钮中线，取代原型的「右沿比胶囊右沿多出 8 / 15」。贴屏幕边时往里收。
+pub const IDLE_PANEL_W: f64 = 435.0;
 /// 空闲面板悬停 150 ms 打开（P11 §6；在跑面板是 200 ms）。
 const IDLE_OPEN_DWELL: Duration = Duration::from_millis(150);
 /// 面板外的透明边：阴影 `0 16 40 rgba(0,0,0,.45)` 要往外 ~40、往下再多 16。
@@ -28,8 +29,6 @@ const PAD_X: f64 = 40.0;
 const PAD_B: f64 = 56.0;
 /// 面板顶到菜单栏下沿的距离（原型：胶囊容器 22 高、面板从 28 起 ⇒ 下方 6）。
 const GAP: f64 = 6.0;
-/// 面板右沿比胶囊右沿多出 8（原型 `panelLeft = 104 - panelW + 8`），锚点右上。
-const RIGHT_OVERHANG: f64 = 8.0;
 const OPEN_DWELL: Duration = Duration::from_millis(200);
 const CLOSE_DWELL: Duration = Duration::from_millis(300);
 /// 关闭动画：数据 100 ms 淡出 → logo 飞回胶囊 → 外壳延后 120 ms 淡出。动画走完再真隐藏。
@@ -59,13 +58,13 @@ pub struct Tray { pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub screen_x: 
 
 /// 窗口矩形（桌面坐标）与面板在窗口内的位置。纯函数，单测覆盖贴屏幕右缘时的钳位。
 #[cfg(test)]
-pub fn window_rect(t: &Tray, pill_w: f64, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
-    window_rect_for(t, pill_w, PANEL_W, RIGHT_OVERHANG, panel_h)
+pub fn window_rect(t: &Tray, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
+    window_rect_for(t, PANEL_W, panel_h)
 }
 
-fn window_rect_for(t: &Tray, pill_w: f64, panel_w: f64, overhang: f64, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
-    let pill_right = t.x + (t.w + pill_w) / 2.0;
-    let panel_x = (pill_right + overhang - panel_w)
+/// 面板在状态栏按钮正下方居中（胶囊在按钮里居中，所以也是胶囊中线），贴屏幕边时往里收。
+fn window_rect_for(t: &Tray, panel_w: f64, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
+    let panel_x = (t.x + t.w / 2.0 - panel_w / 2.0)
         .min(t.screen_x + t.screen_w - panel_w - 4.0)
         .max(t.screen_x + 4.0);
     let wx = panel_x - PAD_X;
@@ -81,30 +80,29 @@ fn contains(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
 /// 当前这种面板的宽、胶囊各段（胶囊内坐标）。
 /// 空闲面板在「文字标题」模式下也会弹（P9 S1：选文字标题时悬停面板那组设置仍在）：托盘里没有 logo 可飞，
 /// 「胶囊」= 整个状态栏按钮（宽 = 按钮宽 ⇒ 面板右沿对齐按钮右沿 + 10），格子里的 logo 原位淡入。
-fn pill_and_panel(t: &Tray) -> (serde_json::Value, f64, f64) {
+fn pill_and_panel(t: &Tray) -> (serde_json::Value, f64) {
     if IDLE_PANEL.load(Ordering::SeqCst) {
         let pill = if crate::tray_pill::idle_icons_shown() { crate::tray_pill::idle_rects() }
                    else { serde_json::json!({ "width": t.w, "height": t.h, "segments": [] }) };
-        (pill, IDLE_PANEL_W, IDLE_RIGHT_OVERHANG)
+        (pill, IDLE_PANEL_W)
     } else {
-        (crate::tray_pill::segment_rects(), PANEL_W, RIGHT_OVERHANG)
+        (crate::tray_pill::segment_rects(), PANEL_W)
     }
 }
 
 fn rect_now(t: &Tray) -> ((f64, f64, f64, f64), (f64, f64), f64) {
-    let (pill, pw, oh) = pill_and_panel(t);
-    let pill_w = pill["width"].as_f64().unwrap_or(0.0);
-    let (r, p) = window_rect_for(t, pill_w, pw, oh, *PANEL_H.lock().unwrap());
+    let (_, pw) = pill_and_panel(t);
+    let (r, p) = window_rect_for(t, pw, *PANEL_H.lock().unwrap());
     (r, p, pw)
 }
 
 /// 给网页的版面（窗口内坐标）。`mode` = `"idle"`（空闲额度格子）/ `"run"`（在跑速度面板）。
 pub fn layout() -> Option<serde_json::Value> {
     let t = (*GEOM.lock().unwrap())?;
-    let (pill, pw, oh) = pill_and_panel(&t);
+    let (pill, pw) = pill_and_panel(&t);
     let pill_w = pill["width"].as_f64().unwrap_or(0.0);
     let ph = *PANEL_H.lock().unwrap();
-    let ((wx, wy, ww, wh), (px, py)) = window_rect_for(&t, pill_w, pw, oh, ph);
+    let ((wx, wy, ww, wh), (px, py)) = window_rect_for(&t, pw, ph);
     let pill_x = t.x + (t.w - pill_w) / 2.0 - wx;
     let pill_y = t.y + (t.h - crate::tray_pill::H) / 2.0 - wy;
     let segs: Vec<serde_json::Value> = pill["segments"].as_array().cloned().unwrap_or_default().into_iter().map(|mut s| {
@@ -463,23 +461,26 @@ mod tests {
     fn tray(x: f64) -> Tray { Tray { x, y: 0.0, w: 100.0, h: 24.0, screen_x: 0.0, screen_w: 1470.0, primary_h: 956.0 } }
 
     #[test]
-    fn panel_is_anchored_top_right_under_the_pill() {
-        let ((wx, wy, w, h), (px, py)) = window_rect(&tray(1000.0), 96.0, 200.0);
-        let pill_right = 1000.0 + (100.0 + 96.0) / 2.0;
-        assert_eq!(wx + px + PANEL_W, pill_right + 8.0, "面板右沿 = 胶囊右沿 + 8");
+    fn run_panel_is_centred_under_the_pill() {
+        let ((wx, wy, w, h), (px, py)) = window_rect(&tray(1000.0), 200.0);
+        assert_eq!(wx + px + PANEL_W / 2.0, 1000.0 + 100.0 / 2.0, "★ 用户「运行中的悬浮弹窗也要改为居中」：面板中线 = 按钮中线");
         assert_eq!((wy, py), (0.0, 24.0 + GAP), "窗口顶到屏幕顶（盖住胶囊），面板在菜单栏下方");
         assert_eq!(w, PANEL_W + 2.0 * PAD_X);
         assert_eq!(h, 24.0 + GAP + 200.0 + PAD_B);
     }
     #[test]
-    fn idle_panel_is_290_wide_and_overhangs_by_10() {
-        let ((wx, _, w, _), (px, _)) = window_rect_for(&tray(1000.0), 47.0, IDLE_PANEL_W, IDLE_RIGHT_OVERHANG, 90.0);
-        assert_eq!(wx + px + IDLE_PANEL_W, 1000.0 + (100.0 + 47.0) / 2.0 + 10.0, "画板 pX = CAPR + 20 − pW（2×）");
+    fn idle_panel_is_435_wide_and_centred_under_the_pill() {
+        let ((wx, _, w, _), (px, _)) = window_rect_for(&tray(1000.0), IDLE_PANEL_W, 90.0);
+        assert_eq!(IDLE_PANEL_W, 435.0, "画板 580 × 0.75（1.5×）");
+        assert_eq!(wx + px + IDLE_PANEL_W / 2.0, 1000.0 + 100.0 / 2.0, "★ 用户「居中弹窗」：面板中线 = 胶囊中线");
         assert_eq!(w, IDLE_PANEL_W + 2.0 * PAD_X);
+        // 贴屏幕右缘：往里收，不越出屏幕
+        let ((wx, _, _, _), (px, _)) = window_rect_for(&tray(1440.0), IDLE_PANEL_W, 90.0);
+        assert!(wx + px + IDLE_PANEL_W <= 1470.0 - 4.0 + 1e-9);
     }
     #[test]
     fn panel_stays_on_screen_at_the_right_edge() {
-        let ((wx, _, _, _), (px, _)) = window_rect(&tray(1440.0), 60.0, 200.0);
+        let ((wx, _, _, _), (px, _)) = window_rect(&tray(1440.0), 200.0);
         assert!(wx + px + PANEL_W <= 1470.0 - 4.0 + 1e-9, "贴屏幕右缘时面板不越出屏幕");
     }
 }

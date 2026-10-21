@@ -1,7 +1,7 @@
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { OvState } from "../../overview";
 import { ovIsLow } from "../../overview";
-import { HOLD_IDLE, HOLD_MS, RETREAT_MS, holdFill, holdReduce } from "../../mbLogic";
+import { probeShouldFire } from "../../mbLogic";
 import DragHandle, { type DragWiring } from "../DragHandle";
 import type { Theme } from "../../theme";
 import { MONO } from "./ovVars";
@@ -291,42 +291,27 @@ export function Ab({ children, onClick, primary, warn, bad, title, disabled, dat
 }
 
 /**
- * 卡片底栏的「探针」—— **按住 0.6 s 才执行**（交接包 README §5：「菜单栏弹窗里是按住 0.6 s 确认，
- * 工作台建议同样处理」）。判据只用 `mbLogic.ts::holdReduce` 那一份（有行为闸），这里只喂指针事件。
- * ★ 它取代了主窗原来的「两段确认」（`ProbeButton`）—— 同一个花钱控件在两个界面两种确认法，
- *   用户要记两套肌肉记忆（PLAN §4）。键盘：按住空格 / 回车同样走 down → up。
+ * 卡片底栏的「探针」—— **点一下就执行**（用户 2026-10-21「探针的功能 修改点击即可」，取代按住 0.6 s）。
+ * 连点只算一次，判据只用 `mbLogic.ts::probeShouldFire` 那一份（有行为闸），与菜单栏 / 头部同一颗。
+ * 与免费按钮的区分靠外观（琥珀 + ⚡），不靠确认动作。
  */
-export function HoldAb({ onFire, loading, hint, label = "探针", data }: {
+export function ProbeAb({ onFire, loading, hint, label = "探针", data }: {
   onFire: () => void; loading: boolean; hint: string; label?: string; data?: string;
 }) {
-  const [s, send] = useReducer(holdReduce, HOLD_IDLE);
-  const timer = useRef<number | null>(null);
-  const fireRef = useRef(onFire);
-  fireRef.current = onFire;
-  useEffect(() => {
-    if (timer.current != null) { window.clearTimeout(timer.current); timer.current = null; }
-    if (s.phase === "holding") timer.current = window.setTimeout(() => send({ type: "tick", now: performance.now() }), HOLD_MS + 5);
-    else if (s.phase === "retreat") timer.current = window.setTimeout(() => send({ type: "tick", now: performance.now() }), RETREAT_MS + 5);
-    else if (s.phase === "fired") { fireRef.current(); send({ type: "reset" }); }
-    return () => { if (timer.current != null) window.clearTimeout(timer.current); };
-  }, [s]);
-  const fill = holdFill(s);
-  const down = () => send({ type: "down", now: performance.now(), disabled: loading });
-  const up = () => send({ type: "up", now: performance.now() });
+  const last = useRef<number | null>(null);
+  const fire = () => {
+    const now = performance.now();
+    if (!probeShouldFire(last.current, now, loading)) return;
+    last.current = now;
+    onFire();
+  };
   return (
-    <span className="ov-ab ov-abw" role="button" tabIndex={0} data-ov-ab={data ?? "probe"} data-hold={s.phase}
-          title={`${hint}\n\n按住 0.6 秒才会执行；中途松手取消。`}
+    <span className="ov-ab ov-abw" role="button" tabIndex={0} data-ov-ab={data ?? "probe"}
+          title={`${hint}\n\n点一下就执行（计费）。`}
           aria-disabled={loading ? "true" : undefined}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => { e.stopPropagation(); if (e.button === 0) down(); }}
-          onMouseUp={up} onMouseLeave={() => send({ type: "leave", now: performance.now() })}
-          onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); e.stopPropagation(); down(); } }}
-          onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); up(); } }}>
-      <i aria-hidden style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${fill.width}%`,
-                              background: "var(--warnBg2)", transition: fill.transition }} />
-      <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <IcBolt />{loading ? "探测中…" : s.phase === "holding" ? "按住…" : label}
-      </span>
+          onClick={(e) => { e.stopPropagation(); fire(); }}
+          onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); e.stopPropagation(); fire(); } }}>
+      <IcBolt />{loading ? "探测中…" : label}
     </span>
   );
 }

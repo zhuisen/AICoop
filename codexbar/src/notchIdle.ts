@@ -15,23 +15,26 @@
  *   有一家剩余 < 10% ⇒ 右肩叠珊瑚红一团（`70 4 18 1 / .55` → `46.67 2.67 12 .67`）+ 小红点（10 → 7，刘海右沿外 11 → 7、顶 18 → 12）。
  */
 
-export const PANEL_W = 300;
+// ★ 用户 2026-10-21「刘海屏版本也要改」（选「和托盘一样 1.5×」）：格子面板改成与托盘悬停面板**同一套**尺寸
+//   （`idleGridLayout.ts`：P11 2× 画板 × 0.75），取代上面那组 ÷1.5 的面板 / 格子 / 环 / 字（光晕、光桥仍按刘海画板 ÷1.5）。
+//   面板宽 435 与 Rust `tps_hover::IDLE_PANEL_W` 同值（`notch.rs::card_w` 直接用它）。
+export const PANEL_W = 435;
 export const PANEL_GAP = 10;
-export const PAD = 6;
-export const GAP = 4;
+export const PAD = 8;
+export const GAP = 6;
 export const COLS = 4;
-export const RADIUS = 12;
-export const CELL_H = 74.5;
-export const CELL_R = 8;
-export const RING = 32;
-export const RING_R = 13.33;
-export const RING_SW = 2.67;
-export const RING_TOP = 14.67;
+export const RADIUS = 15;
+export const CELL_H = 100.5;
+export const CELL_R = 10.5;
+export const RING = 48;
+export const RING_R = 20.25;
+export const RING_SW = 3.75;
+export const RING_TOP = 19.5;
 export const RING_C = 2 * Math.PI * RING_R;
-export const LOGO = 13;
-export const MAIN_TOP = 53.33;
-export const MAIN_PX = 10;
-export const RESET_PX = 7;
+export const LOGO = 20;
+export const MAIN_TOP = 73.5;
+export const MAIN_PX = 15;
+export const RESET_PX = 10.5;
 export const LOW = "#FF8A73";
 /** 展开时光晕降到 55%（画板「光晕降到 55%」）。 */
 export const OPEN_GLOW = 0.55;

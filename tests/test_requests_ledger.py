@@ -505,6 +505,42 @@ class LiveAggregation(Base):
         self.assertIsNone(cx["tps"])
 
 
+class LiveShowsTheLastMeasuredSpeed(unittest.TestCase):
+    """★★ 用户 2026-10-21「t/s 数字偏低」。实测（n=34 / 6 h n=740）两个来源都是**估值盖住了实测值**：
+    ① Claude 一条请求先落 transcript 估值（p50 35.9，低至 0.4），约 2 s 后 OTel span 才把它改成实测（p50 91.6）；
+    ② `agent_summary` 这类旁路请求挂在主会话上，生成段 ~9 ms ⇒ 只能估，p50 5.1 t/s。
+    所以 live 的每个会话取**最近一条实测**（`est=false`）；会话里一条实测都没有时才退回最近的估值（不画成 —）。"""
+
+    def live(self, recs):
+        now = time.time()
+        tmp = tempfile.mkdtemp(prefix="requests-live-test-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        rs = {}
+        for i, (dt, tps, est, sess) in enumerate(recs):
+            rs["claude:r%d" % i] = {"key": "claude:r%d" % i, "platform": "claude", "session": sess,
+                                    "t_end": now - dt, "tps": tps, "est": est, "input": 1, "output": 1}
+        with mock.patch.object(RQ, "update", return_value=(rs, {"files": {}}, {})):
+            out = RQ.build_live(now, rt={"ledger": tmp})
+        return {s["id"]: s for s in out["platforms"]["claude"]["sessions"]}
+
+    def test_a_newer_estimate_does_not_replace_the_last_measured_value(self):
+        by = self.live([(30, 118.0, False, "S"), (5, 5.1, True, "S")])
+        self.assertEqual(by["S"]["tps"], 118.0, "★★ 估值（agent_summary / transcript 占位）盖住了上一条实测")
+
+    def test_the_newest_measured_value_wins(self):
+        by = self.live([(60, 90.0, False, "S"), (20, 130.0, False, "S"), (5, 4.0, True, "S")])
+        self.assertEqual(by["S"]["tps"], 130.0, "取的是最近一条实测，不是最早一条")
+
+    def test_a_session_with_only_estimates_still_shows_one(self):
+        by = self.live([(30, 20.0, True, "S"), (5, 35.0, True, "S")])
+        self.assertEqual(by["S"]["tps"], 35.0, "一条实测都没有 ⇒ 退回最近的估值，不画成 —")
+
+    def test_last_t_end_still_follows_the_newest_record(self):
+        by = self.live([(30, 118.0, False, "S"), (5, 5.1, True, "S")])
+        self.assertAlmostEqual(by["S"]["last_t_end"], time.time() - 5, delta=2,
+                               msg="「最近一次响应」的时刻仍按最新一条（含估值）")
+
+
 class TurnEndMarkers(Base):
     """判停 = 轮次结束标记（用户 2026-10-19 拍板），不是「45 s 没写」。四家各一份：
     轮次进行中 ⇒ 在跑；写了结束标记 ⇒ **立刻**停（文件刚写过也停）；没写结束标记但超过兜底窗口 ⇒ 停；

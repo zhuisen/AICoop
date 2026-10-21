@@ -86,14 +86,14 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
   --ig-hl-ring: rgba(0,0,0,.18); --ig-hl-bg: rgba(0,0,0,.035); --ig-dot: #161b22;
 }
 .ig-shell { position: absolute; box-sizing: border-box; background: var(--ig-bg); border: 1px solid var(--ig-border);
-  border-radius: 10px; box-shadow: var(--ig-shadow); transform-origin: 90% 0; overflow: visible; }
-.ig-hl { position: absolute; left: 0; top: 0; border-radius: 7px; box-shadow: 0 0 0 1px var(--ig-hl-ring);
+  border-radius: 15px; box-shadow: var(--ig-shadow); transform-origin: 90% 0; overflow: visible; }
+.ig-hl { position: absolute; left: 0; top: 0; border-radius: 10.5px; box-shadow: 0 0 0 1px var(--ig-hl-ring);
   background: var(--ig-hl-bg); pointer-events: none; z-index: 3; }
-.ig-cell { position: absolute; border-radius: 7px; cursor: pointer; }
-.ig-dot { position: absolute; left: 5px; top: 5px; width: 4px; height: 4px; border-radius: 2px; background: var(--ig-dot); }
-.ig-reset { position: absolute; right: 5px; top: 3.5px; font-family: 'JetBrains Mono', 'PingFang SC', monospace;
-  font-size: 7px; color: var(--ig-tx2); font-variant-numeric: tabular-nums; }
+.ig-cell { position: absolute; border-radius: 10.5px; cursor: pointer; }
+.ig-dot { position: absolute; left: 7px; top: 7px; width: 6px; height: 6px; border-radius: 3px; background: var(--ig-dot); }
+.ig-reset { position: absolute; right: 7.5px; top: 5px; font-family: 'JetBrains Mono', 'PingFang SC', monospace;
+  font-size: 10.5px; color: var(--ig-tx2); font-variant-numeric: tabular-nums; }
 .ig-ring { position: absolute; }
 .ig-logo { position: absolute; display: block; }
-.ig-main { position: absolute; left: 0; right: 0; top: 49px; text-align: center; font-family: 'JetBrains Mono', monospace;
-  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ig-main { position: absolute; left: 0; right: 0; top: 73.5px; text-align: center; font-family: 'JetBrains Mono', monospace;
+  font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }

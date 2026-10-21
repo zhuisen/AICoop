@@ -22,6 +22,10 @@ import type { TrafficData, PlatformPrefs } from "../traffic";
 import { CACHE_MODES, cacheModeLabel, cacheModeDesc, orderedKeys, fmtTok } from "../traffic";
 import { sourceNotes } from "../scanHealth";
 import { TRAY_KEYS } from "../idleTray";
+import PlatformLogo, { type LogoPlatform } from "../components/PlatformLogo";
+
+/** 有官方 logo 的几家（`PlatformLogo`）。其余平台（MiMo / OpenClaw…）没有 logo，用识别色方块占同一个位置。 */
+const LOGO_KEYS: readonly string[] = ["codex", "claude", "agy", "grok", "kimi", "deepseek"];
 import { CLAUDE_OTEL_DESC, claudeOtelLocked, claudeOtelOn, claudeOtelWarn, type ClaudeOtelStatus } from "../claudeOtel";
 
 /** 菜单栏标题样式(用户 2026-08-12 从 demo 里三选一)。索引与 Rust 的 TRAY_STYLE 一一对应。 */
@@ -465,7 +469,9 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
                     onClick={() => updIdle({ idlePinned: on ? s.idlePinned.filter((x) => x !== k) : [...s.idlePinned, k].slice(-2) })}
                     style={{ padding: "4px 9px", borderRadius: 7, fontSize: 11, whiteSpace: "nowrap", cursor: "pointer",
                              userSelect: "none", fontWeight: on ? 700 : 400, color: on ? t.accentText : t.muted,
-                             background: on ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
+                             background: on ? t.accent : "transparent", transition: "background .2s, color .2s",
+                             display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <PlatformLogo platform={k as LogoPlatform} isDark={t.isDark} size={14} />
                 {IDLE_NAME[k]}
               </span>
             );
@@ -782,6 +788,13 @@ function PlatformSection({ t }: { t: Theme }) {
                      title={`${k} 的识别色（图表 / 图例 / 徽章共用）`}
                      style={{ width: 22, height: 22, padding: 0, border: "none", borderRadius: 6,
                               background: "transparent", cursor: "pointer", flexShrink: 0 }} />
+
+              {/* 官方 logo（AICoop 交接包）；没有 logo 的平台画识别色方块，占同一个位置 */}
+              <span data-platform-logo={k} style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {LOGO_KEYS.includes(k)
+                  ? <PlatformLogo platform={k as LogoPlatform} isDark={t.isDark} size={18} />
+                  : <span style={{ width: 12, height: 12, borderRadius: 3, background: color }} />}
+              </span>
 
               <input value={o.name ?? p?.name ?? k} onChange={(e) => patch(k, { name: e.target.value })}
                      placeholder={p?.name ?? k}

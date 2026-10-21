@@ -3750,6 +3750,11 @@ def cmd_next(args):
         if w.get("used_percent") is None or not (w.get("window_minutes") or 0):
             return None
         r = w.get("resets_at")
+        # ★ 与 `helpers.ts::winRem` 同一条：过了重置点、读数又拍在重置点之前 ⇒ 那个「已用」属于旧窗口 ⇒ 读不到。
+        #   不判它，顶部「正在使用」仍画旧数，而卡片已判成未知（2026-10-21 复查 B2）。
+        cap = (sl.get("quota") or {}).get("captured_at")
+        if r and r <= now and not (cap is not None and cap > r):
+            return None
         left = ""
         if r and r > now:
             h = (r - now) / 3600

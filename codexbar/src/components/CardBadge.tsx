@@ -1,4 +1,5 @@
 import { CARD_WARN_DAYS, type Account } from "../helpers";
+import { cardExpiring } from "../mbLogic";
 
 /**
  * 重置卡的共用判据与颜色。★ 原来这里还有「重置卡 ×N」角标组件本体与它的隐形占位（`CardBadgeGhost`）——
@@ -11,5 +12,5 @@ export const AMBER_TEXT = "#f2b45c";
 /** True when this account holds a card that is about to lapse. Single source of truth for the badge,
  *  the card border, the row's left rail and the pool banner, so they can never disagree. */
 export function isCardExpiring(a: Account): boolean {
-  return a.cards > 0 && a.cardDays != null && a.cardDays <= CARD_WARN_DAYS;
+  return cardExpiring(a.cards, a.cardDays, CARD_WARN_DAYS);
 }

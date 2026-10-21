@@ -195,8 +195,10 @@ class TheUiWiresAllThree(unittest.TestCase):
         # ★ 2026-10-19 总览重做（交接包 page5）：琥珀 + ⚡ 的「两段确认」换成「按住 0.6 s」，
         #   头部是 `ProbeHold`（包菜单栏同一颗 `HoldProbe`），卡上是 `HoldAb`（同一个 `holdReduce` 状态机）。
         #   守的仍是同一件事：花钱的控件长得和免费按钮不一样、且不能一碰就发。
-        self.assertIn("<ProbeHold", seg, "★★★ 头部探针不是按住才发的计费按钮 ⇒ 与免费按钮混在一起")
-        self.assertIn("<HoldAb", code(CARD), "★★★ 卡上的探针不是按住才发的 HoldAb")
+        # ★ 2026-10-21 用户「探针的功能 修改点击即可」：按住换成单击（`ProbeHead` / `ProbeAb`，同一个连点判据）。
+        #   守的仍是：花钱的控件长得和免费按钮不一样（琥珀 + ⚡），且连点不会发两次。
+        self.assertIn("<ProbeHead", seg, "★★★ 头部探针不是那颗计费按钮 ⇒ 与免费按钮混在一起")
+        self.assertIn("<ProbeAb", code(CARD), "★★★ 卡上的探针不是那颗计费按钮 ProbeAb")
         self.assertNotIn("<Ab title=\"探针", code(CARD), "★★★ 卡上又出现了一碰就发的探针")
 
     def test_a_failed_read_does_not_report_the_switch_as_off(self):
