@@ -58,12 +58,11 @@ os.environ.setdefault("AGY_USAGE_REPORT", "0")   # B88：别在测试里起真 a
 #   测试污染生产,且没有任何一处会为此变红。
 os.environ.setdefault("CODEXBAR_LAUNCHCTL", "0")
 
-# ★ Claude（P3b 闸 G2，2026-10-22）：配置根指临时目录，真二进制换成 false（理由见 `_isolation.py`）。
-if not os.environ.get("CLAUDE_CONFIG_DIR"):
-    _c = tempfile.mkdtemp(prefix="codexbar-test-claude-")
-    os.environ["CLAUDE_CONFIG_DIR"] = _c
-    atexit.register(shutil.rmtree, _c, True)
-os.environ.setdefault("CLAUDE_REAL", "/usr/bin/false")
+# ★ Claude（P3b 闸 G2）：配置根与 PATH 桩只在 `_isolation.py` 实现一份，这里导入它。
+try:
+    from . import _isolation  # noqa: F401
+except ImportError:
+    import _isolation  # noqa: F401
 
 
 class IsolationIsInPlace(unittest.TestCase):
@@ -72,7 +71,39 @@ class IsolationIsInPlace(unittest.TestCase):
         p = os.environ.get("CLAUDE_CONFIG_DIR")
         self.assertTrue(p, "CLAUDE_CONFIG_DIR 没设 —— 测试可能改用户真实的 Claude 配置")
         self.assertNotEqual(os.path.realpath(p), os.path.realpath(os.path.expanduser("~/.claude")))
-        self.assertEqual(os.environ.get("CLAUDE_REAL"), "/usr/bin/false")
+
+    def test_claude_on_path_is_the_stub(self):
+        """★ G2：判据打在**被作用对象**上 —— PATH 上解析到的 `claude` 真的是桩，起它真的被挡。"""
+        import shutil as _sh
+        import subprocess as _sp
+        stub = os.environ.get("CODEXBAR_TEST_CLAUDE_STUB")
+        self.assertTrue(stub and os.path.isfile(stub), "没有 claude 桩")
+        self.assertEqual(os.path.realpath(_sh.which("claude") or ""), os.path.realpath(stub),
+                         "★★★ PATH 上第一个 claude 不是桩 —— 测试能起真 Claude")
+        r = _sp.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 97)
+
+
+class NoTestSpawnsClaudeByAbsolutePath(unittest.TestCase):
+    """★ PATH 桩挡不住绝对路径。测试里不许出现真 Claude 二进制的绝对路径。"""
+
+    def test_no_absolute_claude_binary(self):
+        import re as _re
+        from pathlib import Path as _P
+        rx = _re.compile(r"""["'](/[^"']*/(\.local/bin|bin|\.claude/local|node_modules/\.bin)/claude)["']""")
+        bad = []
+        for f in sorted(_P(__file__).resolve().parent.glob("*.py")):
+            if f.name == "test_isolation_bootstrap.py":
+                continue
+            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if rx.search(line):
+                    bad.append(f"{f.name}:{n}")
+        self.assertEqual(bad, [])
+
+    def test_the_probe_fires_on_a_known_positive(self):
+        import re as _re
+        rx = _re.compile(r"""["'](/[^"']*/(\.local/bin|bin|\.claude/local|node_modules/\.bin)/claude)["']""")
+        self.assertTrue(rx.search('run(["/Users/x/.local/bin/claude", "-p"])'))
 
     def test_launchctl_is_disabled(self):
         """★★★ 判据是「变量**已设置**」，不是「代码里有隔离逻辑」。
@@ -150,7 +181,7 @@ class EveryScriptSpawningTestImportsTheIsolation(unittest.TestCase):
     `tests/_isolation.py`，这条闸盯着新加的测试也照做。"""
 
     SCRIPTS = ("agy-rotate", '"bin" / "agy"', "bin/agy", "agy-quota", "agy_quota_sampler",
-               "codex-rotate", "grok-quota", "connector.py")
+               "codex-rotate", "grok-quota", "connector.py", 'run(["claude"', 'Popen(["claude"')
 
     def test_every_such_module_imports_it(self):
         from pathlib import Path as _P

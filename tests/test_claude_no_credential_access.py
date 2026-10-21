@@ -24,6 +24,12 @@ RULES = (
     ("令牌变量赋值", re.compile(r"\b(ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)\b\s*[:=]|"
                           r"\[\s*[\"'](ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)[\"']\s*\]\s*="), False),
     ("回环 BASE_URL", re.compile(r"ANTHROPIC_BASE_URL[\"']?\s*[:=,]\s*[\"']?https?://(127\.0\.0\.1|localhost|\[::1\])"), False),
+    # ★ 阶段 4 评审补的四条（codex 实测漏检）：拼接出来的条目名 / 文件名、整串导出钥匙串、令牌变量的任何引用。
+    ("钥匙串条目名（拼接）", re.compile(r"[\"']Claude Code-[\"']|[\"']Code-credentials[\"']"), False),
+    ("凭证文件（拼接）", re.compile(r"[\"']\.credentials[\"']"), False),
+    ("钥匙串导出", re.compile(r"(dump|export)-keychain"), False),
+    # 这两个令牌在本仓没有任何合法用途 ⇒ 出现即红（含 env.update / os.putenv / 字典初始化）。
+    ("令牌变量引用", re.compile(r"\b(ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)\b"), False),
 )
 CLAUDE = re.compile(r"claude|anthropic", re.I)
 SKIP_SUFFIX = (".md", ".png", ".svg", ".icns", ".jpg", ".woff2", ".lock")
@@ -70,6 +76,10 @@ class NoClaudeCredentialAccess(unittest.TestCase):
             "OAuth 端点": 'url = "https://api.anthropic.com/api/oauth/usage"',
             "令牌变量赋值": 'env["CLAUDE_CODE_OAUTH_TOKEN"] = tok',
             "回环 BASE_URL": 'ANTHROPIC_BASE_URL="http://127.0.0.1:8012"',
+            "钥匙串条目名（拼接）": 'svc = "Claude Code-" + "credentials"',
+            "凭证文件（拼接）": 'p = home / ".claude" / (".credentials" + ".json")',
+            "钥匙串导出": 'run(["security", "dump-keychain", "-d"])',
+            "令牌变量引用": 'env.update({"CLAUDE_CODE_OAUTH_TOKEN": tok})',
         }
         for name, line in cases.items():
             with self.subTest(rule=name):

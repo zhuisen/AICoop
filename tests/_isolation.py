@@ -35,4 +35,15 @@ if not os.environ.get("CLAUDE_CONFIG_DIR"):
     _c = tempfile.mkdtemp(prefix="codexbar-test-claude-")
     os.environ["CLAUDE_CONFIG_DIR"] = _c
     atexit.register(shutil.rmtree, _c, True)
-os.environ.setdefault("CLAUDE_REAL", "/usr/bin/false")
+# ★ 真二进制拦在 PATH 上（阶段 4 评审：原来的 `CLAUDE_REAL=/usr/bin/false` 没有任何代码读它，是空闸）。
+#   PATH 最前面放一个 `claude` 桩，跑到就 exit 97 —— `subprocess.run(["claude", …])` 起不到真 Claude。
+#   绝对路径调用拦不住，那一类由 `test_isolation_bootstrap.py::NoTestSpawnsClaudeByAbsolutePath` 盯。
+if not os.environ.get("CODEXBAR_TEST_CLAUDE_STUB"):
+    _b = tempfile.mkdtemp(prefix="codexbar-test-bin-")
+    _s = os.path.join(_b, "claude")
+    with open(_s, "w", encoding="utf-8") as _fh:
+        _fh.write("#!/bin/sh\necho 'tests/_isolation.py: real claude is blocked in tests' >&2\nexit 97\n")
+    os.chmod(_s, 0o755)
+    os.environ["PATH"] = _b + os.pathsep + os.environ.get("PATH", "")
+    os.environ["CODEXBAR_TEST_CLAUDE_STUB"] = _s
+    atexit.register(shutil.rmtree, _b, True)
