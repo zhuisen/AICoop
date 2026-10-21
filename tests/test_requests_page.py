@@ -131,6 +131,12 @@ class Metrics(unittest.TestCase):
         self.assertAlmostEqual(got["avgTps"], 20.0, msg="读不到的 t/s 不计入均速（不当 0）")
         self.assertAlmostEqual(got["ttftMedianS"], 2.0)
 
+    def test_estimates_do_not_enter_the_average(self):
+        """用户 2026-10-22 定：估值行照常显示，均速只取实测行。"""
+        got = _node("m.dayMetrics([R({tps:100}), R({tps:120}), R({tps:20,est:true}), R({tps:30,est:true})])")
+        self.assertAlmostEqual(got["avgTps"], 110.0)
+        self.assertIsNone(_node("m.dayMetrics([R({tps:20,est:true})])")["avgTps"])
+
     def test_even_count_median_is_the_mean_of_the_middle_two(self):
         got = _node("m.dayMetrics([R({ttft_ms:1000}), R({ttft_ms:2000}), R({ttft_ms:4000}), R({ttft_ms:9000})])")
         self.assertAlmostEqual(got["ttftMedianS"], 3.0)

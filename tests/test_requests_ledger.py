@@ -768,5 +768,47 @@ class TurnEndMarkers(Base):
             self.assertTrue(json.loads(p.stdout)["ok"], p.stdout[:300])
 
 
+class AgyBulkResponsesAreEstimates(unittest.TestCase):
+    """★ 2026-10-22 实测 3,698 条：整包响应（多以工具调用结束）的生成全落在 ttft 里，streaming 只剩零点几秒。
+    按 streaming 除会爆：用户截图同一分钟两条 argon，23.5 vs 1848.6 t/s（733 ÷ 0.397 s）。
+    口径：streaming 至少占模型时间一半、且 ≤ `TPS_CEIL` 才算实测；否则 output ÷ (ttft + streaming)，`est=true`。"""
+
+    def test_the_screenshot_row_is_no_longer_1848(self):
+        tps, est = RQ.agy_tps(733, 354, 11.697, 0.397)
+        self.assertTrue(est, "streaming 0.397 s 只占 12.094 s 的 3% ⇒ 整包响应，是估值")
+        self.assertEqual(tps, 60.6)
+
+    def test_the_other_screenshot_row_is_unchanged(self):
+        self.assertEqual(RQ.agy_tps(415, 200, 17.656, 0.004), (23.5, True))
+
+    def test_a_real_streaming_response_stays_measured(self):
+        self.assertEqual(RQ.agy_tps(2000, 1500, 5.0, 20.0), (100.0, False), "新规则不能把真流式也打成估值")
+
+    def test_how_the_model_time_is_split_does_not_matter_for_bulk(self):
+        """不变量 ①：模型时间与输出固定时，只要 streaming 不到一半，怎么拆 ttft / streaming 结果都一样
+        —— 直接对应「小分母爆炸」这一类。"""
+        for strm in (0.0, 0.004, 0.1, 0.3, 0.397, 1.0, 3.0, 5.9):
+            with self.subTest(strm=strm):
+                self.assertEqual(RQ.agy_tps(600, 300, 12.0 - strm, strm), (50.0, True))
+
+    def test_no_measured_value_above_the_ceiling(self):
+        """不变量 ②：任何 est=false 的 t/s ≤ `TPS_CEIL`。"""
+        for out in (10, 500, 3000, 20000, 90000):
+            for ttft in (0.0, 0.5, 3.0, 10.0):
+                for strm in (0.3, 0.6, 2.0, 8.0, 30.0):
+                    tps, est = RQ.agy_tps(out, out, ttft, strm)
+                    if not est:
+                        with self.subTest(out=out, ttft=ttft, strm=strm):
+                            self.assertLessEqual(tps, RQ.TPS_CEIL)
+        self.assertEqual(RQ.agy_tps(5000, 5000, 0.5, 2.0), (2000.0, True), "过上限 ⇒ 退估值，不丢数")
+
+    def test_the_average_only_counts_measured_rows(self):
+        """用户 2026-10-22 定：估值行照常显示数字，均速只取实测行。"""
+        rs = [{"tps": 100.0, "est": False}, {"tps": 120.0, "est": False}, {"tps": 20.0, "est": True},
+              {"tps": 25.0, "est": True}, {"tps": 30.0, "est": True}, {"tps": None, "est": False}]
+        self.assertEqual(RQ._day_stats(rs)["avg_tps"], 110.0)
+        self.assertIsNone(RQ._day_stats([{"tps": 20.0, "est": True}])["avg_tps"], "没有实测行 ⇒ null，不拿估值顶")
+
+
 if __name__ == "__main__":
     unittest.main()

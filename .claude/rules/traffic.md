@@ -107,7 +107,9 @@ paths:
     - **每条 t/s 的分子分母**（`MIN_GEN_S = 0.3`）：
       · Codex = 可见输出（`output − reasoning`）÷（响应结束 − 首个输出项写盘时刻）。首字取**第一个推理项**的写盘时刻；第一个输出项不是推理项（工具调用整项写盘）就没有首字。推理 token 产生在首字之前，留在分子里会虚高（实测中位 157 vs 102 t/s）。
       · Claude = OTel span 的 `output ÷ (duration_ms − ttft_ms)`；分子**含 thinking**（实测 thinking 在首字之后流式产出：thinking > 50% 的 88 条中位 98 t/s，与无 thinking 的 93 条 131 同量级，扣掉只剩 28）。没有 span 的退回 transcript `output ÷ (末行 − 触发行)`。
-      · Gemini（agy）= usage `f3`（输出，**含 thinking**）÷ `f1.f12` streaming；Grok = `outputTokens ÷ apiDurationMs`。
+      · Gemini（agy）= usage `f3`（输出，**含 thinking**）÷ `f1.f12` streaming，**只在 streaming ≥ 模型时间（ttft + streaming）一半且结果 ≤ `TPS_CEIL`（1000）时算实测**，否则 `f3 ÷ (ttft + streaming)`、`est=true`（`requests.py::agy_tps`，`CUR_V` 4）；Grok = `outputTokens ÷ apiDurationMs`。
+        ★ 2026-10-22 实测 3,698 条（单机）：agy 有两种响应。流式的 thinking 与输出都落在 streaming 里；整包的（多以工具调用结束）生成全做完才到，全部落在 ttft 里。argon 每千 thinking 的成本：整包档 ttft 里 12.1 s、流式档 streaming 里 12.7 s ⇒ 同一笔生成、计时落点不同。用户截图同一分钟两条 argon 23.5 vs **1848.6** t/s（733 ÷ 0.397 s）就是整包档被当成实测。按 streaming 分段 argon 中位：≥10 s 111 · 0.3–1 s 687 · <0.05 s 8458；旧规则下 est=false 的 1733 条里 484 条（28%）> 500 t/s。新规则下 argon 实测中位 ~105、flash ~321，argon 约 89% 的行成为估值。两种解释（服务端整包下发 / agy 把首个可见块当首字）本机数据分不开，规则在两者下都成立。报告 `~/Downloads/agy_tps_and_daily_tokens_20261022.md`。
+        ⚠️ 同一类病可能也在 Claude OTel（`duration − ttft`，以 tool_use 结束的响应可能整包下发），**未查**。
         ✗ 已被 2026-10-21 实测取代：分子用 `f10`（可见输出）。用户看到「Gemini 3 t/s」（95 可见 ÷ 31.4 s，thinking 2854）。
         439 条 est=false 按模型 × thinking 占比（<20% / 20–50% / >50%）分组：`f3÷streaming` argon 138 / 230 / 157、flash 426 / 474 / 625，组间一致；
         `f10÷streaming` 在 >50% 组掉到 33 / 26 ⇒ thinking 在 streaming 段里生成（与 Claude 同、与 Codex 相反）。⚠️ 单机两天数据、两个模型。
@@ -115,6 +117,7 @@ paths:
       · **退估值**：生成段 < 0.3 s（或可见输出为 0）⇒ 退回 `output ÷ 整条时长`，`est=true`。实测 528 条 Claude span 里 118 条 `duration − ttft` ≤ 300 ms，直接除最高 75,875 t/s。
       · **给 null**：任何分母 < 0.3 s 或分子 ≤ 0 ⇒ `tps = null`，**不写 0**（0 会把均速拉低，而那条请求根本没生成）。下限对所有分母生效（实测 28 ms / 516 token ⇒ 18,429 t/s）。
       · `est` 只在数据里；界面上 t/s **不加「≈」「估」**（交接包全局规则）。
+    - **`avg_tps` 只取实测行（`est=false`）**（用户 2026-10-22 定：估值行照常显示数字、不加「估」，但不进均速；没有实测行 ⇒ null）。前端 `requests.ts::dayMetrics` 同一条。
     - **`avg_tps` 取逐条 t/s 的中位数**（null 不计），不是算术平均、也不按 token 加权：重尾分布下一条短响应就能把均值拉偏几倍；按 token 加权要四家同一个分母，而四家口径本来就不同。
     - **`--live` 的合计**：`tps` = 在跑会话「最近一条已完成响应」t/s 之和，**只在同一 AI 内相加**；全部为 null 时为 null；在跑但还没完成第一条的会话 `tps: null`。**任何界面不出现跨 AI 合计**。
     - 实测分布（2026-10-19 08:30 一次 `--json --days 2`，n=3985，**单次观测**；「实测」= `est=false` 的那部分）：

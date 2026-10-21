@@ -26,8 +26,14 @@
            第一个输出项**之前**（推理项写盘时才算"首字"），留在分子里会虚高（实测中位 157 vs 102 t/s）。
            生成段 < 0.3 s 或可见输出为 0 ⇒ 退回 输出 ÷ 整条响应时长，`est=true`。
 * claude = output ÷ ((duration_ms − ttft_ms)/1000)；transcript 退回 output ÷ (末行 − 触发行)，`est=true`。
-* agy    = usage `f3`(输出，**含 thinking**) ÷ streaming_duration（≥ 0.3 s 且可见输出 `f10` > 0 时）；
-           否则 output ÷ (ttft + streaming)，`est=true`。thinking 在 streaming 段里生成（与 codex 相反、与 claude 同）：
+* agy    = usage `f3`(输出，**含 thinking**) ÷ streaming_duration，只在 streaming ≥ 0.3 s、可见输出 `f10` > 0、
+           **streaming ≥ 一半模型时间（ttft + streaming）且结果 ≤ `TPS_CEIL`** 时算实测；
+           否则 output ÷ (ttft + streaming)，`est=true`。
+           ★ 2026-10-22 实测 3,698 条：agy 有两种响应。流式的 thinking 与输出都落在 streaming 里；整包的（多以工具
+           调用结束）生成全做完才到，全部落在 ttft 里，streaming 只剩零点几秒。argon 每千 thinking 的成本在整包档的
+           ttft 里是 12.1 s、在流式档的 streaming 里是 12.7 s ⇒ 同一笔生成，计时落点不同。整包档按 streaming 除会爆
+           （用户看到 733 ÷ 0.397 s = 1848.6 t/s；按 streaming 分段 argon 中位：≥10 s 111、0.3–1 s 687、<0.05 s 8458）。
+           「占一半」这条在「服务端整包下发」与「agy 把首个可见块当首字」两种解释下都成立，不必先分清。thinking 在 streaming 段里生成（与 codex 相反、与 claude 同）：
            2026-10-21 实测 439 条 est=false，按模型 × thinking 占比分组，f3÷streaming 组间一致
            （argon <20% / 20–50% / >50% = 138 / 230 / 157，flash 426 / 474 / 625），f10÷streaming 在 thinking
            占比 >50% 的组掉到 33 / 26（用户看到的「Gemini 3 t/s」= 95 可见 ÷ 31.4 s，那条 thinking 2854）。
@@ -93,11 +99,14 @@ KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "se
         "tool_ms", "tps", "est", "session_req_n")
 
 MIN_GEN_S = 0.3              # 生成段短于它就不当分母（毫秒级的段除出来是噪音）
+AGY_STREAM_SHARE = 0.5       # agy：streaming 至少占模型时间这一比例才算实测（见模块 docstring agy 那条）
+TPS_CEIL = 1000.0            # agy：超过它的「实测」不可信，退回估值（本机实测流式档 p99 远低于它）
 ANCHOR = 64
 DISCOVER_EVERY = 0           # 每次都全量发现（实测四家合计 < 70 ms）；留着这个钩子以备变慢
 #: 游标版本（与输出契约的 `V` 分开）。2 = 游标状态里加了 `open`（轮次开着没）；旧游标作废、全量重解一次。
 #: 3 = agy t/s 分子改成 f3（2026-10-21）；全量重解一次，按 `key` 覆盖旧记录里的错数。
-CUR_V = 3
+#: 4 = agy 整包响应退估值（2026-10-22，streaming 占比 + 上限）；同上，全量重解一次。
+CUR_V = 4
 #: ★ 判停的兜底窗口：轮次开着、但这么久没写过文件 ⇒ 当它停了（崩溃 / 被杀 / Ctrl-C 没来得及写结束标记）。
 #:   取 10 分钟的依据（2026-10-19 实测 Claude transcript 一轮之内相邻两次写入的静默间隔，n=95684）：
 #:   p50 0.1 s · p90 10 s · p99 99 s · p99.9 600 s（长工具调用 / 子 agent / 等权限）。
@@ -165,6 +174,16 @@ def _int(v):
 def _i0(d, k):
     v = d.get(k) if isinstance(d, dict) else None
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def agy_tps(out, vis, ttft, strm):
+    """agy 一条响应的 `(tps, est)`（公式见模块 docstring agy 那条）。纯函数，ttft / strm 单位秒，可为 None。"""
+    total = (ttft or 0) + (strm or 0)
+    if strm is not None and strm >= MIN_GEN_S and vis > 0 and strm >= AGY_STREAM_SHARE * total:
+        tps = _div(out, strm)
+        if tps is not None and tps <= TPS_CEIL:
+            return tps, False
+    return _div(out, total), True
 
 
 def _div(num, secs):
@@ -869,10 +888,8 @@ def _agy_db(path, ent, horizon, emit):
         i_tok, cr, out, think, vis = g(2), g(5), g(3), g(9), g(10)
         # ★ 分子是 f3（含 thinking）：thinking 在 streaming 段里生成，只拿 f10 可见输出会把 thinking 多的响应
         #   压到 1/4（2026-10-21 实测 439 条，见模块 docstring）。`vis` 只用来判「真的生成了可见内容」。
-        if strm is not None and strm >= MIN_GEN_S and vis > 0:
-            tps, est = _div(out, strm), False
-        else:
-            tps, est = _div(out, (ttft or 0) + (strm or 0)), True
+        #   整包响应（streaming 不到模型时间一半）退估值，见 `agy_tps`。
+        tps, est = agy_tps(out, vis, ttft, strm)
         mraw = _pb1(inner, 19)
         model = S._agy_canon(S._agy_model(bytes(mraw).decode("utf-8", "replace")
                                           if isinstance(mraw, (bytes, bytearray)) else None))
@@ -1297,10 +1314,12 @@ def _median(xs):
 def _day_stats(rs):
     """次数 · 均速 · 首字中位（秒）· token（输入 + 输出，含缓存命中）。
 
-    ★ 「均速」`avg_tps` 取逐条 t/s 的**中位数**（null 不计），不是算术平均：重尾分布下一条短响应就能把
+    ★ 「均速」`avg_tps` 只取**实测**行（`est=false`；用户 2026-10-22 定：估值行照常显示数字，但不进均速 ——
+      估值的分母含首字等待，是解码速度的下限，混进来会把均速拉低几倍且看不出原因）。
+    ★ 取逐条 t/s 的**中位数**（null 不计），不是算术平均：重尾分布下一条短响应就能把
       均值拉偏几倍；按 token 加权又要各家同一个分母，而四家的分子分母口径本来就不同（见模块 docstring）。
     """
-    tps = [r["tps"] for r in rs if r.get("tps") is not None]
+    tps = [r["tps"] for r in rs if r.get("tps") is not None and not r.get("est")]
     ttft = [r["ttft_ms"] / 1000.0 for r in rs if r.get("ttft_ms") is not None]
     return {"n": len(rs), "avg_tps": round(_median(tps), 1) if tps else None,
             "ttft_median_s": round(_median(ttft), 2) if ttft else None,

@@ -152,13 +152,14 @@ export interface DayMetrics { n: number; avgTps: number | null; ttftMedianS: num
 /**
  * 右上三项指标。★ 按**整天**算，不跟筛选走（画板 `renderVals` 用的是 `all` 不是 `list`；
  * 截图 11 筛到 Claude 时右上仍是 64 次）。
- * - 均速 = 有 t/s 的请求的算术平均；全都读不到 → null（界面写 `—`）。
+ * - 均速 = 有 t/s 的**实测**请求（`est=false`）的算术平均；没有实测行 → null（界面写 `—`）。
+ *   估值行照常显示自己的数字，但不进均速（用户 2026-10-22 定；估值分母含首字等待，是下限）。
  * - 首字中位 = 有首字的请求的中位数（偶数取中间两个的平均，与 python `statistics.median` 一致）。
  *   ⚠️ 画板里写的是 `sorted[floor(n/2)]`（偶数取上中位）——那是示意数据的写法，这里取标准中位数，
  *   为的是与后端 `days.*.ttft_median_s` 在偶数条时不分叉。
  */
 export function dayMetrics(rows: readonly ReqRow[]): DayMetrics {
-  const tps = rows.map((r) => r.tps).filter((x): x is number => x != null);
+  const tps = rows.filter((r) => !r.est).map((r) => r.tps).filter((x): x is number => x != null);
   const ttft = rows.map((r) => r.ttft_ms).filter((x): x is number => x != null).sort((a, b) => a - b);
   let med: number | null = null;
   if (ttft.length) {
