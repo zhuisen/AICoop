@@ -34,6 +34,8 @@ _STORE = os.environ.get("CODEX_ROTATE_STORE") or (
 
 PLATFORMS = ("claude", "agy")
 CLAUDE_WINDOWS = ("five_hour", "seven_day")
+# Claude.app 记录不带重置时间，只能拿窗口长度判它是否一定已过期（见 `read_all`）。
+PLAN_USAGE_WINDOW_SECS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 MAX_STDIN = 1 << 20
 MAX_BUCKETS = 32
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
@@ -332,9 +334,14 @@ def read_all(now=None, ldir=None, plan_path=None):
                       seven_day=_window_out(sl.get("seven_day"), now))
     elif pu:
         t, fh, sd = pu
-        mk = lambda p: None if p is None else {"used_pct": p, "resets_at": None,
-                                               "captured_at": t, "expired": False}
-        claude.update(source="plan-usage-history", captured_at=t, five_hour=mk(fh), seven_day=mk(sd))
+        # ★ 这份没有重置时间，但窗口长度是定的：读数比窗口还老 ⇒ 它所在的窗口**一定**已经重置过，
+        #   这个「已用」属于旧窗口，标 `expired`（前端据此写 —，不当现值）。2026-10-21 实测：
+        #   Claude.app 停在 6 周前的一条，刘海照样画成 38% / 92%，与实际对不上。
+        mk = lambda p, win: None if p is None else {"used_pct": p, "resets_at": None, "captured_at": t,
+                                                    "expired": now - t >= win}
+        claude.update(source="plan-usage-history", captured_at=t,
+                      five_hour=mk(fh, PLAN_USAGE_WINDOW_SECS["five_hour"]),
+                      seven_day=mk(sd, PLAN_USAGE_WINDOW_SECS["seven_day"]))
     out["claude"] = claude
 
     agy = {"source": "none", "captured_at": None, "plan_tier": None, "buckets": {}, "error": None}
