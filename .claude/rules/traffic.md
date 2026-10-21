@@ -107,7 +107,11 @@ paths:
     - **每条 t/s 的分子分母**（`MIN_GEN_S = 0.3`）：
       · Codex = 可见输出（`output − reasoning`）÷（响应结束 − 首个输出项写盘时刻）。首字取**第一个推理项**的写盘时刻；第一个输出项不是推理项（工具调用整项写盘）就没有首字。推理 token 产生在首字之前，留在分子里会虚高（实测中位 157 vs 102 t/s）。
       · Claude = OTel span 的 `output ÷ (duration_ms − ttft_ms)`；分子**含 thinking**（实测 thinking 在首字之后流式产出：thinking > 50% 的 88 条中位 98 t/s，与无 thinking 的 93 条 131 同量级，扣掉只剩 28）。没有 span 的退回 transcript `output ÷ (末行 − 触发行)`。
-      · Gemini（agy）= usage `f10`（可见输出）÷ `f1.f12` streaming；Grok = `outputTokens ÷ apiDurationMs`。
+      · Gemini（agy）= usage `f3`（输出，**含 thinking**）÷ `f1.f12` streaming；Grok = `outputTokens ÷ apiDurationMs`。
+        ✗ 已被 2026-10-21 实测取代：分子用 `f10`（可见输出）。用户看到「Gemini 3 t/s」（95 可见 ÷ 31.4 s，thinking 2854）。
+        439 条 est=false 按模型 × thinking 占比（<20% / 20–50% / >50%）分组：`f3÷streaming` argon 138 / 230 / 157、flash 426 / 474 / 625，组间一致；
+        `f10÷streaming` 在 >50% 组掉到 33 / 26 ⇒ thinking 在 streaming 段里生成（与 Claude 同、与 Codex 相反）。⚠️ 单机两天数据、两个模型。
+        ⚠️ 改公式要 +1 `CUR_V`（全量重解覆盖旧数），且**必须部署**：app 跑的是安装包里那份 `requests.py`，旧版会把游标版本写回去。
       · **退估值**：生成段 < 0.3 s（或可见输出为 0）⇒ 退回 `output ÷ 整条时长`，`est=true`。实测 528 条 Claude span 里 118 条 `duration − ttft` ≤ 300 ms，直接除最高 75,875 t/s。
       · **给 null**：任何分母 < 0.3 s 或分子 ≤ 0 ⇒ `tps = null`，**不写 0**（0 会把均速拉低，而那条请求根本没生成）。下限对所有分母生效（实测 28 ms / 516 token ⇒ 18,429 t/s）。
       · `est` 只在数据里；界面上 t/s **不加「≈」「估」**（交接包全局规则）。

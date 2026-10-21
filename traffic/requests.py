@@ -26,7 +26,11 @@
            第一个输出项**之前**（推理项写盘时才算"首字"），留在分子里会虚高（实测中位 157 vs 102 t/s）。
            生成段 < 0.3 s 或可见输出为 0 ⇒ 退回 输出 ÷ 整条响应时长，`est=true`。
 * claude = output ÷ ((duration_ms − ttft_ms)/1000)；transcript 退回 output ÷ (末行 − 触发行)，`est=true`。
-* agy    = usage `f10`(可见输出) ÷ streaming_duration（≥ 0.3 s 时）；否则 output ÷ (ttft + streaming)，`est=true`。
+* agy    = usage `f3`(输出，**含 thinking**) ÷ streaming_duration（≥ 0.3 s 且可见输出 `f10` > 0 时）；
+           否则 output ÷ (ttft + streaming)，`est=true`。thinking 在 streaming 段里生成（与 codex 相反、与 claude 同）：
+           2026-10-21 实测 439 条 est=false，按模型 × thinking 占比分组，f3÷streaming 组间一致
+           （argon <20% / 20–50% / >50% = 138 / 230 / 157，flash 426 / 474 / 625），f10÷streaming 在 thinking
+           占比 >50% 的组掉到 33 / 26（用户看到的「Gemini 3 t/s」= 95 可见 ÷ 31.4 s，那条 thinking 2854）。
 * grok   = outputTokens ÷ (apiDurationMs/1000)（一轮里所有模型调用的 API 时间之和）。
 * 任何分母 ≤ 0、或输出为 0 ⇒ `tps = null`（不写 0：0 t/s 会把均速拉低，而那条请求根本没生成）。
 
@@ -92,7 +96,8 @@ MIN_GEN_S = 0.3              # 生成段短于它就不当分母（毫秒级的�
 ANCHOR = 64
 DISCOVER_EVERY = 0           # 每次都全量发现（实测四家合计 < 70 ms）；留着这个钩子以备变慢
 #: 游标版本（与输出契约的 `V` 分开）。2 = 游标状态里加了 `open`（轮次开着没）；旧游标作废、全量重解一次。
-CUR_V = 2
+#: 3 = agy t/s 分子改成 f3（2026-10-21）；全量重解一次，按 `key` 覆盖旧记录里的错数。
+CUR_V = 3
 #: ★ 判停的兜底窗口：轮次开着、但这么久没写过文件 ⇒ 当它停了（崩溃 / 被杀 / Ctrl-C 没来得及写结束标记）。
 #:   取 10 分钟的依据（2026-10-19 实测 Claude transcript 一轮之内相邻两次写入的静默间隔，n=95684）：
 #:   p50 0.1 s · p90 10 s · p99 99 s · p99.9 600 s（长工具调用 / 子 agent / 等权限）。
@@ -862,8 +867,10 @@ def _agy_db(path, ent, horizon, emit):
         u = S._pb(bytes(inner[4][0])) if isinstance(_pb1(inner, 4), (bytes, bytearray)) else {}
         g = lambda f: (_pb1(u, f) if isinstance(_pb1(u, f), int) else 0)  # noqa: E731
         i_tok, cr, out, think, vis = g(2), g(5), g(3), g(9), g(10)
+        # ★ 分子是 f3（含 thinking）：thinking 在 streaming 段里生成，只拿 f10 可见输出会把 thinking 多的响应
+        #   压到 1/4（2026-10-21 实测 439 条，见模块 docstring）。`vis` 只用来判「真的生成了可见内容」。
         if strm is not None and strm >= MIN_GEN_S and vis > 0:
-            tps, est = _div(vis, strm), False
+            tps, est = _div(out, strm), False
         else:
             tps, est = _div(out, (ttft or 0) + (strm or 0)), True
         mraw = _pb1(inner, 19)

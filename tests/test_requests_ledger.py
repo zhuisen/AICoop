@@ -299,7 +299,10 @@ class FourPlatformsParse(Base):
         r = self.by_key(self.run_json())
         a, b = r["agy:%s:0" % self.conv], r["agy:%s:1" % self.conv]
         self.assertEqual((a["ttft_ms"], a["gen_ms"], a["total_ms"]), (4000, 6000, 10000))
-        self.assertEqual(a["tps"], 66.7, "f10 可见输出 400 ÷ streaming 6 s")
+        # ★ 2026-10-21：分子是 f3（含 thinking）不是 f10 —— thinking 在 streaming 段里生成。
+        #   实测 439 条按模型分组：argon 的 f3÷streaming 在 thinking 占比 <20% / 20–50% / >50% 三组是 138 / 230 / 157，
+        #   f10÷streaming 是 122 / 131 / 33（thinking 多的那组掉到 1/4）；用户看到 3 t/s 就是 95 可见 ÷ 31.4 s。
+        self.assertEqual(a["tps"], 100.0, "f3 输出（含 thinking）600 ÷ streaming 6 s")
         self.assertFalse(a["est"])
         self.assertEqual((a["input"], a["cached"], a["output"], a["reasoning"]), (4900, 4000, 600, 200))
         self.assertEqual((a["model"], a["session_title"], a["session_req_n"]), ("gemini-3.8-flash", "proj-gamma", 1))
