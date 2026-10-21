@@ -28,3 +28,11 @@ if not os.environ.get("AGY_POOL_STORE"):
     _p = tempfile.mkdtemp(prefix="codexbar-test-agypool-")
     os.environ["AGY_POOL_STORE"] = _p
     atexit.register(shutil.rmtree, _p, True)
+# ★ Claude（P3b 设计第 0 层闸 G2，2026-10-22）：Claude Code 的配置根同样指到临时目录、真二进制换成 false。
+#   今天没有测试起真 `claude`，但 `claude_otel_env.py` 会改 `<CLAUDE_CONFIG_DIR>/settings.json` ——
+#   哪个用例忘了设，改的就是用户真配置；钥匙串没有临时目录，起真 `claude auth` 会覆盖登录态。
+if not os.environ.get("CLAUDE_CONFIG_DIR"):
+    _c = tempfile.mkdtemp(prefix="codexbar-test-claude-")
+    os.environ["CLAUDE_CONFIG_DIR"] = _c
+    atexit.register(shutil.rmtree, _c, True)
+os.environ.setdefault("CLAUDE_REAL", "/usr/bin/false")

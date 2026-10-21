@@ -58,8 +58,22 @@ os.environ.setdefault("AGY_USAGE_REPORT", "0")   # B88：别在测试里起真 a
 #   测试污染生产,且没有任何一处会为此变红。
 os.environ.setdefault("CODEXBAR_LAUNCHCTL", "0")
 
+# ★ Claude（P3b 闸 G2，2026-10-22）：配置根指临时目录，真二进制换成 false（理由见 `_isolation.py`）。
+if not os.environ.get("CLAUDE_CONFIG_DIR"):
+    _c = tempfile.mkdtemp(prefix="codexbar-test-claude-")
+    os.environ["CLAUDE_CONFIG_DIR"] = _c
+    atexit.register(shutil.rmtree, _c, True)
+os.environ.setdefault("CLAUDE_REAL", "/usr/bin/false")
+
 
 class IsolationIsInPlace(unittest.TestCase):
+    def test_claude_config_is_redirected(self):
+        """★ G2：判据是变量已设、且不指向真 `~/.claude`。"""
+        p = os.environ.get("CLAUDE_CONFIG_DIR")
+        self.assertTrue(p, "CLAUDE_CONFIG_DIR 没设 —— 测试可能改用户真实的 Claude 配置")
+        self.assertNotEqual(os.path.realpath(p), os.path.realpath(os.path.expanduser("~/.claude")))
+        self.assertEqual(os.environ.get("CLAUDE_REAL"), "/usr/bin/false")
+
     def test_launchctl_is_disabled(self):
         """★★★ 判据是「变量**已设置**」，不是「代码里有隔离逻辑」。
 
