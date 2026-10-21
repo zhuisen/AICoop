@@ -299,6 +299,10 @@ export default function NotchHud() {
           .catch(noop);   // 读不到保留上一份；一次都没读到 ⇒ 两格写 —
       }
       if (now - trafficAt.current > REFETCH_MS) readTraffic();
+      // ★ 刘海自己不扫（只读盘 + 收推送），但展开 = 主动来看「今日」。请常驻的菜单栏 webview 按新鲜度补扫，
+      //   扫完它会发 `traffic-updated`，上面的监听读盘即可。此前主窗与菜单栏都没打开时快照一直停着
+      //   （2026-10-21 实测：16:10 展开，「↻」仍写 15:32）。
+      void emit("notch-shown").catch(noop);
       // logo 从各自那段光晕飞进自己那一行（只在「在跑」Tab；减弱动态效果时不飞）
       const pl0 = C.layoutCard({ alert: !!alert, view: "run", run: cur.rows.map(() => ({ multi: false, open: false, nSess: 0 })), todayRows: 0, quotaRows: 0 });
       if (!red && v === "run" && cur.rows.length) {

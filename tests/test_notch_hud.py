@@ -401,6 +401,19 @@ class PushNotPoll(unittest.TestCase):
         self.assertIn("listen(POOL_EVT", pool, "池文件变了要跟着读盘")
         self.assertIn("listen<LivePayload>(LIVE_EVT", pool, "当前号变了要跟着换")
 
+    def test_opening_the_card_asks_the_menubar_to_rescan(self):
+        """刘海只读盘、不扫描；展开时请常驻的菜单栏 webview 按新鲜度代扫（2026-10-21：主窗与菜单栏都没开时，
+        刘海「今日」停在 40 分钟前）。刘海自己不许直接起扫描。"""
+        code = _code(TSX)
+        self.assertNotIn("run_traffic", code, "刘海不许自己起扫描（会起 python）")
+        i = code.index('emit("notch-shown")')
+        guard = code.rfind("if (open) {", 0, i)
+        self.assertNotEqual(guard, -1, "`notch-shown` 只在卡片展开时发")
+        self.assertLess(i - guard, 1500, "`notch-shown` 离展开分支太远，可能不在同一个分支里")
+        mb = _code(APP / "src" / "MenuBar.tsx")
+        self.assertRegex(mb, r'listen\("notch-shown", \(\) => \{ refreshIfStale\(',
+                         "菜单栏要接住 `notch-shown`，按新鲜度代扫")
+
     def test_the_only_interval_runs_while_the_panel_is_open(self):
         code = _code(TSX)
         self.assertEqual(code.count("setInterval"), 1, "只允许面板展开时那一个倒计时定时器")
