@@ -69,7 +69,8 @@ function defaultPicks(steps: Step[], blocked: boolean): Record<string, boolean> 
   return out;
 }
 
-export default function ConnectorPanel({ t }: { t: Theme }) {
+/** `embedded`：放进设置页 S1「账号池 · 轮换」组卡片里 —— 去掉自己的外边距，标题改成卡片行的字号。 */
+export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: boolean }) {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [picks, setPicks] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState<string | null>(null);
@@ -174,9 +175,9 @@ export default function ConnectorPanel({ t }: { t: Theme }) {
   const mono = "'JetBrains Mono', ui-monospace, monospace";
 
   return (
-    <div data-connector style={{ marginTop: 26 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, marginBottom: 12 }}>
-        账号池接入（Connector）
+    <div data-connector style={{ marginTop: embedded ? 0 : 26 }}>
+      <div style={embedded ? { fontSize: 14, fontWeight: 500, color: t.text, marginBottom: 8 } : { fontSize: 12, fontWeight: 600, color: t.muted, marginBottom: 12 }}>
+        {embedded ? "接入账号池" : "账号池接入（Connector）"}
       </div>
 
       {!plan ? (

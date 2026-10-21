@@ -9,7 +9,7 @@
  *
  * 口径（交接包 README「计数口径」+ page3 §2）：
  * - 读不到一律写 `—`，**不写 0**；t/s 不加「≈」「估」。
- * - 速度只在单条请求上显示，本页**没有任何跨 AI 的合计 t/s**（右上「均速」是请求条数的算术平均，
+ * - 速度只在单条请求上显示，本页**没有任何跨 AI 的合计 t/s**（右上「均速」是逐条实测 t/s 的中位数，
  *   不是 t/s 之和）。
  * - 首字 > 30 s 用琥珀色。没有「慢请求」筛选（定稿取消）。
  */
@@ -147,30 +147,47 @@ export function filterPlatform(rows: readonly ReqRow[], f: ReqFilter): ReqRow[] 
   return f === "all" ? rows.slice() : rows.filter((r) => r.platform === f);
 }
 
+/** 中位数（偶数取中间两个的平均，与 python `statistics.median` 一致）。空 ⇒ null。 */
+export function median(xs: readonly number[]): number | null {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b), h = Math.floor(v.length / 2);
+  return v.length % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
+}
+
+/**
+ * 保留 1 位小数，**与 Python `round(x, 1)` 同值**（后端 `_day_stats` 用它；托盘 / 刘海的「均」读后端）。
+ * 只有恰好落在 .x5 的二进制精确值上两者才分叉：Python 取偶，`toFixed` 进位（评审 P6-codex-3：
+ * `[1, 10.2, 10.3, 100]` 中位 10.25，前端原来写 10.3、后端 10.2）。只用于非负数。
+ */
+export function pyRound1(x: number): number {
+  const s = x.toFixed(100), i = s.indexOf(".");
+  if (/^50*$/.test(s.slice(i + 2))) {
+    const d = Number(s[i + 1]);
+    return d % 2 === 0 ? Number(s.slice(0, i + 2)) : Number((x + 0.05).toFixed(1));
+  }
+  return Number(x.toFixed(1));
+}
+
 export interface DayMetrics { n: number; avgTps: number | null; ttftMedianS: number | null }
 
 /**
  * 右上三项指标。★ 按**整天**算，不跟筛选走（画板 `renderVals` 用的是 `all` 不是 `list`；
  * 截图 11 筛到 Claude 时右上仍是 64 次）。
- * - 均速 = 有 t/s 的**实测**请求（`est=false`）的算术平均；没有实测行 → null（界面写 `—`）。
+ * - 均速 = 有 t/s 的**实测**请求（`est=false`）的**中位数**；没有实测行 → null（界面写 `—`）。
  *   估值行照常显示自己的数字，但不进均速（用户 2026-10-22 定；估值分母含首字等待，是下限）。
+ *   ★ 中位数不是算术平均（AICoop P3，阶段 6）：后端 `_day_stats.avg_tps` 一直是中位数（`traffic.md`：重尾分布下
+ *   一条短响应就能把均值拉偏几倍），托盘 / 刘海的「均」读的是后端那个数。前端原来写算术平均 ⇒ 同一个「均速」两处两个数。
+ *   画板写的是算术平均（示意数据下两者相同），按本仓口径取中位。
  * - 首字中位 = 有首字的请求的中位数（偶数取中间两个的平均，与 python `statistics.median` 一致）。
  *   ⚠️ 画板里写的是 `sorted[floor(n/2)]`（偶数取上中位）——那是示意数据的写法，这里取标准中位数，
  *   为的是与后端 `days.*.ttft_median_s` 在偶数条时不分叉。
  */
 export function dayMetrics(rows: readonly ReqRow[]): DayMetrics {
   const tps = rows.filter((r) => !r.est).map((r) => r.tps).filter((x): x is number => x != null);
-  const ttft = rows.map((r) => r.ttft_ms).filter((x): x is number => x != null).sort((a, b) => a - b);
-  let med: number | null = null;
-  if (ttft.length) {
-    const h = Math.floor(ttft.length / 2);
-    med = (ttft.length % 2 ? ttft[h] : (ttft[h - 1] + ttft[h]) / 2) / 1000;
-  }
-  return {
-    n: rows.length,
-    avgTps: tps.length ? tps.reduce((a, b) => a + b, 0) / tps.length : null,
-    ttftMedianS: med,
-  };
+  const ttft = rows.map((r) => r.ttft_ms).filter((x): x is number => x != null);
+  const t = median(ttft);
+  const a = median(tps);
+  return { n: rows.length, avgTps: a == null ? null : pyRound1(a), ttftMedianS: t == null ? null : t / 1000 };
 }
 
 export const DASH = "—";
@@ -253,6 +270,8 @@ export function accountLabel(account: string | null, privacy: boolean, mask: (s:
 }
 
 export const SLOW_TTFT_MS = 30_000;
+/** 慢请求的第二档：**实测**速度低于它（画板 `renderVals`）。估值行不判 —— 估值分母含首字等待，是下限，判了会误报。 */
+export const SLOW_TPS = 10;
 export type Tone = "normal" | "muted" | "amber";
 
 /** 首字的文字色档：读不到 → muted；> 30 s → amber；否则 normal。 */
@@ -283,14 +302,17 @@ export function timeSplit(r: Pick<ReqRow, "ttft_ms" | "gen_ms" | "total_ms">): T
 }
 
 /**
- * 首字过长时给原因（交接包「首字过长时给原因」）。只针对首字 > 30 s；
- * 画板里还有一条「速度低于 10 t/s」—— 它属于已取消的「慢请求」筛选，定稿只留首字这一条。
+ * 慢请求的原因，两档（交接包「首字过长时给原因」+ 画板 `renderVals`）：
+ * ① 首字 > 30 s（附缓存命中率），优先；② 实测速度 < 10 t/s —— 估值行不判（估值是下限，判了会误报）。
  */
-export function slowWhy(r: Pick<ReqRow, "ttft_ms" | "input" | "cached">): string | null {
-  if (r.ttft_ms == null || r.ttft_ms <= SLOW_TTFT_MS) return null;
-  const rate = cacheRate(r.input, r.cached);
-  return `慢请求：首字等了 ${(r.ttft_ms / 1000).toFixed(1)} s，超过 30 s。`
-    + (rate == null ? "缓存命中读不到。" : `缓存命中 ${rate} %。`);
+export function slowWhy(r: Pick<ReqRow, "ttft_ms" | "input" | "cached" | "tps" | "est">): string | null {
+  if (r.ttft_ms != null && r.ttft_ms > SLOW_TTFT_MS) {
+    const rate = cacheRate(r.input, r.cached);
+    return `慢请求：首字等了 ${(r.ttft_ms / 1000).toFixed(1)} s，超过 30 s。`
+      + (rate == null ? "缓存命中读不到。" : `缓存命中 ${rate} %。`);
+  }
+  if (!r.est && r.tps != null && r.tps < SLOW_TPS) return `慢请求：速度 ${r.tps.toFixed(1)} t/s，低于 ${SLOW_TPS} t/s。`;
+  return null;
 }
 
 /** 空列表文案（交接包 3c）。 */

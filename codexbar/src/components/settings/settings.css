@@ -1,0 +1,30 @@
+/* 设置页 S1（AICoop P9）。只动位移 / 透明度 / 颜色；减弱动态效果时直接切换。 */
+/* 分隔线只画在「行」的上沿：行与它自己的从属块（.set-sub）之间不画线（评审 P6-gemini-3）。 */
+.set-card > .set-row + .set-row,
+.set-card > .set-sub + .set-row { border-top: 1px solid var(--setLine); }
+
+.set-tg { transition: background-color .2s ease-out; }
+.set-tg .set-knob {
+  position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 8px; background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transform: translateX(0);
+  transition: transform .24s cubic-bezier(.2, .9, .3, 1), width .18s cubic-bezier(.2, .9, .3, 1);
+}
+.set-tg.on .set-knob { transform: translateX(16px); }
+.set-tg:not([aria-disabled="true"]):active .set-knob { width: 19px; }
+.set-tg.on:not([aria-disabled="true"]):active .set-knob { transform: translateX(13px); }
+
+.set-pill {
+  position: absolute; left: 2px; top: 2px; height: 24px; border-radius: 6px;
+  transition: transform .24s cubic-bezier(.2, .9, .3, 1), width .24s cubic-bezier(.2, .9, .3, 1);
+}
+.set-seg-btn { transition: color .2s, background-color .2s; }
+.set-seg-btn:not(:disabled):active, .set-btn:not(:disabled):active { transform: scale(.97); }
+.set-chev { display: inline-block; transition: transform .15s ease-out; }
+.set-chev.open { transform: rotate(90deg); }
+
+.set-fold { display: grid; transition: opacity .25s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .set-tg, .set-tg .set-knob, .set-pill, .set-seg-btn, .set-fold, .set-chev { transition: none !important; }
+  .set-seg-btn:active, .set-btn:active { transform: none !important; }
+}

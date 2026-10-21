@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Theme } from "../theme";
 import { maskId } from "../helpers";
 import PlatformLogo from "../components/PlatformLogo";
@@ -29,6 +29,12 @@ import {
  *    logo 任何状态都不变暗，所以只降文字。
  * 5. **空列表时详情栏不画 logo**：画板在没有选中行时仍放一个 `<img src="">`，渲染成破图标。
  * 6. **数据来源小字按实际来源写**（`requests.ts::sourceNote`），不照抄画板的示意来源。
+ * 7. **Scroll Fade 的初值按实际尺寸算**（AICoop 阶段 6）：画板初值 `scB:1`，内容不溢出时底部渐隐也亮着；
+ *    这里挂载 / 换数据 / 改尺寸 / 滚动时各量一次，只在变化时写状态。
+ * 8. **读失败时表头也降到 55%**（画板整个滚动容器降，表头在里面）；logo 仍不降（偏离 4）。
+ * 9. **速度读不到只写「—」**，不带「 t/s」单位（Spec「读不到写 —」）。
+ * 10. **均速取实测行的中位数**，不是画板的算术平均 —— 与后端 `avg_tps`、托盘 / 刘海的「均」同一个数（`requests.ts::dayMetrics`）。
+ * 11. 读失败且从未读到过：空态写「读不到请求账本 / 读到之后会出现在这里」（画板没有这一态）。
  */
 
 /** 交接包里本页专用、`theme.ts` 里没有的几个值。其余一律取 `t`（两套主题已与画板逐值一致）。 */
@@ -122,6 +128,27 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
     </div>
   );
 
+  // Scroll Fade（画板 `onSc`）：能往上滚 ⇒ 表头下方渐隐；还有下文 ⇒ 底部渐隐。只在变化时写状态。
+  const scRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ top: false, bot: false, headH: 37 });
+  const measure = useCallback(() => {
+    const el = scRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 2, bot = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+    const headH = headRef.current?.offsetHeight ?? 37;
+    setFade((f) => (f.top === top && f.bot === bot && f.headH === headH ? f : { top, bot, headH }));
+  }, []);
+  useLayoutEffect(measure, [measure, list.length, day, f, stale]);
+  useEffect(() => {
+    const el = scRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+  const clear = t.isDark ? "rgba(20,26,34,0)" : "rgba(255,255,255,0)";
+
   const split = r ? timeSplit(r) : null;
   const why = r ? slowWhy(r) : null;
   const rate = r ? cacheRate(r.input, r.cached) : null;
@@ -175,13 +202,17 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
           )}
           {/* ★★ 表头在滚动容器**里面**、sticky 置顶（交接包「容易遗漏」第 1 条）：
               放在外面的话，一出滚动条内容区就变窄，列和表头错位。闸 tests/test_requests_page.py。 */}
-          <div data-req-scroll style={{ flex: 1, minHeight: 0, overflow: "auto", paddingBottom: 4 }}>
+          <div ref={scRef} data-req-scroll onScroll={measure} style={{ flex: 1, minHeight: 0, overflow: "auto", paddingBottom: 4 }}>
             {/* 画板把 6px 横向内边距放在滚动容器上；这里放进内层，表头的 -6px 外边距才不会被量成溢出。 */}
             <div style={{ minWidth: TABLE_MIN_W + 12, padding: "0 6px", boxSizing: "border-box" }}>
-              <div data-req-head
+              <div ref={headRef} data-req-head
                    style={{ position: "sticky", top: 0, zIndex: 1, display: "grid", gridTemplateColumns: REQ_GRID, columnGap: 8, padding: "10px 16px", margin: "0 -6px 4px", fontSize: 11, color: t.muted, background: t.cardBg, borderBottom: `1px solid ${t.divider}` }}>
-                {HEADERS.map((h) => <span key={h} style={{ textAlign: "center", whiteSpace: "nowrap" }}>{h}</span>)}
+                {HEADERS.map((h) => <span key={h} style={{ textAlign: "center", whiteSpace: "nowrap", opacity: dim }}>{h}</span>)}
               </div>
+              <i data-req-fade="top" data-on={fade.top ? 1 : 0} aria-hidden="true"
+                 style={{ position: "sticky", top: fade.headH, zIndex: 1, display: "block", height: 28, margin: "-4px -6px -24px",
+                          background: `linear-gradient(${t.cardBg}, ${clear})`, opacity: fade.top ? 1 : 0,
+                          transition: "opacity .15s ease-out", pointerEvents: "none" }} />
               {list.map((x, i) => {
                 const tone = ttftTone(x.ttft_ms);
                 return (
@@ -198,12 +229,16 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
                     <span style={{ ...NUM, textAlign: "center", opacity: dim }}>{fmtInt(x.output)}</span>
                     <span style={{ ...NUM, textAlign: "center", color: toneColor(tone), opacity: dim }}>{fmtSecs(x.ttft_ms)}</span>
                     <span style={{ ...NUM, textAlign: "center", fontWeight: 600, color: x.tps == null ? t.muted : pal.num[x.platform], opacity: dim }}>
-                      {fmtTps(x.tps)}<span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>
+                      {fmtTps(x.tps)}{x.tps != null && <span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>}
                     </span>
                     <span style={{ ...NUM, textAlign: "center", color: t.text2, opacity: dim }}>{fmtSecs(x.total_ms)}</span>
                   </div>
                 );
               })}
+              <i data-req-fade="bot" data-on={fade.bot ? 1 : 0} aria-hidden="true"
+                 style={{ position: "sticky", bottom: 0, zIndex: 1, display: "block", height: 32, margin: "-32px -6px 0",
+                          background: `linear-gradient(${clear}, ${t.cardBg})`, opacity: fade.bot ? 1 : 0,
+                          transition: "opacity .15s ease-out", pointerEvents: "none" }} />
             </div>
             {empty && (
               <div data-req-empty style={{ padding: "90px 24px", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, textAlign: "center" }}>

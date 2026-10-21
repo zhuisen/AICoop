@@ -101,7 +101,7 @@ class TheCodexTabHasExactlyOneAnswer(unittest.TestCase):
         call = _call_site(self.OV, "<AccountCard")
         self.assertIn("isDirect={a.aid === p.currentNode}", call, "★★ 直连号不是 state.active 那个")
         card = _strip((SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8"))
-        self.assertIn('{isDirect && <span title="auth.json 里是它（直连时用的号）"> · 直连</span>}', card,
+        self.assertIn('{isDirect && <span className="ov-direct" title="auth.json 里是它（直连时用的号）"> · 直连</span>}', card,
                       "★★ codex 卡片没写「直连」，或没给一句解释它到底是什么")
         self.assertNotRegex(card, r'text: "当前"', "★★ codex 卡片又出现了「当前」标签 —— 与顶部「正在使用」撞名")
 

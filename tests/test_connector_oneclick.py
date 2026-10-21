@@ -120,7 +120,9 @@ class TheOneClickRendersInEveryState(unittest.TestCase):
         """★★ 先正面证明面板在 —— 零渲染时「按钮不存在」恒真，看起来和通过一样。"""
         for c, d in self.dom.items():
             with self.subTest(conn=c):
-                self.assertIn("账号池接入（Connector）", d, f"conn={c} 面板根本没渲染")
+                # AICoop P9：面板嵌进设置页「账号池 · 轮换」组，标题改成卡片行的「接入账号池」。
+                self.assertIn("接入账号池", d, f"conn={c} 面板根本没渲染")
+                self.assertIn("data-connector", d)
 
     def test_each_state_shows_exactly_the_right_buttons(self):
         for c, (one, all_, blocked) in self.EXPECT.items():
