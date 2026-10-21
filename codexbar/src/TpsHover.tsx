@@ -219,8 +219,8 @@ export default function TpsHover() {
     : mode === "closing" ? "opacity 160ms ease-in 120ms, transform 160ms ease-in 120ms"
     : mode === "clicked" ? "opacity 120ms ease-out" : "none";
   const stagger = isOpen && flew && !reduce;
-  const headT = `opacity ${isOpen ? 220 : 100}ms ease-out ${stagger ? 480 : 0}ms`;
-  const footT = `opacity ${isOpen ? 220 : 100}ms ease-out ${stagger ? 520 : 0}ms`;
+  const headT = `opacity ${isOpen ? 220 : 100}ms ease-out ${stagger ? 200 : 0}ms`;
+  const footT = `opacity ${isOpen ? 220 : 100}ms ease-out ${stagger ? 230 : 0}ms`;
   const rowTr = reduce ? "0ms" : `340ms ${SP}`;
   const px = layout ? layout.panel.x : 40;
   const py = layout ? layout.panel.y : 30;

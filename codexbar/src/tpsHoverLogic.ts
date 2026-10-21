@@ -84,9 +84,10 @@ export function layoutPanel(blocks: BlockIn[]): PanelLayout {
 }
 
 // ── ② logo 飞行 ─────────────────────────────────────────────────────
-export const FLY_IN_MS = 520;
+// ★ 用户 2026-10-21「响应要加快」：飞入 520 → 320、飞回 440 → 300，数据跟着提前（见 `dataDelay`）。
+export const FLY_IN_MS = 320;
 export const FLY_IN_STAGGER = 35;
-export const FLY_BACK_MS = 440;
+export const FLY_BACK_MS = 300;
 /** Rust `CLOSE_ANIM`：leave / idle 后这么久真隐藏窗口。 */
 export const RUST_HIDE_MS = 520;
 /** 托盘胶囊在 `layout()` 里给的段（窗口内坐标）。 */
@@ -143,7 +144,7 @@ export function planFlights(layout: HoverLayout | null, keys: string[], logoY: n
 
 /** 打开后多久把 logo 交还给行自己画（最后一个落地 + 少许余量；原型固定 700）。 */
 export function settleMs(nFlights: number): number {
-  return nFlights > 0 ? Math.max(700, FLY_IN_MS + (nFlights - 1) * FLY_IN_STAGGER + 40) : 0;
+  return nFlights > 0 ? Math.max(420, FLY_IN_MS + (nFlights - 1) * FLY_IN_STAGGER + 40) : 0;
 }
 
 /** 飞回胶囊：最后一个落地的时刻，但不晚于 Rust 隐藏窗口之前 20 ms（之后托盘必须已经画回 logo）。 */
@@ -154,7 +155,7 @@ export function restoreLogosAt(nFlights: number): number {
 
 /** 第 i 行数据（名字 / t/s / Token）开始淡入的延迟：logo 落地前约 80 ms（原型 360 + i·35）。 */
 export function dataDelay(i: number): number {
-  return 360 + i * 35;
+  return 160 + i * 35;
 }
 
 // ── ③ 展开 / 折叠：悬停 250 ms 展开，离开这一行（含会话区）250 ms 折叠 ────────────

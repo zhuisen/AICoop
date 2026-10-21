@@ -12,8 +12,8 @@ import * as G from "../idleGridLayout";
  * ★ 数据由常驻的菜单栏 webview 算好推过来（`useIdleTray` → `IDLE_PANEL_EVENT`），这里不取数；挂载时要一份。
  * ★ 每家一格：额度环 + 大数字（5h 剩余，grok 只有周）+ 右上角重置倒计时；菜单栏里的那几家左上角白色小圆点、
  *   底色 16% + 描边。点格子 ⇒ 关面板、打开工作台里该 AI 的总览（Kimi / DeepSeek 没有总览档 ⇒ 用量详情）。
- * ★ 打开：外壳 140 ms 淡入的同时托盘 logo 起飞（420 ms 弹簧，相邻错开 25 ms）落进环心；其余平台 120 ms 后原位淡入；
- *   文字和环 200 ms 时出现。关闭倒放。只动 transform / opacity。减弱动态效果：整块淡入淡出。
+ * ★ 打开：外壳 140 ms 淡入的同时托盘 logo 起飞（280 ms 弹簧，相邻错开 25 ms；2026-10-21 起「响应要加快」）落进环心；其余平台 60 ms 后原位淡入；
+ *   文字和环 110 ms 时出现。关闭倒放。只动 transform / opacity。减弱动态效果：整块淡入淡出。
  */
 
 type Mode = "closed" | "open" | "closing" | "clicked";
@@ -104,8 +104,9 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
 
   const shellTr = reduce ? "opacity 150ms"
     : isOpen ? `opacity 140ms ease-out, transform 220ms ${SPRING}`
-    : mode === "closing" ? "opacity 160ms ease-in 260ms, transform 160ms ease-in 260ms"
+    : mode === "closing" ? "opacity 160ms ease-in 200ms, transform 160ms ease-in 200ms"
     : mode === "clicked" ? "opacity 120ms ease-out" : "none";
+  const TEXT_IN_MS = 110;
   const txt = (d: number) => `opacity 140ms ease-out ${isOpen && !reduce ? d : 0}ms`;
   const flying = new Set(fly.map((f) => f.key));
 
@@ -143,8 +144,8 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
                           opacity: isOpen ? 1 : 0,
                           transform: isOpen || reduce ? "none" : "translate3d(0, 5px, 0) scale(.96)",
                           transition: reduce ? "opacity 150ms" : `opacity 250ms ease-out ${cdl}ms, transform 500ms ${POP} ${cdl}ms` }}>
-              {c.inBar && <i className="ig-dot" title="在菜单栏" style={{ opacity: isOpen ? 1 : 0, transition: txt(200) }} />}
-              {c.reset && <span className="ig-reset" data-idle-reset style={{ opacity: isOpen ? 1 : 0, transition: txt(200) }}>{c.reset}</span>}
+              {c.inBar && <i className="ig-dot" title="在菜单栏" style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }} />}
+              {c.reset && <span className="ig-reset" data-idle-reset style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }}>{c.reset}</span>}
               <svg className="ig-ring" width={G.RING} height={G.RING} viewBox={`0 0 ${G.RING} ${G.RING}`}
                    style={{ left: (g.cw - G.RING) / 2, top: G.RING_TOP }} aria-hidden="true">
                 <circle cx={G.RING / 2} cy={G.RING / 2} r={G.RING_R} fill="none" stroke="var(--ig-track)" strokeWidth={G.RING_SW} />
@@ -162,7 +163,7 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
               <span className="ig-main" data-idle-main={c.main === null ? "—" : Math.round(c.main)} data-idle-stale={c.stale ? 1 : 0}
                     title={c.stale ? "这次没读到，显示的是上一次读到的数" : undefined}
                     style={{ color: c.main === null ? "var(--ig-tx3)" : c.low ? G.LOW : c.stale ? "var(--ig-tx2)" : "var(--ig-tx)",
-                             opacity: isOpen ? 1 : 0, transition: txt(200) }}>
+                             opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }}>
                 {c.main === null ? "—" : `${Math.round(c.main)}%`}
               </span>
             </div>

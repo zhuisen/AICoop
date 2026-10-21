@@ -103,8 +103,8 @@ class Flights(unittest.TestCase):
         self.assertEqual(node("m.restoreLogosAt(0)"), 0)
 
     def test_settle_after_last_lands(self):
-        self.assertEqual(node("[m.settleMs(0), m.settleMs(4)]"), [0, 700])
-        self.assertGreaterEqual(node("m.settleMs(8)"), 520 + 7 * 35)
+        self.assertEqual(node("[m.settleMs(0), m.settleMs(4)]"), [0, 465], "320 + 3×35 + 40（2026-10-21 飞入缩短）")
+        self.assertGreaterEqual(node("m.settleMs(8)"), 320 + 7 * 35)
 
 
 class ExpandRule(unittest.TestCase):

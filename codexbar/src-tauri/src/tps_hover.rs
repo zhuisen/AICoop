@@ -22,19 +22,21 @@ pub const PANEL_W: f64 = 300.0;
 /// ★ 用户 2026-10-21「改为居中弹窗」（选「托盘正下方居中」，随后「运行中的悬浮弹窗也要改」）：
 ///   两种面板都是中线 = 状态栏按钮中线，取代原型的「右沿比胶囊右沿多出 8 / 15」。贴屏幕边时往里收。
 pub const IDLE_PANEL_W: f64 = 435.0;
-/// 空闲面板悬停 150 ms 打开（P11 §6；在跑面板是 200 ms）。
-const IDLE_OPEN_DWELL: Duration = Duration::from_millis(150);
+/// 悬停多久打开。★ 用户 2026-10-21「运行中和空闲的悬浮弹窗响应要加快」：稿里的 150 / 200 ms 都降到 80 ms
+///   （仍留一点停留，光标横扫菜单栏时不乱弹）。
+const IDLE_OPEN_DWELL: Duration = Duration::from_millis(80);
 /// 面板外的透明边：阴影 `0 16 40 rgba(0,0,0,.45)` 要往外 ~40、往下再多 16。
 const PAD_X: f64 = 40.0;
 const PAD_B: f64 = 56.0;
 /// 面板顶到菜单栏下沿的距离（原型：胶囊容器 22 高、面板从 28 起 ⇒ 下方 6）。
 const GAP: f64 = 6.0;
-const OPEN_DWELL: Duration = Duration::from_millis(200);
+const OPEN_DWELL: Duration = Duration::from_millis(80);
 const CLOSE_DWELL: Duration = Duration::from_millis(300);
 /// 关闭动画：数据 100 ms 淡出 → logo 飞回胶囊 → 外壳延后 120 ms 淡出。动画走完再真隐藏。
 const CLOSE_ANIM: Duration = Duration::from_millis(520);
 const CLICK_ANIM: Duration = Duration::from_millis(160);
-const TICK: Duration = Duration::from_millis(33);
+/// 轮询粒度（只在光标停在托盘 / 面板上时跑）：33 → 16 ms，停留判定的误差跟着减半。
+const TICK: Duration = Duration::from_millis(16);
 const GEOM_REFRESH: Duration = Duration::from_millis(250);
 
 const IDLE: u8 = 0;
@@ -460,6 +462,12 @@ mod tests {
     use super::*;
     fn tray(x: f64) -> Tray { Tray { x, y: 0.0, w: 100.0, h: 24.0, screen_x: 0.0, screen_w: 1470.0, primary_h: 956.0 } }
 
+    #[test]
+    fn both_panels_open_fast() {
+        // ★ 用户 2026-10-21「运行中和空闲的悬浮弹窗响应要加快」：停留判定不超过 100 ms、轮询粒度不超过 20 ms
+        assert!(OPEN_DWELL <= Duration::from_millis(100) && IDLE_OPEN_DWELL <= Duration::from_millis(100));
+        assert!(TICK <= Duration::from_millis(20));
+    }
     #[test]
     fn run_panel_is_centred_under_the_pill() {
         let ((wx, wy, w, h), (px, py)) = window_rect(&tray(1000.0), 200.0);
