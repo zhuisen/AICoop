@@ -404,7 +404,7 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
     }
     let (x, y, w, h) = rect(g, false);
     let win = tauri::webview::WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notch.html".into()))
-        .title("CodexBar Notch")
+        .title("AICoop Notch")
         .decorations(false)
         .transparent(true)
         .resizable(false)

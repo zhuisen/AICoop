@@ -18,6 +18,11 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 pub const LABEL: &str = "tpshover";
 /// 面板宽 300（比菜单栏弹窗 352 窄）。
 pub const PANEL_W: f64 = 300.0;
+/// 空闲额度面板（P11 §6 格子）：画板 2× 下宽 580 ⇒ 290；右沿比托盘胶囊右沿多出 10（画板 `pX = CAPR + 20 - pW`）。
+pub const IDLE_PANEL_W: f64 = 290.0;
+const IDLE_RIGHT_OVERHANG: f64 = 10.0;
+/// 空闲面板悬停 150 ms 打开（P11 §6；在跑面板是 200 ms）。
+const IDLE_OPEN_DWELL: Duration = Duration::from_millis(150);
 /// 面板外的透明边：阴影 `0 16 40 rgba(0,0,0,.45)` 要往外 ~40、往下再多 16。
 const PAD_X: f64 = 40.0;
 const PAD_B: f64 = 56.0;
@@ -45,19 +50,26 @@ static SUPPRESS: AtomicBool = AtomicBool::new(false);
 static GEN: AtomicU64 = AtomicU64::new(0);
 static PANEL_H: Mutex<f64> = Mutex::new(240.0);
 static GEOM: Mutex<Option<Tray>> = Mutex::new(None);
+/// 这一次打开的是哪种面板：空闲额度格子（true）还是在跑速度面板（false）。在 `on_enter` 定下，关闭前不变。
+static IDLE_PANEL: AtomicBool = AtomicBool::new(false);
 
 /// 状态栏按钮在桌面坐标（主屏左上原点，逻辑 pt）里的位置，以及它所在屏。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tray { pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub screen_x: f64, pub screen_w: f64, pub primary_h: f64 }
 
 /// 窗口矩形（桌面坐标）与面板在窗口内的位置。纯函数，单测覆盖贴屏幕右缘时的钳位。
+#[cfg(test)]
 pub fn window_rect(t: &Tray, pill_w: f64, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
+    window_rect_for(t, pill_w, PANEL_W, RIGHT_OVERHANG, panel_h)
+}
+
+fn window_rect_for(t: &Tray, pill_w: f64, panel_w: f64, overhang: f64, panel_h: f64) -> ((f64, f64, f64, f64), (f64, f64)) {
     let pill_right = t.x + (t.w + pill_w) / 2.0;
-    let panel_x = (pill_right + RIGHT_OVERHANG - PANEL_W)
-        .min(t.screen_x + t.screen_w - PANEL_W - 4.0)
+    let panel_x = (pill_right + overhang - panel_w)
+        .min(t.screen_x + t.screen_w - panel_w - 4.0)
         .max(t.screen_x + 4.0);
     let wx = panel_x - PAD_X;
-    let w = PANEL_W + PAD_X * 2.0;
+    let w = panel_w + PAD_X * 2.0;
     let h = t.h + GAP + panel_h + PAD_B;
     ((wx, t.y, w, h), (PAD_X, t.h + GAP))
 }
@@ -66,13 +78,33 @@ fn contains(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
     x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
 }
 
-/// 给网页的版面（窗口内坐标）。
+/// 当前这种面板的宽、胶囊各段（胶囊内坐标）。
+/// 空闲面板在「文字标题」模式下也会弹（P9 S1：选文字标题时悬停面板那组设置仍在）：托盘里没有 logo 可飞，
+/// 「胶囊」= 整个状态栏按钮（宽 = 按钮宽 ⇒ 面板右沿对齐按钮右沿 + 10），格子里的 logo 原位淡入。
+fn pill_and_panel(t: &Tray) -> (serde_json::Value, f64, f64) {
+    if IDLE_PANEL.load(Ordering::SeqCst) {
+        let pill = if crate::tray_pill::idle_icons_shown() { crate::tray_pill::idle_rects() }
+                   else { serde_json::json!({ "width": t.w, "height": t.h, "segments": [] }) };
+        (pill, IDLE_PANEL_W, IDLE_RIGHT_OVERHANG)
+    } else {
+        (crate::tray_pill::segment_rects(), PANEL_W, RIGHT_OVERHANG)
+    }
+}
+
+fn rect_now(t: &Tray) -> ((f64, f64, f64, f64), (f64, f64), f64) {
+    let (pill, pw, oh) = pill_and_panel(t);
+    let pill_w = pill["width"].as_f64().unwrap_or(0.0);
+    let (r, p) = window_rect_for(t, pill_w, pw, oh, *PANEL_H.lock().unwrap());
+    (r, p, pw)
+}
+
+/// 给网页的版面（窗口内坐标）。`mode` = `"idle"`（空闲额度格子）/ `"run"`（在跑速度面板）。
 pub fn layout() -> Option<serde_json::Value> {
     let t = (*GEOM.lock().unwrap())?;
-    let pill = crate::tray_pill::segment_rects();
+    let (pill, pw, oh) = pill_and_panel(&t);
     let pill_w = pill["width"].as_f64().unwrap_or(0.0);
     let ph = *PANEL_H.lock().unwrap();
-    let ((wx, wy, ww, wh), (px, py)) = window_rect(&t, pill_w, ph);
+    let ((wx, wy, ww, wh), (px, py)) = window_rect_for(&t, pill_w, pw, oh, ph);
     let pill_x = t.x + (t.w - pill_w) / 2.0 - wx;
     let pill_y = t.y + (t.h - crate::tray_pill::H) / 2.0 - wy;
     let segs: Vec<serde_json::Value> = pill["segments"].as_array().cloned().unwrap_or_default().into_iter().map(|mut s| {
@@ -82,9 +114,10 @@ pub fn layout() -> Option<serde_json::Value> {
         s
     }).collect();
     Some(serde_json::json!({
+        "mode": if IDLE_PANEL.load(Ordering::SeqCst) { "idle" } else { "run" },
         "window": { "w": ww, "h": wh },
         "menubar_h": t.h,
-        "panel": { "x": px, "y": py, "w": PANEL_W, "h": ph },
+        "panel": { "x": px, "y": py, "w": pw, "h": ph },
         "pill": { "x": pill_x, "y": pill_y, "w": pill_w, "h": crate::tray_pill::H },
         "segments": segs,
     }))
@@ -171,8 +204,7 @@ fn set_accepting(app: &AppHandle, accept: bool) {
 
 fn place(app: &AppHandle, front: bool) {
     let Some(t) = *GEOM.lock().unwrap() else { return };
-    let pill_w = crate::tray_pill::segment_rects()["width"].as_f64().unwrap_or(0.0);
-    let ((x, y, w, h), _) = window_rect(&t, pill_w, *PANEL_H.lock().unwrap());
+    let ((x, y, w, h), _, _) = rect_now(&t);
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(win) = a.get_webview_window(LABEL) else { return };
@@ -219,15 +251,24 @@ fn menubar_visible(app: &AppHandle) -> bool {
     app.get_webview_window("menubar").and_then(|w| w.is_visible().ok()).unwrap_or(false)
 }
 
+/// 这种面板此刻还该开着吗：在跑面板要有 AI 在跑；空闲面板要没有。
+fn panel_wanted(idle: bool) -> bool { crate::tray_pill::is_running() != idle }
+
 /// 托盘 `Enter`：叫醒轮询线程（已有一条就什么也不做）。
+/// 在跑 ⇒ 速度面板（Page 2）；空闲 ⇒ 额度格子（P11 §6，「AI 图标」与「文字标题」两种空闲托盘都弹）。
 pub fn on_enter(app: &AppHandle) {
-    if SUPPRESS.load(Ordering::SeqCst) || !crate::tray_pill::is_running() { return; }
-    if PHASE.load(Ordering::SeqCst) == IDLE { PHASE.store(DWELL, Ordering::SeqCst); }
+    if SUPPRESS.load(Ordering::SeqCst) { return; }
+    let idle = !crate::tray_pill::is_running();
+    if PHASE.load(Ordering::SeqCst) == IDLE {
+        IDLE_PANEL.store(idle, Ordering::SeqCst);
+        PHASE.store(DWELL, Ordering::SeqCst);
+    }
     if POLLER.swap(true, Ordering::SeqCst) { return; }
     refresh_geom_soon(app);
     let app = app.clone();
     std::thread::spawn(move || {
         let start = Instant::now();
+        let mut dwell_from = start;
         let mut out_since: Option<Instant> = None;
         let mut accepting = false;
         let mut geom_at = Instant::now();
@@ -242,18 +283,36 @@ pub fn on_enter(app: &AppHandle) {
             if geom_at.elapsed() >= GEOM_REFRESH { refresh_geom_soon(&app); geom_at = Instant::now(); }
             let (x, y) = cursor(t.primary_h);
             let in_tray = contains((t.x, t.y, t.w, t.h), x, y);
+            let idle = IDLE_PANEL.load(Ordering::SeqCst);
             if phase == DWELL {
                 if !in_tray || SUPPRESS.load(Ordering::SeqCst) { PHASE.store(IDLE, Ordering::SeqCst); break; }
-                if start.elapsed() >= OPEN_DWELL && crate::tray_pill::is_running() && !menubar_visible(&app) {
+                // 停留期间托盘换了样（开跑 / 全停）⇒ 改按新的那种面板，停留重新计时；否则会一直等一个不会再成立的条件
+                if !panel_wanted(idle) {
+                    IDLE_PANEL.store(!idle, Ordering::SeqCst);
+                    dwell_from = Instant::now();
+                    continue;
+                }
+                let dwell = if idle { IDLE_OPEN_DWELL } else { OPEN_DWELL };
+                if dwell_from.elapsed() >= dwell && !menubar_visible(&app) && (!idle || idle_has_cells()) {
                     open(&app);
                 }
                 continue;
             }
-            // 打开着
-            if !crate::tray_pill::is_running() { close(&app, "idle"); break; }
-            let pill_w = crate::tray_pill::segment_rects()["width"].as_f64().unwrap_or(0.0);
-            let ((wx, wy, _, _), (px, py)) = window_rect(&t, pill_w, *PANEL_H.lock().unwrap());
-            let panel = (wx + px, wy + py, PANEL_W, *PANEL_H.lock().unwrap());
+            // 打开着：托盘换了样 ⇒ 收起；光标还在托盘上就回到停留，按新的那种面板再弹（不用移开再进来）
+            if !panel_wanted(idle) {
+                close(&app, "idle");
+                if in_tray {
+                    IDLE_PANEL.store(!idle, Ordering::SeqCst);
+                    PHASE.store(DWELL, Ordering::SeqCst);
+                    dwell_from = Instant::now() + CLOSE_ANIM;
+                    out_since = None;
+                    if accepting { accepting = false; set_accepting(&app, false); }
+                    continue;
+                }
+                break;
+            }
+            let ((wx, wy, _, _), (px, py), pw) = rect_now(&t);
+            let panel = (wx + px, wy + py, pw, *PANEL_H.lock().unwrap());
             let in_panel = contains(panel, x, y);
             if in_panel != accepting { accepting = in_panel; set_accepting(&app, in_panel); }
             if in_tray || in_panel {
@@ -270,12 +329,128 @@ pub fn on_enter(app: &AppHandle) {
 /// 托盘 `Leave`：点击后的「不再弹」到这里解除（离开 / 关闭的计时在轮询线程里）。
 pub fn on_leave() { SUPPRESS.store(false, Ordering::SeqCst); }
 
+/// 面板里点了格子（空闲额度格子跳总览）：快速收起。
+/// ★ 不设 `SUPPRESS`：点的时候光标在面板里，托盘的 `Leave` 早就发过了 ⇒ 没人会再清它，下一次悬停会被吞掉。
+pub fn dismiss(app: &AppHandle) {
+    if PHASE.load(Ordering::SeqCst) == OPEN { close(app, "click"); }
+    PHASE.store(IDLE, Ordering::SeqCst);
+}
+
 /// 托盘点击：先收起悬停面板，调用方再走原有菜单栏弹窗。
 pub fn on_click(app: &AppHandle) {
     SUPPRESS.store(true, Ordering::SeqCst);
     if PHASE.load(Ordering::SeqCst) == OPEN { close(app, "click"); }
     PHASE.store(IDLE, Ordering::SeqCst);
 }
+
+// ---------------------------------------------------------------- 空闲托盘：鼠标靠近（P11 §4–§5）
+
+static NEAR_WATCH: AtomicBool = AtomicBool::new(false);
+static NEAR_GLOW: AtomicBool = AtomicBool::new(true);
+/// 0 关闭 · 1 每天一次（默认）· 2 每次空闲 1 小时后
+static HELLO_MODE: AtomicU8 = AtomicU8::new(1);
+static LAST_HELLO: Mutex<Option<(i64, f64)>> = Mutex::new(None);
+/// 光标离托盘远时慢轮询（只为发现它回来），离托盘 `NEAR_FAST_PT` 以内 30 Hz。
+/// ★ 按到托盘矩形的距离判，不按「离屏幕顶多远」：浏览器标签栏、副屏顶部都在顶部 90 pt 内，按纵向判就几乎一直 30 Hz。
+const NEAR_TICK_FAR: Duration = Duration::from_millis(150);
+const NEAR_FAST_PT: f64 = 150.0;
+/// 托盘位置只在光标靠近时刷新（远处不用知道它挪了几个 pt；靠近时按它判光晕）。
+const NEAR_GEOM_REFRESH: Duration = Duration::from_secs(2);
+
+/// 设置页「鼠标靠近光晕」「打招呼」，外加重启前记下的「上次打招呼」（epoch 秒，前端 localStorage）。
+pub fn set_idle_prefs(glow: bool, hello: &str, last_hello: Option<f64>) {
+    NEAR_GLOW.store(glow, Ordering::SeqCst);
+    if let Some(e) = last_hello.filter(|e| e.is_finite() && *e > 0.0) {
+        let mut last = LAST_HELLO.lock().unwrap();
+        if last.map_or(true, |(_, t)| e > t) { *last = Some((local_day(e), e)); }
+    }
+    let m = match crate::tray_idle::HelloMode::parse(hello) {
+        crate::tray_idle::HelloMode::Off => 0, crate::tray_idle::HelloMode::Daily => 1, crate::tray_idle::HelloMode::AfterIdle => 2,
+    };
+    HELLO_MODE.store(m, Ordering::SeqCst);
+}
+
+fn hello_mode() -> crate::tray_idle::HelloMode {
+    match HELLO_MODE.load(Ordering::SeqCst) {
+        0 => crate::tray_idle::HelloMode::Off, 2 => crate::tray_idle::HelloMode::AfterIdle, _ => crate::tray_idle::HelloMode::Daily,
+    }
+}
+
+/// 本机时区的日期键（年 × 1000 + 年内第几天）。打招呼「每天最多一次」按本地日界。
+fn local_day(epoch: f64) -> i64 {
+    let t = epoch as libc::time_t;
+    // SAFETY: `localtime_r` 只写我们给的 `tm`；`t` 是有效的 time_t。
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
+    if ok { (tm.tm_year as i64 + 1900) * 1000 + tm.tm_yday as i64 } else { (epoch / 86400.0) as i64 }
+}
+
+/// 空闲托盘开着就跑一条光标轮询线程：进入托盘周围 ~35 pt ⇒ 光晕（+ 每天一次的打招呼），离开 ⇒ 熄。
+/// 设置改回「文字标题」后线程自己退出。只读 `NSEvent mouseLocation`（任意线程可调），不接管任何事件。
+pub fn start_near_watch(app: &AppHandle) {
+    if NEAR_WATCH.swap(true, Ordering::SeqCst) { return; }
+    refresh_geom_soon(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // 起头先报一次「不靠近」：上一条线程若在靠近时退出，前端的 `near` 会卡在 true（挡住跨天重排）
+        let mut near = false;
+        let mut glow = false;
+        let _ = app.emit_to("menubar", "idle-near", false);
+        let mut geom_at: Option<Instant> = None;
+        while crate::tray_pill::icon_idle_on() {
+            let Some(t) = *GEOM.lock().unwrap() else {
+                if geom_at.map_or(true, |g| g.elapsed() >= NEAR_GEOM_REFRESH) { refresh_geom_soon(&app); geom_at = Some(Instant::now()); }
+                std::thread::sleep(NEAR_TICK_FAR);
+                continue;
+            };
+            let (x, y) = cursor(t.primary_h);
+            let d = crate::tray_idle::dist_to_rect(x, y, (t.x, t.y, t.w, t.h));
+            let close_by = d <= NEAR_FAST_PT;
+            if close_by && geom_at.map_or(true, |g| g.elapsed() >= NEAR_GEOM_REFRESH) { refresh_geom_soon(&app); geom_at = Some(Instant::now()); }
+            // 远处不问托盘在画什么（那要锁绘制状态）：远处本来就不靠近
+            let now_near = close_by && d <= crate::tray_idle::NEAR_PT && crate::tray_pill::idle_icons_shown();
+            // 光晕跟着设置走：靠近期间关掉「鼠标靠近光晕」也立刻熄
+            let want_glow = now_near && NEAR_GLOW.load(Ordering::SeqCst);
+            if now_near != near || want_glow != glow {
+                let hello = now_near && !near && greet_allowed(&app);
+                if now_near != near { let _ = app.emit_to("menubar", "idle-near", now_near); }
+                near = now_near;
+                glow = want_glow;
+                crate::tray_pill::idle_near(&app, glow, hello);
+            }
+            std::thread::sleep(if close_by { TICK } else { NEAR_TICK_FAR });
+        }
+        // 退出时靠近着 ⇒ 熄光晕、告诉前端「不靠近了」
+        if near || glow {
+            crate::tray_pill::idle_near(&app, false, false);
+            let _ = app.emit_to("menubar", "idle-near", false);
+        }
+        NEAR_WATCH.store(false, Ordering::SeqCst);
+        // 退出与清标记之间又被打开：补一条
+        if crate::tray_pill::icon_idle_on() { start_near_watch(&app); }
+    });
+}
+
+/// 这次靠近要不要打招呼：先挡「不打招呼」的几种时刻（P11 §5），再问频率。打了就记账。
+fn greet_allowed(app: &AppHandle) -> bool {
+    if crate::tray_pill::ai_running() || crate::tray_pill::is_running() || PHASE.load(Ordering::SeqCst) != IDLE
+        || menubar_visible(app) || crate::tray_pill::idle_greet_blocked() { return false; }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    let today = local_day(now);
+    let mut last = LAST_HELLO.lock().unwrap();
+    let ok = crate::tray_idle::should_hello(hello_mode(), today, now, crate::tray_pill::last_active_epoch(), *last);
+    if ok {
+        *last = Some((today, now));
+        // 前端记进 localStorage，重启后经 `set_idle_prefs` 带回来（否则每次重启 / 部署都会再打一次招呼）
+        let _ = app.emit_to("menubar", "idle-hello", now);
+    }
+    ok
+}
+
+/// 空闲面板有没有格子（菜单栏 webview 随 `set_idle_tray` 带来）。没有就不弹 —— 否则是一条带阴影的细线。
+static IDLE_CELLS: AtomicBool = AtomicBool::new(false);
+fn idle_has_cells() -> bool { IDLE_CELLS.load(Ordering::SeqCst) }
+pub fn set_idle_cells(n: usize) { IDLE_CELLS.store(n > 0, Ordering::SeqCst); }
 
 pub fn set_panel_height(app: &AppHandle, h: f64) {
     *PANEL_H.lock().unwrap() = h.clamp(40.0, 640.0);
@@ -295,6 +470,12 @@ mod tests {
         assert_eq!((wy, py), (0.0, 24.0 + GAP), "窗口顶到屏幕顶（盖住胶囊），面板在菜单栏下方");
         assert_eq!(w, PANEL_W + 2.0 * PAD_X);
         assert_eq!(h, 24.0 + GAP + 200.0 + PAD_B);
+    }
+    #[test]
+    fn idle_panel_is_290_wide_and_overhangs_by_10() {
+        let ((wx, _, w, _), (px, _)) = window_rect_for(&tray(1000.0), 47.0, IDLE_PANEL_W, IDLE_RIGHT_OVERHANG, 90.0);
+        assert_eq!(wx + px + IDLE_PANEL_W, 1000.0 + (100.0 + 47.0) / 2.0 + 10.0, "画板 pX = CAPR + 20 − pW（2×）");
+        assert_eq!(w, IDLE_PANEL_W + 2.0 * PAD_X);
     }
     #[test]
     fn panel_stays_on_screen_at_the_right_edge() {

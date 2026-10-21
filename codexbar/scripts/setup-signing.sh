@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IDENTITY="CodexBar Self-Signed"
 BUNDLE_ID="com.doushutangmu.codexbar"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-APP="/Applications/CodexBar.app"
+APP="/Applications/AICoop.app"   # 证书名仍是 "CodexBar Self-Signed"：改名会换证书、TCC 全部重新授权
 CERTDIR="$ROOT/scratch/signing"
 OPENSSL="/usr/bin/openssl"
 mkdir -p "$CERTDIR"

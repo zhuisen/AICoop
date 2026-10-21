@@ -9,7 +9,7 @@
 
 // ── 版式（交接包 README §4「窗口变窄」） ──────────────────────────────────────
 
-export type OvCols = 2 | 3 | 4;
+export type OvCols = number;
 export interface OvLayout {
   cols: OvCols;
   /** 顶部三栏的 `grid-template-columns`（原型 `heroCols`）。 */
@@ -34,17 +34,27 @@ export const OV_BP_MID = 900;
 /** 宽度 → 它所在那一档的下沿。★ 存这个而不是原始宽度：拖窗口时 RO 每像素都报，
  *  存原始宽度会让整个总览每像素重渲染一次；档内宽度变化对版式没有任何影响。 */
 export function ovBand(contentW: number): number {
-  return contentW >= OV_BP_WIDE ? OV_BP_WIDE : contentW >= OV_BP_MID ? OV_BP_MID : 0;
+  const bp = contentW >= OV_BP_WIDE ? OV_BP_WIDE : contentW >= OV_BP_MID ? OV_BP_MID : 0;
+  const c = ovCols(contentW);
+  // 列数边界也算一档：返回值喂回 `ovLayout` 时必须算出同一个列数。
+  return Math.max(bp, c > 2 ? 257 * c - 12 : 0);
+}
+
+/** 卡片列数（AICoop P5_Spec §01）：卡宽 ≥ 245、间距 12 ⇒ `max(2, ⌊(内容宽 + 12) / 257⌋)`。
+ *  860 / 1000 / 1200 / 1440 窗口 → 3 / 3 / 4 / 5 列。 */
+export function ovCols(contentW: number): number {
+  return Math.max(2, Math.floor((contentW + 12) / 257));
 }
 
 export function ovLayout(contentW: number): OvLayout {
+  const cols = ovCols(contentW);
   if (contentW >= OV_BP_WIDE) {
-    return { cols: 4, heroCols: "290px 1px minmax(0, 1fr) 1px 232px", wide: true, labels: true, tabNames: true };
+    return { cols, heroCols: "290px 1px minmax(0, 1fr) 1px 232px", wide: true, labels: true, tabNames: true };
   }
   if (contentW >= OV_BP_MID) {
-    return { cols: 3, heroCols: "280px 1px minmax(0, 1fr)", wide: false, labels: false, tabNames: true };
+    return { cols, heroCols: "280px 1px minmax(0, 1fr)", wide: false, labels: false, tabNames: true };
   }
-  return { cols: 2, heroCols: "250px 1px minmax(0, 1fr)", wide: false, labels: false, tabNames: false };
+  return { cols, heroCols: "250px 1px minmax(0, 1fr)", wide: false, labels: false, tabNames: false };
 }
 
 // ── 文本 ───────────────────────────────────────────────────────────────────

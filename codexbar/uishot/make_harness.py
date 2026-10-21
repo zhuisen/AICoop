@@ -63,8 +63,6 @@ STUB = """
       dockVisible: false, intro: p.get('intro') !== 'off',
       // `?autorefresh=off` 关掉后台心跳(设置页那个开关)。默认开 —— 与真实默认值一致。
       autoRefresh: p.get('autorefresh') !== 'off',
-      // `?nav=open` 展开侧栏。默认折叠 —— 与真实默认值一致。
-      navOpen: p.get('rail') === 'open',
       // ★ `?autoswitch=on` 打开「额度低自动切号」—— **阈值那一行只在它开着时才渲染**,
       //   不给这个开关的话新加的可输入数字框在 harness 里一个像素都验不到,
       //   而截图会正常渲染、探针会报干净(本仓反复踩的那种假绿)。
@@ -339,6 +337,8 @@ STUB = """
       var c = cbs[id]; if (c) c.cb({ event: event, id: id, payload: payload });
     });
   }
+  // 测试用：模拟别的 webview / Rust 发来的事件（例：设置页广播 `idle-tray-settings`）
+  window.__harnessFire = fire;
 
   // ★ IPC 调用计数。用来回答「这个操作到底有没有触发扫描」——`run_traffic` 是唯一会真起
   //   python 的那条,页面上完全看不出来,只能数。配 `--virtual-time-budget` 拉长虚拟时间,
@@ -611,7 +611,7 @@ STUB = """
                               tail_truncated: false } }),
   };
 
-  var ipc = {}, sizes = [], emitted = [];
+  var ipc = {}, sizes = [], emitted = [], idleTray = null;
   // 悬停面板（harness-tpshover.html）：emit 的完整 payload（JSON）+ 它调的三条命令。
   var emittedJ = [], hvCalls = [];
   // 刘海卡片（harness-notch.html）：`notch_card_resize` 每次报的高度。
@@ -830,6 +830,8 @@ function relayEntry() {
       try { sizes.push(JSON.stringify(args)); } catch (e) { sizes.push('?'); }
     }
     args = args || {};
+    // 空闲托盘：菜单栏 webview 最后一次交给 Rust 的那份（选了谁、剩多少、红不红）
+    if (cmd === 'set_idle_tray') { try { idleTray = JSON.parse(JSON.stringify(args)); } catch (e) { idleTray = '?'; } }
     switch (cmd) {
       case 'plugin:event|listen':
         (listeners[args.event] = listeners[args.event] || []).push(args.handler);
@@ -844,6 +846,9 @@ function relayEntry() {
         emitted.push(args.event + (args.payload != null ? '=' + args.payload : ''));
         try { emittedJ.push({ event: args.event, payload: args.payload }); } catch (e) { emittedJ.push({ event: args.event, payload: '?' }); }
         fire(args.event, args.payload);
+        // 空闲额度格子（`?hv=idle`）：harness 里没有菜单栏 webview，由这里替它回一份格子
+        if (args.event === 'idle-panel-want' && location.pathname.indexOf('harness-tpshover') >= 0 && p.get('hv') === 'idle')
+          setTimeout(function () { fire('idle-panel', HV_IDLE_CELLS(p.get('hvcells'))); }, 0);
         return Promise.resolve(null);
       // ★ `?snap_delay=<ms>` 让快照**异步**送达。默认 0(同步)保持既有行为。
       //   真机上快照是 `invoke` 异步取的,内容会在挂载**之后**才长出来 —— harness 原本内联同步给,
@@ -1363,12 +1368,13 @@ function relayEntry() {
       case 'notch_layout':
         return Promise.resolve(null);
       case 'tpshover_resize':
+      case 'tpshover_dismiss':
       case 'tray_pill_hide_logos':
         hvCalls.push(cmd + '=' + JSON.stringify(args));
         return Promise.resolve(null);
       case 'tpshover_layout':
         hvCalls.push(cmd);
-        return Promise.resolve(p.get('hvnull') === '1' ? null : HV_LAYOUT(p.get('hv')));
+        return Promise.resolve(p.get('hvnull') === '1' ? null : p.get('hv') === 'idle' ? HV_IDLE_LAYOUT() : HV_LAYOUT(p.get('hv')));
       // ★ 设置页「Claude 实测速度」（`claude_otel_env.py`）。`?cotel=off`（默认）· `recv` 已开且收到过 ·
       //   `wait` 已开没收到 · `down` 端口被占 · `conflict` 已有别的 OTel 配置 · `err` 命令失败。
       //   enable / disable 只切 off ↔ recv，**不碰任何真实文件**。
@@ -1514,6 +1520,22 @@ function relayEntry() {
     return { window: { w: 380, h: 380 }, menubar_h: 24, panel: { x: 40, y: 30, w: 300, h: 224 },
              pill: { x: px, y: py, w: pw, h: 18 }, segments: segs };
   }
+  // ★ 空闲额度格子（AICoop P11 §6）：`?hv=idle` 发 `mode: "idle"` 的打开事件（托盘里 Codex / Claude / Gemini 三家，
+  //   logo 14 pt、胶囊宽 61，面板 290、右沿比胶囊右沿多 10）。格子夹具 `?hvcells=4`（默认：托盘三家 + Grok；
+  //   Gemini 剩 6% 是插队）· `8` 两行（再加 Kimi / DeepSeek 未接入 + 两个重复填充不可能出现，所以只到 6 家）· `1` 只一家。
+  function HV_IDLE_CELLS(mode) {
+    var C = function (key, main, reset, inBar) { return { key: key, main: main, reset: reset, inBar: inBar, low: main !== null && Math.round(main) < 10 }; };
+    var all = [C('codex', 67, '↻ 2h14m', true), C('claude', 40, '↻ 1h05m', true), C('agy', 6, '↻ 3h40m', true),
+               C('grok', 86, '↻ 5d21h', false), C('kimi', null, '', false), C('deepseek', null, '', false)];
+    var m = String(mode || '4');
+    return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4 };
+  }
+  function HV_IDLE_LAYOUT() {
+    var keys = ['codex', 'claude', 'agy'], pw = 4 + 3 * 14 + 2 * 5 + 7, px = 40 + 290 - 10 - pw, py = 3;
+    var segs = keys.map(function (k, i) { var x = 4 + i * 19; return { platform: k, x: px + x, w: 14, logo: { x: px + x, y: py + 2, size: 14 } }; });
+    return { mode: 'idle', window: { w: 370, h: 260 }, menubar_h: 24, panel: { x: 40, y: 30, w: 290, h: 78 },
+             pill: { x: px, y: py, w: pw, h: 18 }, segments: segs };
+  }
   if (location.pathname.indexOf('harness-tpshover') >= 0) {
     try { localStorage.setItem('codexbar_theme', p.get('hvtheme') === 'light' ? 'light' : 'dark'); } catch (e) { errors.push('hv theme: ' + e); }
     if (p.get('hvreduce') === '1') {
@@ -1531,7 +1553,7 @@ function relayEntry() {
     }
     window.addEventListener('load', function () {
       var hv = p.get('hv') || '4';
-      if (p.get('hvopen') !== '0') setTimeout(function () { fire('tpshover-open', p.get('hvnull') === '1' ? null : HV_LAYOUT(hv)); }, 150);
+      if (p.get('hvopen') !== '0') setTimeout(function () { fire('tpshover-open', p.get('hvnull') === '1' ? null : hv === 'idle' ? HV_IDLE_LAYOUT() : HV_LAYOUT(hv)); }, 150);
       if (p.get('hvstop')) setTimeout(function () { fire('tps-live', JSON.stringify(HV_LIVE(hv, p.get('hvstop')))); }, 900);
       var rowEl = function (k) { return document.querySelector('[data-hover-row="' + k + '"]'); };
       if (p.get('hvexpand')) {
@@ -1646,6 +1668,8 @@ function relayEntry() {
     var nt = document.createElement('style');
     nt.textContent = '*,*::before,*::after{transition:none !important}';
     document.head.appendChild(nt);
+    // 导航选中块用 WAAPI 滑（不吃上面的 CSS）：NavRail 看这个标记不播
+    document.documentElement.setAttribute('data-notrans', '1');
   }
   window.addEventListener('load', function () {
     setTimeout(function () {
@@ -1709,7 +1733,7 @@ function relayEntry() {
       else if (nav === 'logs' || nav === 'relay') {
         setTimeout(function () {
           var want = nav === 'relay' ? 'relay' : 'logs';
-          var el = document.querySelector('.cb-rail > div[data-page="' + want + '"]');
+          var el = document.querySelector('.cb-rail [data-page="' + want + '"]');
           if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
           // ★ `?rtab=账号|用量` 切中转站页内的版块。**按文字身份点,不按位置** ——
           //   位置耦合在这个仓库已经静默点错过两次(插一页就全歪),而"点错"和"没点中"
@@ -1766,7 +1790,7 @@ function relayEntry() {
               }, 260);
             }, 300);
           }
-          var items = document.querySelectorAll('.cb-rail > div');
+          var items = document.querySelectorAll('.cb-rail [data-page]');
           clicks.push('nav=' + want + ' →rail 共' + items.length + '项,按 data-page 命中 ' + (el ? 1 : 0));
           // 命中数照样要报 —— 没有 `data-page` 的旧构建会静默什么都不点。
           if (!el) errors.push('rail 里没有 data-page="' + want + '" —— 前端 bundle 可能是旧的');
@@ -2225,6 +2249,7 @@ function relayEntry() {
         relayCalls: relayCalls,
         // 只报关心的两个,别把 plugin:event|* 的噪音带进来
         sizes: sizes,
+        idleTray: idleTray,
         ipc: { run_traffic: ipc['run_traffic'] || 0,
                read_traffic_snapshot: ipc['read_traffic_snapshot'] || 0 },
         emitted: emitted.slice(0, 12),
@@ -2389,7 +2414,13 @@ def redacted_state():
     # ★★ `last_aid`（代理最近一次真的用了谁）**必须与 `active` 不同**（2026-09-23）。
     #   菜单栏/托盘改成跟代理走之后，判据就是「高亮落在 last_aid 而不是 active 上」——
     #   两者相同的夹具下，改没改都是同一个像素（本仓形态⑩：判据档位要挑只有被测那条能挡住的输入）。
-    last_aid = next((a for a in alive_ids if a != active), active)
+    # ★ 挑「剩得最多」的那个（2026-10-21）：原来取第一个活号，它是不是碰巧见底由当天用量决定 ——
+    #   在用号见底就多出刘海告警行、菜单栏通知，同一份代码下午重生成 harness 后 4 条闸变红。
+    def _used(a):
+        q = out_slots[a].get("quota") or {}
+        return max((q.get(w) or {}).get("used_percent") or 0 for w in ("primary", "secondary"))
+    others = [a for a in alive_ids if a != active]
+    last_aid = min(others, key=lambda a: (_used(a), alive_ids.index(a))) if others else active
     return {"active": active, "last_aid": last_aid, "slots": out_slots,
             "pinned": alive_ids[:2],
             "last_proxy_ts": raw.get("last_proxy_ts")}

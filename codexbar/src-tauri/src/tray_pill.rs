@@ -240,20 +240,20 @@ pub struct Fade { from: f64, to: f64, t0: f64 }
 const FADE: f64 = 0.2;
 
 impl Fade {
-    fn new(v: f64) -> Fade { Fade { from: v, to: v, t0: f64::NEG_INFINITY } }
+    pub(crate) fn new(v: f64) -> Fade { Fade { from: v, to: v, t0: f64::NEG_INFINITY } }
     pub fn value(&self, now: f64) -> f64 {
         let k = ((now - self.t0) / FADE).clamp(0.0, 1.0);
         let e = 1.0 - (1.0 - k) * (1.0 - k);
         self.from + (self.to - self.from) * e
     }
-    fn go(&mut self, to: f64, now: f64, instant: bool) {
+    pub(crate) fn go(&mut self, to: f64, now: f64, instant: bool) {
         if (to - self.to).abs() < 1e-9 { return; }
         if instant { self.from = to; self.to = to; self.t0 = f64::NEG_INFINITY; return; }
         self.from = self.value(now);
         self.to = to;
         self.t0 = now;
     }
-    fn done(&self, now: f64) -> bool { now - self.t0 >= FADE }
+    pub(crate) fn done(&self, now: f64) -> bool { now - self.t0 >= FADE }
 }
 
 /// 逐位滚动：只有变了的位从下方 7 pt 滑入（SwiftUI `numericText` 同形）。
@@ -342,13 +342,15 @@ pub struct Anim {
     slots: Vec<Slot>,
     pill: bool,
     pub reduce: bool,
+    /// 空闲态也画胶囊底（P11：空闲 ↔ 在跑是同一个外框在变形）。
+    pub idle_bg: bool,
     last_now: f64,
 }
 
 impl Anim {
     pub fn new() -> Anim {
         Anim { width: hspring(0.0), bg_a: Fade::new(0.0), title_a: Fade::new(1.0), title_scale: sspring(1.0),
-               slots: (0..4).map(|_| Slot::new()).collect(), pill: false, reduce: false, last_now: 0.0 }
+               slots: (0..4).map(|_| Slot::new()).collect(), pill: false, reduce: false, idle_bg: false, last_now: 0.0 }
     }
 
     /// 瞄准新目标（可打断：从当前值重新瞄准，不排队）。`title_w` = 空闲标题的宽，过渡时外框从它弹到胶囊宽。
@@ -428,7 +430,7 @@ impl Anim {
                     // 最后一家退出时反向：外框弹回标题宽，底色淡出，标题放大淡入
                     self.width.target = title_w;
                     if r { self.width.snap(title_w); }
-                    self.bg_a.go(0.0, now, r);
+                    self.bg_a.go(if self.idle_bg { 1.0 } else { 0.0 }, now, r);
                     self.title_a.go(1.0, now, r);
                     self.title_scale.target = 1.0;
                     if r { self.title_scale.snap(1.0); }
@@ -482,7 +484,8 @@ impl Anim {
             }
         }).collect();
         Frame {
-            width, bg_a: self.bg_a.value(now), title_a: if self.pill { self.title_a.value(now) } else { 1.0 },
+            width, bg_a: if self.pill { self.bg_a.value(now) } else if self.idle_bg { 1.0 } else { 0.0 },
+            title_a: if self.pill { self.title_a.value(now) } else { 1.0 },
             title_scale: self.title_scale.pos, segs, idle: !self.pill,
         }
     }
@@ -524,16 +527,26 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 static HIDE_LOGOS: AtomicBool = AtomicBool::new(false);
 static ANIM_RUNNING: AtomicBool = AtomicBool::new(false);
 static DRAW_PENDING: AtomicBool = AtomicBool::new(false);
+/// 空闲时画 AI 图标（P11）而不是文字标题。前端 `set_idle_tray` 带过来；默认关 = 沿用 v1.11.0 文字标题。
+static ICON_IDLE: AtomicBool = AtomicBool::new(false);
+
+/// 空闲托盘用得上吗：开着、且至少有一家可画。
+fn icon_idle_active(s: &State) -> bool {
+    ICON_IDLE.load(Ordering::SeqCst) && s.idle.armed && s.idle.target_width() > 0.0
+}
 
 struct State {
     tracker: Tracker,
     anim: Anim,
+    /// 空闲托盘（P11）：设置「空闲时菜单栏 = AI 图标」时，空闲态画这一层而不是文字标题。
+    idle: crate::tray_idle::IdleAnim,
     ap: Appearance,
     cw: f64,
     title_w: f64,
     last: Option<Frame>,
     /// 上一张图画的时候 logo 藏没藏。帧相同但这个变了也要重画（否则飞回后 logo 不回来）。
     last_hide: bool,
+    last_idle: Option<crate::tray_idle::IdleFrame>,
     failed: bool,
 }
 
@@ -545,16 +558,20 @@ fn now() -> f64 { CLOCK.get_or_init(std::time::Instant::now).elapsed().as_secs_f
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut g = STATE.lock().unwrap();
     let st = g.get_or_insert_with(|| State {
-        tracker: Tracker::default(), anim: Anim::new(), ap: Appearance::Dark, cw: 6.9, title_w: 80.0,
-        last: None, last_hide: false, failed: false,
+        tracker: Tracker::default(), anim: Anim::new(), idle: crate::tray_idle::IdleAnim::new(),
+        ap: Appearance::Dark, cw: 6.9, title_w: 80.0,
+        last: None, last_hide: false, last_idle: None, failed: false,
     });
     f(st)
 }
 
 pub fn is_enabled() -> bool { ENABLED.load(Ordering::SeqCst) }
 pub fn is_shown() -> bool { SHOWN.load(Ordering::SeqCst) }
-/// 有没有 AI 在跑（悬停面板只在这时弹）。
-pub fn is_running() -> bool { is_enabled() && with_state(|s| s.tracker.any_running()) }
+/// 托盘此刻画的是 t/s 胶囊（含进出过渡与停下后的 3 s）。悬停面板按它选「在跑面板」还是「空闲额度面板」——
+/// 面板跟着托盘上看得见的东西走，不跟着「有没有 AI 在跑」走：关掉 t/s 时托盘一直是空闲图标，悬停也就一直是额度格子。
+pub fn is_running() -> bool { is_enabled() && with_state(|s| !s.anim.frame(now()).idle) }
+/// 有没有 AI 在跑（事实，与 t/s 开关无关）。打招呼按它避开在跑。
+pub fn ai_running() -> bool { with_state(|s| s.tracker.any_running()) }
 
 pub fn set_hide_logos(app: &tauri::AppHandle, hidden: bool) {
     if HIDE_LOGOS.swap(hidden, Ordering::SeqCst) != hidden { request_draw(app); }
@@ -582,10 +599,82 @@ pub fn set_enabled(app: &tauri::AppHandle, on: bool) {
         else { crate::activity::unsubscribe(crate::activity::TPS); }
     }
     if was && !on {
-        // 关掉：立刻回到原标题，不走 3 s
-        with_state(|s| { s.tracker = Tracker::default(); s.anim = Anim::new(); s.last = None; });
+        // 关掉：立刻回到空闲（文字标题或空闲图标），不走 3 s。tracker 留着：打招呼仍要知道谁在跑
+        with_state(|s| { s.anim = Anim::new(); s.anim.idle_bg = icon_idle_active(s); s.last = None; });
         restore_title(app);
+        kick(app);
     }
+}
+
+/// 空闲托盘（P11）：前端算好的 2–3 家 + 「空闲时菜单栏 = AI 图标」开关。关掉 ⇒ 回 v1.11.0 文字标题。
+pub fn set_idle_tray(app: &tauri::AppHandle, on: bool, slots: &serde_json::Value) {
+    let was = ICON_IDLE.swap(on, Ordering::SeqCst);
+    let want = crate::tray_idle::parse_slots(slots);
+    with_state(|s| {
+        let t = now();
+        if on { s.idle.retarget(&want, t); }
+        s.anim.idle_bg = icon_idle_active(s);
+        // 外框回到空闲时弹向的宽 = 空闲胶囊此刻的目标宽。在跑期间槽位变了也跟着改，否则停下后外框先弹到旧宽、落定那一帧再跳
+        if s.anim.idle_bg { s.title_w = s.idle.target_width(); }
+        // 只有开关本身变了才强制重画；槽位变化由 `last_idle` 的比较发现（前端也只在变了时才发）
+        if was != on { s.last = None; }
+    });
+    if was && !on && with_state(|s| s.anim.frame(now()).idle) { restore_title(app); }
+    #[cfg(target_os = "macos")]
+    {
+        // 空闲托盘要知道「上次 AI 活动」与「谁在跑」（打招呼的判据），关掉 t/s 胶囊时也一样 ⇒ 自己订一份活动检测
+        if on && !was { crate::activity::subscribe(app, crate::activity::IDLE_TRAY); }
+        if !on && was { crate::activity::unsubscribe(crate::activity::IDLE_TRAY); }
+        if on { crate::tps_hover::start_near_watch(app); }
+    }
+    kick(app);
+}
+
+/// 鼠标靠近托盘（约 35 pt 内）⇒ 每个 logo 后亮平台色光晕；`hello` ⇒ 打招呼。由光标轮询线程调。
+pub fn idle_near(app: &tauri::AppHandle, glow: bool, hello: bool) {
+    with_state(|s| { let t = now(); s.idle.set_near(glow, t); if hello { s.idle.hello(t); } });
+    kick(app);
+}
+
+/// 上一次观测到有 AI 在跑（epoch 秒）。打招呼要「距上次 AI 活动 > 60 分钟」。
+static LAST_ACTIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn last_active_epoch() -> Option<f64> {
+    let v = f64::from_bits(LAST_ACTIVE.load(Ordering::SeqCst));
+    (v > 0.0).then_some(v)
+}
+
+/// 重启后接上「上次 AI 活动」（前端从用量快照算出的最近一次使用）。只往后挪，不覆盖本进程看到的更新的值。
+pub fn seed_last_active(epoch: f64) {
+    if !epoch.is_finite() || epoch <= 0.0 { return; }
+    let _ = LAST_ACTIVE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+        (epoch > f64::from_bits(cur)).then_some(epoch.to_bits())
+    });
+}
+
+/// 打招呼的「跳过」判据里归 tray 管的那两条：正在播事件动画、减弱动态效果。
+pub fn idle_greet_blocked() -> bool { with_state(|s| s.idle.event_busy() || s.idle.reduce) }
+
+/// 设置里选了「空闲时菜单栏 = AI 图标」吗（光标轮询线程据此决定退出）。
+pub fn icon_idle_on() -> bool { ICON_IDLE.load(Ordering::SeqCst) }
+
+/// 空闲托盘此刻在画吗（光标轮询与悬停面板用）。
+pub fn idle_icons_shown() -> bool {
+    with_state(|s| icon_idle_active(s) && s.anim.frame(now()).idle)
+}
+
+/// 空闲托盘各 logo 的位置（胶囊内坐标，左上原点）+ 胶囊宽。悬停面板飞 logo 用。
+pub fn idle_rects() -> serde_json::Value {
+    with_state(|s| {
+        let f = s.idle.frame(now());
+        serde_json::json!({
+            "width": f.width, "height": H,
+            "segments": f.logos.iter().map(|l| serde_json::json!({
+                "platform": crate::tray_idle::KEYS[l.logo], "x": l.x, "w": crate::tray_idle::LOGO,
+                "logo": { "x": l.x, "y": (H - crate::tray_idle::LOGO) / 2.0, "size": crate::tray_idle::LOGO },
+            })).collect::<Vec<_>>(),
+        })
+    })
 }
 
 /// 收到一份 live JSON。
@@ -604,14 +693,21 @@ pub fn on_activity_only(app: &tauri::AppHandle, arr: [bool; 4]) {
 }
 
 fn feed(app: &tauri::AppHandle, l: &[LiveIn; 4]) {
-    if !is_enabled() { return; }
+    // 活动时刻与「谁在跑」在开关判断之前记：关了 t/s 胶囊，打招呼仍要知道（空闲托盘自己订了活动检测）
+    if l.iter().any(|p| p.running) {
+        let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        LAST_ACTIVE.store(epoch.to_bits(), Ordering::SeqCst);
+    }
+    let on = is_enabled();
     with_state(|s| {
         let t = now();
         s.tracker.observe(l, t);
-        let lay = layout(&s.tracker.p, s.ap, s.cw, t);
-        s.anim.retarget(lay.as_ref(), s.title_w, t);
+        if on {
+            let lay = layout(&s.tracker.p, s.ap, s.cw, t);
+            s.anim.retarget(lay.as_ref(), s.title_w, t);
+        }
     });
-    kick(app);
+    if on { kick(app); }
 }
 
 /// 起（或续）动画线程：过渡期间 ≤ 60 fps 逐帧画，落定且没有待清的停下段就退出。
@@ -622,11 +718,11 @@ fn kick(app: &tauri::AppHandle) {
         loop {
             let (moving, wake) = with_state(|s| {
                 let t = now();
-                if s.tracker.expire(t) {
+                if s.tracker.expire(t) && is_enabled() {
                     let lay = layout(&s.tracker.p, s.ap, s.cw, t);
                     s.anim.retarget(lay.as_ref(), s.title_w, t);
                 }
-                let moving = s.anim.step(t);
+                let moving = s.anim.step(t) | s.idle.step(t);
                 (moving, s.tracker.next_deadline().map(|d| (d - t).max(0.0)))
             });
             request_draw(&app);
@@ -640,7 +736,7 @@ fn kick(app: &tauri::AppHandle) {
         }
         ANIM_RUNNING.store(false, Ordering::SeqCst);
         // ★ 决定退出与清标记之间若有新目标进来（`feed` 看到标记还在就没起新线程），这里补一条，免得新动画没人推
-        let pending = with_state(|s| { let t = now(); s.anim.step(t) || s.tracker.next_deadline().is_some() });
+        let pending = with_state(|s| { let t = now(); s.anim.step(t) | s.idle.step(t) || s.tracker.next_deadline().is_some() });
         if pending { kick(&app); }
     });
 }
@@ -660,36 +756,45 @@ fn draw_now(app: &tauri::AppHandle) {
     let ap = draw::menubar_appearance().unwrap_or(Appearance::Dark);
     let reduce = draw::reduce_motion();
     let cw = draw::char_w();
-    let (frame, inp, changed_ap) = with_state(|s| {
+    let (frame, idle, inp, changed_ap) = with_state(|s| {
         let changed = s.ap != ap || (s.cw - cw).abs() > 1e-6;
         s.ap = ap;
         s.cw = cw;
         s.anim.reduce = reduce;
+        s.idle.reduce = reduce;
+        s.anim.idle_bg = icon_idle_active(s);
         let t = now();
-        // 还在空闲态时记下标题的宽：下一次「空闲 → 在跑」外框从它起跳
-        if s.anim.frame(t).idle { s.title_w = draw::title_width(&title_spec(), ap); }
-        if changed {
+        // 还在空闲态时记下空闲层的宽：下一次「空闲 → 在跑」外框从它起跳
+        if s.anim.frame(t).idle {
+            s.title_w = if s.anim.idle_bg { s.idle.frame(t).width } else { draw::title_width(&title_spec(), ap) };
+        }
+        if changed && is_enabled() {
             let lay = layout(&s.tracker.p, s.ap, s.cw, t);
             s.anim.retarget(lay.as_ref(), s.title_w, t);
         }
-        let f = s.anim.frame(t);
+        let mut f = s.anim.frame(t);
+        let idle = s.anim.idle_bg.then(|| s.idle.frame(t));
+        // 空闲层的变化（水位、光晕、打招呼）也要触发重画：把它折进帧的比较里
+        if let Some(i) = &idle { if f.idle { f.width = i.width; } }
         // ★ 帧不含「logo 藏没藏」：只比帧的话，悬停面板关掉、`set_hide_logos(false)` 请求重画时帧没变 ⇒
         //   被当成「不用画」跳过，托盘一直是无 logo 的胶囊，直到 t/s 变了才画回（用户 2026-10-19 实测）。
         let hide = HIDE_LOGOS.load(Ordering::SeqCst);
-        let same = s.last.as_ref() == Some(&f) && s.last_hide == hide;
+        let same = s.last.as_ref() == Some(&f) && s.last_hide == hide && s.last_idle == idle;
         s.last = Some(f.clone());
         s.last_hide = hide;
-        (if same { None } else { Some(f) }, s.tracker.p.clone(), changed)
+        s.last_idle = idle.clone();
+        (if same { None } else { Some(f) }, idle, s.tracker.p.clone(), changed)
     });
     if changed_ap { kick(app); }
     let Some(frame) = frame else { return };
     let Some(tray) = app.tray_by_id("main") else { return };
-    if frame.idle {
+    if frame.idle && idle.is_none() {
         if SHOWN.swap(false, Ordering::SeqCst) { restore_title(app); }
         return;
     }
     let title = title_spec();
-    match draw::render(&frame, ap, HIDE_LOGOS.load(Ordering::SeqCst), &title) {
+    let layer = match &idle { Some(i) => TitleLayer::Idle(i), None => TitleLayer::Text(&title) };
+    match draw::render(&frame, ap, HIDE_LOGOS.load(Ordering::SeqCst), &layer) {
         Some(png) => match tauri::image::Image::from_bytes(&png) {
             Ok(img) => {
                 if !SHOWN.swap(true, Ordering::SeqCst) || with_state(|s| std::mem::take(&mut s.failed)) {
@@ -752,6 +857,9 @@ fn restore_title(app: &tauri::AppHandle) {
 // ---------------------------------------------------------------- 绘制（macOS）
 
 /// 空闲标题的内容（lib.rs 的 `format_tray_title` + 百分比那段的颜色），过渡帧要把它画进图里。
+/// 胶囊「标题那一层」画什么：文字标题（v1.11.0）或空闲托盘的 AI 图标（P11）。
+pub enum TitleLayer<'a> { Text(&'a TitleSpec), Idle(&'a crate::tray_idle::IdleFrame) }
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleSpec { pub text: String, pub hi: Option<(std::ops::Range<usize>, (f64, f64, f64))> }
 
@@ -773,11 +881,14 @@ pub mod draw {
     /// 托盘胶囊单色 / 彩色 logo（`@lobehub/icons-static-svg`，MIT；交接包 `assets/logos/`）。
     /// ★ 用 Main.html 实际引用的那几张（胶囊底色固定深色 ⇒ Codex / grok 用 on-dark 白色版，Claude 补黑眼彩色版，
     ///   Gemini 彩色版），不是 `*-on-color.svg`：那几张是 #0b0f14 深色填充，画在深色胶囊上看不见。
-    const LOGO_SVGS: [&[u8]; 4] = [
+    /// 前 4 张 = 在跑胶囊的 4 槽（Codex → Claude → Gemini → grok）；后 2 张只在空闲托盘（P11）用：Kimi · DeepSeek。
+    const LOGO_SVGS: [&[u8]; 6] = [
         include_bytes!("../icons/tray-logos/codex-on-dark.svg"),
         include_bytes!("../icons/tray-logos/claudecode-color-eyes.svg"),
         include_bytes!("../icons/tray-logos/gemini-color.svg"),
         include_bytes!("../icons/tray-logos/grok-on-dark.svg"),
+        include_bytes!("../icons/tray-logos/kimi-on-dark.svg"),
+        include_bytes!("../icons/tray-logos/deepseek-color.svg"),
     ];
     /// JetBrains Mono（OFL）：前端打包的同一份 woff2。CoreText 能直接从 woff2 建字体（2026-10-19 本机实测，
     /// `JetBrainsMono-SemiBold`，「0」步进 6.9 pt @ 11.5）。建不起来就退回系统等宽字体。
@@ -785,7 +896,7 @@ pub mod draw {
     const FONT_600: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-600-normal.woff2");
 
     /// 只建一次的资源（AppKit 对象，Retained 不是 Send，存成指针；进程内永不释放）。
-    struct Res { logos: [usize; 4], f500: usize, f600: usize, cw: f64, icon: usize }
+    struct Res { logos: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, cw: f64, icon: usize }
     // 只在持有它的线程（主线程 / 单测线程）上用
     static RES: std::sync::OnceLock<Res> = std::sync::OnceLock::new();
 
@@ -812,13 +923,15 @@ pub mod draw {
 
     fn res() -> &'static Res {
         RES.get_or_init(|| unsafe {
-            let logos = [image_from(LOGO_SVGS[0]), image_from(LOGO_SVGS[1]), image_from(LOGO_SVGS[2]), image_from(LOGO_SVGS[3])];
+            let logos: [usize; 6] = std::array::from_fn(|i| image_from(LOGO_SVGS[i]));
+            // 灰色剪影（P11「用掉的部分变成灰色剪影」）：logo 形状填浅灰，画时再乘 30%。只建一次。
+            let ghosts: [usize; 6] = std::array::from_fn(|i| silhouette(logos[i], (0.86, 0.88, 0.90)));
             let f500 = font_from(FONT_500, 0.23);
             let f600 = font_from(FONT_600, 0.3);
             let probe = NSString::from_str("0000000000");
             let sz: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(f500, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
-            Res { logos, f500, f600, cw: if sz.width > 0.0 { sz.width / 10.0 } else { 6.9 }, icon }
+            Res { logos, ghosts, f500, f600, cw: if sz.width > 0.0 { sz.width / 10.0 } else { 6.9 }, icon }
         })
     }
 
@@ -976,12 +1089,121 @@ pub mod draw {
         Some(img)
     }
 
+    /// 一张 logo 的单色剪影（同形状、填 `ink`）。失败返回 0（调用方跳过剪影那一层）。
+    unsafe fn silhouette(logo: usize, ink: (f64, f64, f64)) -> usize {
+        let img = logo as *mut AnyObject;
+        if img.is_null() { return 0; }
+        const S: f64 = 28.0;   // 14 pt @2×，与空闲 logo 同尺寸
+        let Some((rep, ctx)) = new_ctx_sq(S) else { return 0 };
+        save();
+        let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: ctx];
+        let r = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(S, S));
+        let _: () = msg_send![img, drawInRect: r, fromRect: NSRect::ZERO, operation: 2usize, fraction: 1.0f64, respectFlipped: true, hints: std::ptr::null_mut::<AnyObject>()];
+        let _: () = msg_send![ctx, setCompositingOperation: 5usize];   // sourceAtop：只染已有像素
+        let _: () = msg_send![color(ink, 1.0), setFill];
+        let _: () = msg_send![class!(NSBezierPath), fillRect: r];
+        let _: () = msg_send![ctx, flushGraphics];
+        restore();
+        let a: *mut AnyObject = msg_send![class!(NSImage), alloc];
+        let out: *mut AnyObject = msg_send![a, initWithSize: NSSize::new(S, S)];
+        if out.is_null() { return 0; }
+        let _: () = msg_send![out, addRepresentation: &*rep];
+        out as usize   // 进程内永不释放（同 Res 里其它对象）
+    }
+
+    /// 正方形位图上下文（逻辑尺寸 = 像素尺寸，只给剪影用）。
+    unsafe fn new_ctx_sq(px: f64) -> Option<(Retained<AnyObject>, *mut AnyObject)> {
+        let a: *mut AnyObject = msg_send![class!(NSBitmapImageRep), alloc];
+        let cs = NSString::from_str("NSDeviceRGBColorSpace");
+        let rep: *mut AnyObject = msg_send![a,
+            initWithBitmapDataPlanes: std::ptr::null_mut::<*mut u8>(),
+            pixelsWide: px as isize, pixelsHigh: px as isize, bitsPerSample: 8isize, samplesPerPixel: 4isize,
+            hasAlpha: true, isPlanar: false, colorSpaceName: &*cs, bytesPerRow: 0isize, bitsPerPixel: 0isize];
+        let rep: Retained<AnyObject> = Retained::from_raw(rep)?;
+        let ctx: *mut AnyObject = msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: &*rep];
+        if ctx.is_null() { return None; }
+        Some((rep, ctx))
+    }
+
+    /// 空闲托盘那一层（P11）：logo 右对齐画在 `right` 以左；整层随过渡淡出 / 缩小（同文字标题）。
+    unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64) {
+        use crate::tray_idle::{DOT_D, DOT_RGB, DOT_RING, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
+        if a <= 0.001 || f.width <= 0.0 { return; }
+        let r = res();
+        let x0 = right - f.width;
+        let rgb = |c: (u8, u8, u8)| (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
+        save();
+        scale_about(right - f.width / 2.0, H / 2.0, k);
+        for l in &f.logos {
+            let la = a * l.alpha;
+            if la <= 0.001 { continue; }
+            let x = x0 + l.x;
+            let y = (H - IL) / 2.0 + l.lift;   // 位图左下原点：上跳 = y 变大
+            save();
+            scale_about(x + IL / 2.0, y + IL / 2.0, l.scale);
+            // 光晕：平台色 50%，径向渐变到透明
+            if l.glow > 0.001 {
+                let c = rgb(GLOW_RGB[l.logo]);
+                let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
+                let g: *mut AnyObject = msg_send![g, initWithStartingColor: color(c, 0.5 * l.glow * la), endingColor: color(c, 0.0)];
+                if let Some(g) = Retained::<AnyObject>::from_raw(g) {
+                    let cx = x + IL / 2.0;
+                    let cy = y + IL / 2.0;
+                    let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
+                        toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
+                }
+            }
+            let lr = NSRect::new(NSPoint::new(x, y), NSSize::new(IL, IL));
+            // 灰色剪影（整只），再盖上「还剩的那部分」原色
+            let ghost = r.ghosts[l.logo] as *mut AnyObject;
+            if !ghost.is_null() {
+                let _: () = msg_send![ghost, drawInRect: lr, fromRect: NSRect::ZERO, operation: 2usize, fraction: GHOST_ALPHA * la, respectFlipped: true, hints: std::ptr::null_mut::<AnyObject>()];
+            }
+            let img = r.logos[l.logo] as *mut AnyObject;
+            let keep = (1.0 - l.cut / 100.0).clamp(0.0, 1.0);
+            if !img.is_null() && keep > 0.0 {
+                save();
+                // 从顶往下裁 cut%：原色只留下面那一截（左下原点 ⇒ 从 y 起、高 keep·14）
+                let clip = NSRect::new(NSPoint::new(x - 1.0, y), NSSize::new(IL + 2.0, IL * keep));
+                let _: () = msg_send![class!(NSBezierPath), clipRect: clip];
+                let _: () = msg_send![img, drawInRect: lr, fromRect: NSRect::ZERO, operation: 2usize, fraction: la, respectFlipped: true, hints: std::ptr::null_mut::<AnyObject>()];
+                restore();
+            }
+            // 额度重置的白光
+            if l.flash > 0.001 {
+                let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
+                let g: *mut AnyObject = msg_send![g, initWithStartingColor: color((1.0, 1.0, 1.0), 0.75 * l.flash * la), endingColor: color((1.0, 1.0, 1.0), 0.0)];
+                if let Some(g) = Retained::<AnyObject>::from_raw(g) {
+                    let c = NSPoint::new(x + IL / 2.0, y + IL / 2.0);
+                    let _: () = msg_send![&*g, drawFromCenter: c, radius: 0.0f64, toCenter: c, radius: IL / 2.0 + 1.5, options: 0usize];
+                }
+            }
+            // 红点：右上角各外伸 2 pt，1 pt 描边
+            if l.dot > 0.001 {
+                let d = DOT_D * l.dot;
+                let cx = x + IL + 2.0 - DOT_D / 2.0;
+                // 画板外伸 2 pt 时描边顶到 19 pt，超出 18 pt 高的位图被裁平 ⇒ 压到刚好不出界（低 1 pt，偏离记 PLAN）
+                let cy = (y + IL + 2.0 - DOT_D / 2.0).min(H - DOT_D / 2.0 - 1.0);
+                let ring = NSRect::new(NSPoint::new(cx - d / 2.0 - 1.0, cy - d / 2.0 - 1.0), NSSize::new(d + 2.0, d + 2.0));
+                let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: ring];
+                let _: () = msg_send![color(rgb(DOT_RING), la), setFill];
+                let _: () = msg_send![p, fill];
+                let dot = NSRect::new(NSPoint::new(cx - d / 2.0, cy - d / 2.0), NSSize::new(d, d));
+                let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: dot];
+                let _: () = msg_send![color(rgb(DOT_RGB), la), setFill];
+                let _: () = msg_send![p, fill];
+            }
+            restore();
+        }
+        restore();
+    }
+
     /// 画一帧 → PNG（2× 位图，`set_icon` 按 18 pt 高缩回去）。失败返回 None（调用方 fail-open）。
-    pub fn render(f: &Frame, ap: Appearance, hide_logos: bool, t: &TitleSpec) -> Option<Vec<u8>> {
+    pub fn render(f: &Frame, ap: Appearance, hide_logos: bool, t: &TitleLayer) -> Option<Vec<u8>> {
         objc2::rc::autoreleasepool(|_| unsafe { render_inner(f, ap, hide_logos, t) })
     }
 
-    unsafe fn render_inner(f: &Frame, ap: Appearance, hide_logos: bool, t: &TitleSpec) -> Option<Vec<u8>> {
+    unsafe fn render_inner(f: &Frame, ap: Appearance, hide_logos: bool, t: &TitleLayer) -> Option<Vec<u8>> {
         let r = res();
         // 图宽 = 外框此刻的宽（过渡时从标题宽弹到胶囊宽）；标题右对齐画在里面，超出的部分被图边裁掉
         let w = f.width.max(1.0).ceil();
@@ -997,7 +1219,11 @@ pub mod draw {
             let _: () = msg_send![color(capsule_bg(ap).f(), f.bg_a), setFill];
             let _: () = msg_send![p, fill];
         }
-        title(t, ap, w, f.title_a, f.title_scale);
+        match t {
+            TitleLayer::Text(t) => title(t, ap, w, f.title_a, f.title_scale),
+            // 悬停面板飞 logo 期间托盘不画自己的 logo（同在跑胶囊那条）
+            TitleLayer::Idle(i) => if !hide_logos { idle_layer(i, w, f.title_a, f.title_scale) },
+        }
 
         // 各段：只在胶囊里画（滚动的数字不越出胶囊）
         save();
@@ -1434,7 +1660,7 @@ mod tests {
                 a.retarget(Some(&l), 80.0, 1.0);
                 a.step(1.0);
                 let f = a.frame(1.0);
-                let png = draw::render(&f, ap, false, &title).expect("render");
+                let png = draw::render(&f, ap, false, &TitleLayer::Text(&title)).expect("render");
                 let tag = if ap == Appearance::Light { "light" } else { "dark" };
                 std::fs::write(dir.join(format!("{}_{}.png", name, tag)), png).unwrap();
             }
@@ -1446,7 +1672,43 @@ mod tests {
         a.retarget(Some(&l), draw::title_width(&title, Appearance::Dark), 0.0);
         let mut now = 0.0;
         while now < 0.12 { now += 0.016; a.step(now); }
-        let png = draw::render(&a.frame(now), Appearance::Dark, false, &title).expect("render");
+        let png = draw::render(&a.frame(now), Appearance::Dark, false, &TitleLayer::Text(&title)).expect("render");
         std::fs::write(dir.join("morph_idle_to_1ai_120ms_dark.png"), png).unwrap();
+    }
+
+    /// 空闲托盘（P11）样张：TCC 挡截屏，托盘像素只能离线画出来看。
+    /// 运行：`cargo test --lib render_idle_samples -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "macos")]
+    fn render_idle_samples() {
+        use crate::tray_idle::{IdleAnim, IdleIn};
+        let home = std::env::var("HOME").unwrap();
+        let dir = std::path::PathBuf::from(home).join("Downloads/aicoop_screenshots_20261021_phase1/tray_idle");
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = |logo, rem: Option<f64>, red| IdleIn { logo, remaining: rem, red };
+        let cases: Vec<(&str, Vec<IdleIn>, bool, f64)> = vec![
+            ("board_codex67_claude40_deepseek6", vec![s(0, Some(67.0), false), s(1, Some(40.0), false), s(5, Some(6.0), true)], false, 0.0),
+            ("levels_100_40_0", vec![s(0, Some(100.0), false), s(1, Some(40.0), false), s(2, Some(0.0), true)], false, 0.0),
+            ("unknown_grok_gray", vec![s(0, Some(80.0), false), s(3, None, false)], false, 0.0),
+            ("near_glow", vec![s(0, Some(67.0), false), s(1, Some(40.0), false), s(2, Some(86.0), false)], true, 0.0),
+            ("kimi_white_mono_30", vec![s(4, Some(30.0), false), s(0, Some(30.0), false)], false, 0.0),
+        ];
+        for ap in [Appearance::Light, Appearance::Dark] {
+            for (name, slots, near, _) in &cases {
+                let mut ia = IdleAnim::new();
+                ia.retarget(slots, 0.0);
+                if *near { ia.set_near(true, 0.0); }
+                ia.step(0.5);
+                let idle = ia.frame(0.5);
+                let mut a = Anim::new();
+                a.idle_bg = true;
+                let mut f = a.frame(0.5);
+                f.width = idle.width;
+                let png = draw::render(&f, ap, false, &TitleLayer::Idle(&idle)).expect("render");
+                let tag = if ap == Appearance::Light { "light" } else { "dark" };
+                std::fs::write(dir.join(format!("{}_{}.png", name, tag)), png).unwrap();
+            }
+        }
     }
 }

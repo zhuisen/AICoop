@@ -8,9 +8,12 @@ import geminiOnColor from "../assets/logos/gemini-on-color.svg";
 import grokOnDark from "../assets/logos/grok-on-dark.svg";
 import grokOnLight from "../assets/logos/grok-on-light.svg";
 import grokOnColor from "../assets/logos/grok-on-color.svg";
+import kimiOnDark from "../assets/logos/kimi-on-dark.svg";
+import kimiOnLight from "../assets/logos/kimi-on-light.svg";
+import deepseekColor from "../assets/logos/deepseek-color.svg";
 
 /**
- * 四家官方 logo（交接包 2026-10-19 `assets/logos/`，LobeHub icons-static-svg，MIT）。
+ * 官方 logo（交接包 2026-10-19 `assets/logos/` 四家 + 2026-10-21 Kimi / DeepSeek，LobeHub icons-static-svg，MIT）。
  *
  * 变体选择照交接包 README「Logo」节，**不要自己换**：
  * - Codex：深色底 `codex-on-dark`；浅色底 `codex-brand`（品牌蓝紫渐变、透明底）。
@@ -24,13 +27,18 @@ import grokOnColor from "../assets/logos/grok-on-color.svg";
  *   不接收 opacity，外层容器降透明度时调用方要把 logo 放到降透明度的元素之外。
  * ★ 资产内置（vite 打包），不远程加载 —— 离线也得有 logo。
  */
-export type LogoPlatform = "codex" | "claude" | "agy" | "grok";
+export type LogoPlatform = "codex" | "claude" | "agy" | "grok" | "kimi" | "deepseek";
 
 const LOGOS: Record<LogoPlatform, { dark: string; light: string; mono: string }> = {
   codex: { dark: codexOnDark, light: codexBrand, mono: codexOnColor },
   claude: { dark: claudeColor, light: claudeColor, mono: claudeOnColor },
   agy: { dark: geminiColor, light: geminiColor, mono: geminiOnColor },
   grok: { dark: grokOnDark, light: grokOnLight, mono: grokOnColor },
+  // Kimi / DeepSeek（AICoop 交接包 2026-10-21 只给了这一种）：空闲托盘与它的悬停面板用。
+  // Kimi 只给了白字版 ⇒ 浅色底用同一份把字改成 #161b22、**蓝点保留 #027AFF**（`kimi-on-light.svg`）。
+  // ✗ 不用 `invert(1)`：那会把蓝点反成橙色，等于给品牌换色（P11 §3「不换颜色」，评审 2026-10-21）。
+  kimi: { dark: kimiOnDark, light: kimiOnLight, mono: kimiOnDark },
+  deepseek: { dark: deepseekColor, light: deepseekColor, mono: deepseekColor },
 };
 
 export function logoSrc(platform: LogoPlatform, isDark: boolean, variant: "auto" | "mono" = "auto"): string {

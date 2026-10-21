@@ -331,7 +331,10 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         """
         # ★ 2026-10-19 起列数由 `overview.ts::ovLayout(内容区宽)` 给（交接包：4 / 3 / 2 列），不再 auto-fill。
         #   根因闸换成**算**：任何内容区宽度下，卡片宽都要装得下最宽那条操作栏
-        #   （切换 + 探针 + 刷新 + ⋯ ≈ 214px，加左右内边距 28 ⇒ 下限 242，留余量取 250）。
+        #   （切换 + 探针 + 刷新 + ⋯ ≈ 214px，加左右内边距 28 ⇒ 下限 242）。
+        # ★ 2026-10-21 AICoop P5_Spec §01：列数 = max(2, ⌊(w + 12)/257⌋) ⇒ 卡宽下限**按公式就是 245**
+        #   （每次加列的那一刻 (257c − 12 − 12(c−1))/c = 245）。原来「留余量取 250」与新稿不能同时成立 ⇒ 闸取稿子的 245，
+        #   仍高于实测需要的 242。⚠️ 真 DOM 里出滚动条时还要再少 ~0.3px（860 宽实测 244.67，评审 Opus M5，待用户定）。
         if shutil.which("node") is None:
             self.skipTest("没有 node")
         pure = (SRC / "overview.ts").as_posix()
@@ -340,7 +343,7 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
               " console.log(JSON.stringify([worst, at])); });" % pure)
         r = subprocess.run(["node", "--experimental-strip-types", "-e", js], capture_output=True, text=True, timeout=60)
         worst, at = json.loads(r.stdout.strip().splitlines()[-1])
-        self.assertGreaterEqual(worst, 250, f"★★★ 内容区 {at}px 时卡片只有 {worst:.0f}px —— 装不下操作栏")
+        self.assertGreaterEqual(worst, 245 - 1e-9, f"★★★ 内容区 {at}px 时卡片只有 {worst:.2f}px —— 装不下操作栏")
 
     def test_the_overlay_border_is_a_hairline_not_the_accent(self):
         """★★ 用户 2026-09-21：「取消绿色的边框」。

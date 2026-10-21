@@ -14,7 +14,7 @@ import PlatformPage from "./pages/PlatformPage";
 import RequestsPage, { type ReqNav } from "./pages/RequestsPage";
 import type { RangeState } from "./traffic";
 import { colorOf, daysNeeded, DEFAULT_RANGE, todayOf, singleDayOf, hoursOfDay } from "./traffic";
-import SettingsPage, { getSettings, patchSettings, loadTheme, saveTheme, TRAY_STYLES, type ThemeName } from "./pages/SettingsPage";
+import SettingsPage, { getSettings, loadTheme, saveTheme, TRAY_STYLES, type ThemeName } from "./pages/SettingsPage";
 import { useStore } from "./hooks/useStore";
 import { useExpiryWatch } from "./hooks/useExpiryWatch";
 import { useDeadWatch } from "./hooks/useDeadWatch";
@@ -34,36 +34,12 @@ import { useAgyPool } from "./hooks/useAgyPool";
 import Overview from "./components/ov/Overview";
 import { useLive } from "./hooks/useLive";
 import { useClaudeQuota } from "./hooks/useClaudeQuota";
+import { NavRail, type NavPage } from "./components/NavRail";
 import "./App.css";
 
 // 平台详情页不进导航栏,只能从流量总览钻取(图例行 / 卡片「明细→」/ 点图层),用户定稿 2026-08-09。
-type Page = "overview" | "traffic" | "logs" | "relay" | "settings" | "requests";
+type Page = NavPage;
 
-const IconChart = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>;
-// 流量总览 = 四宫格(交接稿 §0)
-const IconGrid = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>;
-const IconRelay = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="5" cy="12" r="2.4"/><circle cx="19" cy="12" r="2.4"/><path d="M7.6 12h8.8M13.4 9.2 16.4 12l-3 2.8"/></svg>;
-/** 「请求」页图标（交接包 page3 画板侧栏原样）。 */
-const IconRequests = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M4 7h11M4 12h16M4 17h8"/><path d="M18 5l2 2-2 2"/></svg>;
-const IconClip = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3.5h6v3H9z" fill="currentColor" stroke="none"/></svg>;
-// ★ 真齿轮(带齿廓),不是 circle+8 条直射线 —— 那个画出来和标题栏的 `IconSun` 几乎同一个图形,
-//   侧栏第 4 格看着像"亮度"而不是"设置"(用户 2026-08-09 实测截图)。
-/** 侧栏折叠/展开。双人字形指向「往哪边收」——比单箭头更明确它是个开关而不是"下一页"。 */
-const IconChevrons = ({ open }: { open: boolean }) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-       strokeLinecap="round" strokeLinejoin="round"
-       style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .18s ease" }}>
-    <path d="M13 17l5-5-5-5M6 17l5-5-5-5" />
-  </svg>
-);
-
-const IconGear = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-);
 const IconEye = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M1.6 12S5.3 5.5 12 5.5 22.4 12 22.4 12 18.7 18.5 12 18.5 1.6 12 1.6 12z"/><circle cx="12" cy="12" r="3"/></svg>;
 const IconEyeOff = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6.7 0 10.4 6.5 10.4 6.5a18 18 0 0 1-3.4 4.2M6.2 7.8A18 18 0 0 0 1.6 12S5.3 18.5 12 18.5c1.6 0 3-.4 4.3-.9M3 3l18 18"/></svg>;
 
@@ -118,42 +94,6 @@ export default function App() {
   // 「使用重置卡」确认弹窗：只存 aid，账号数据每次渲染时从 `accounts` 现取（弹窗开着时数据变了也不会陈旧）。
   const [creditConfirm, setCreditConfirm] = useState<string | null>(null);
   const [autoSwitch, setAutoSwitch] = useState(() => getSettings().autoSwitchEnabled);
-  // 侧栏折叠态。**默认折叠**（DEFAULTS.navOpen = false），选择会记住 —— 每次启动都弹回默认的开关很烦人。
-  const [navOpen, setNavOpen] = useState(() => getSettings().navOpen);
-
-  /**
-   * ★★ **窄窗自动折叠侧栏**（用户 2026-08-24 定稿：「尺寸小到一定程度后，需要折叠起侧边栏」）。
-   *
-   * 侧栏展开 176px / 折叠 52px，差 **124px** —— 正好是三列九宫格在窄窗下缺的那一点。
-   * ★★ 下限**随字号走**：用户 2026-08-26 选了 D 档字号（整体 +3），实测**卡片宽 ≥240px**
-   * 才站得住、≤235px 页脚就会在内部折行 ⇒ 展开 **≥960**、折叠 **≥840**（旧值 860/740 是
-   * 旧字号下的数，字号一改就失效）。取 `NARROW_W = 960`、`minWidth = 860`（留 20px 余量）。
-   * ★ 方向：窗口 ≥ `NARROW_W` 时侧栏是**开**的，所以必须 `NARROW_W ≥ 展开态下限`。
-   *   闸里原来写的是 `≤`（反的），因为当时两个数恰好都是 860，错了也一直是绿的。
-   * 两个数**必须一起改**，闸在 `tests/test_narrow_window_nowrap.py`。
-   *
-   * ★ **这是显示层的临时覆盖，不改用户偏好**。变窄时只 `setNavOpen(false)`、**不写
-   * localStorage**；变宽时从偏好里读回来。否则用户拖窄一次，"侧栏默认展开"这个设置就被
-   * 永久抹掉了 —— 那是拿一次布局意外去改一条长期偏好。
-   * ★ 窄窗下用户仍可手动展开（那条路径照旧写偏好），一直保持到下次跨过阈值。
-   *
-   * ★ 为什么不做等比缩放：试过 `zoom`，**在 WKWebView 里语义与 Chrome 不同**，
-   * 真机上把版面撑爆（用户 2026-08-24 截图），而 harness 跑的是 Chrome、全程报"干净"——
-   * 用错引擎验证得到的假绿。折叠侧栏是纯 React 状态，两个引擎行为一致。
-   */
-  useEffect(() => {
-    const NARROW_W = 960;
-    let narrow = window.innerWidth < NARROW_W;
-    if (narrow) setNavOpen(false);
-    const onResize = () => {
-      const now = window.innerWidth < NARROW_W;
-      if (now === narrow) return;            // 只在**跨过阈值**时动作,不是每次 resize 都覆盖
-      narrow = now;
-      setNavOpen(now ? false : getSettings().navOpen);
-    };
-    window.addEventListener("resize", onResize);
-    return () => { window.removeEventListener("resize", onResize); };
-  }, []);
   const { privacy, toggle: togglePrivacy } = usePrivacy();
 
   const t = THEMES[theme];
@@ -196,7 +136,8 @@ export default function App() {
         if (pg === "requests") {
           setPage("requests"); setReqNav((v) => ({ platform: reqPf, n: v.n + 1 }));
         } else if (pg === "traffic") {
-          setDrill(reqPf); setPage("traffic");
+          // 用量详情认任何平台键（空闲额度格子里的 Kimi / DeepSeek 没有总览档，点了来这里）
+          setDrill(pf); setPage("traffic");
         } else if (pg === "overview") {
           setDrill(null); setPage("overview");
           const pk = pf === "agy" ? "gemini" : pf;
@@ -316,23 +257,6 @@ export default function App() {
   //   它既不看置顶、不看停用、也不看 15% 阈值 —— 与 wrapper 真正装进去的号是两份实现，
   //   codex 那边已经因此栽过（界面报一个根本不会被挑的号）。整段理由见 git 历史与 CHANGELOG B70。
 
-  // ★ `name` 是展开态显示的中文名，`tip` 只在**折叠态**当悬浮提示 —— 展开后标签已经在那儿，
-  //   再挂一个 title 是重复。原来 traffic 的 tip 写死「Claude / Codex / Grok」三家，
-  //   而现在有 6 个平台，顺手改掉。
-  const sidebarItems: { id: Page; Icon: React.FC; name: string; tip: string }[] = [
-    { id: "overview", Icon: IconChart, name: "总览", tip: "总览" },
-    { id: "traffic", Icon: IconGrid, name: "AI用量信息", tip: "AI用量信息（各 AI CLI 的本机用量）" },
-    { id: "logs", Icon: IconClip, name: "日志", tip: "日志" },
-    // ★★ 「中转站」是**独立版块**(用户 2026-09-09 定稿:「新增一个版块放中转站的内容信息,
-    //   而不是共用版块」)。一度拆进总览+用量两页,被否 —— 混进别的版块会让两边都变成拼盘。
-    //   ★ 每项的 `data-page` 不可删:harness 原来按**位置**点 `.cb-rail > div` 第 N 项,
-    //   任何一次增删页面都会让它静默点到别处,而"点错位置"和"没点中"在截图里一模一样。
-    { id: "relay", Icon: IconRelay, name: "中转站", tip: "中转站（按量付费的替代路由）" },
-    { id: "settings", Icon: IconGear, name: "设置", tip: "设置" },
-    // ★ 第 6 项（交接包 README：总览 · AI用量信息 · 日志 · 中转站 · 设置 · 请求）。
-    { id: "requests", Icon: IconRequests, name: "请求", tip: "请求（最近 2 天逐条请求）" },
-  ];
-
   return (
     // ★ `cb-light` 供 App.css 的滚动条规则按主题反色 —— 白色拇指在浅色底上等于隐形。
     //   加这个 class 之前那条规则是**死规则**(写完顺手核了一下才发现根节点没有它)。
@@ -348,7 +272,7 @@ export default function App() {
           <span onClick={() => win.minimize()} style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e", cursor: "pointer" }} title="最小化" />
           <span onClick={() => { win.toggleMaximize().catch(() => {}); }} style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840", cursor: "pointer" }} title="缩放" />
         </>}
-        <span data-tauri-drag-region style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 12.5, fontWeight: 600, letterSpacing: ".02em", color: t.titleText, pointerEvents: "none" }}>CodexBar</span>
+        <span data-tauri-drag-region style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 12.5, fontWeight: 600, letterSpacing: ".02em", color: t.titleText, pointerEvents: "none" }}>AICoop</span>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
           <span onClick={togglePrivacy} title={privacy ? "打码中 — 邮箱与 account_id 已遮蔽,可安全截图。点击恢复" : "打码:遮蔽邮箱与 account_id,方便截图分享"}
             style={{ display: "grid", placeItems: "center", width: 24, height: 20, borderRadius: 6, cursor: "pointer",
@@ -390,53 +314,11 @@ export default function App() {
       </div>
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {/* Sidebar */}
-        {/* ★ 侧栏可折叠（用户 2026-08-16）。**默认折叠**，展开后每项带中文名。
-            宽度过渡 .18s；`prefers-reduced-motion` 下不过渡（媒体查询在 App.css 的 .cb-rail）。
-            展开态用 `alignItems: stretch` 让每项占满宽度 —— 图标居中、文字左对齐的行
-            如果宽度只包住内容，点击热区会缩到文字上，"点空白没反应"就是这么来的。 */}
-        <div className="cb-rail" style={{ width: navOpen ? 176 : 52, flexShrink: 0, borderRight: `1px solid ${t.railBorder}`, background: t.railBg, display: "flex", flexDirection: "column", alignItems: navOpen ? "stretch" : "center", padding: navOpen ? "14px 8px" : "14px 0", gap: 4, overflow: "hidden", transition: "width .18s ease, background-color .35s ease" }}>
-          {sidebarItems.map((it) => (
-            <div key={it.id} onClick={() => setPage(it.id)}
-                 // ★ 给每项一个身份标记。harness 原来按**位置**点（`.cb-rail > div` 第 N 项），
-                 //   任何一次插入新页都会让它静默点到别处 —— 而"点错位置"和"没点中"
-                 //   在截图里长得一模一样。有了它就能按身份点，位置随便变。
-                 data-page={it.id}
-                 title={navOpen ? undefined : it.tip}
-                 style={{ height: 34, width: navOpen ? "100%" : 34, borderRadius: 9,
-                          display: "flex", alignItems: "center",
-                          justifyContent: navOpen ? "flex-start" : "center",
-                          gap: 10, padding: navOpen ? "0 10px" : 0, flexShrink: 0,
-                          cursor: "pointer", color: page === it.id ? t.accentText : t.muted,
-                          background: page === it.id ? t.accent : "transparent",
-                          transition: "background .2s, color .2s" }}>
-              <span style={{ display: "grid", placeItems: "center", flexShrink: 0 }}><it.Icon /></span>
-              {navOpen && (
-                <span style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>{it.name}</span>
-              )}
-            </div>
-          ))}
-            {/* 折叠开关钉在底部：它是外壳控件，不该混进上面那组「去哪一页」里。
-                折叠态下和导航项一样是 34×34 居中，避免出现第二种尺寸。 */}
-            <div onClick={() => { const n = !navOpen; setNavOpen(n); patchSettings({ navOpen: n }); }}
-                 title={navOpen ? "折叠侧栏" : "展开侧栏"}
-                 style={{ marginTop: "auto", height: 34, width: navOpen ? "100%" : 34,
-                          borderRadius: 9, display: "flex", alignItems: "center",
-                          justifyContent: navOpen ? "flex-start" : "center",
-                          gap: 10, padding: navOpen ? "0 10px" : 0, flexShrink: 0,
-                          cursor: "pointer", color: t.muted, transition: "color .2s" }}>
-              <span style={{ display: "grid", placeItems: "center", flexShrink: 0 }}>
-                <IconChevrons open={navOpen} />
-              </span>
-              {navOpen && <span style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>折叠</span>}
-            </div>
-            <span style={{ fontSize: 9, color: t.muted, fontFamily: "'JetBrains Mono'",
-                           textAlign: navOpen ? "left" : "center", paddingLeft: navOpen ? 10 : 0,
-                           marginTop: 6, flexShrink: 0 }}>{ver ? ver.split(".").slice(0, 2).join(".") : ""}</span>
-        </div>
+        {/* Sidebar — AICoop P10_Nav（components/NavRail.tsx） */}
+        <NavRail t={t} page={page} onPage={setPage} />
 
         {/* Content */}
-        <div style={{ flex: 1, minWidth: 0, padding: "16px 20px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {page === "overview" && (
             <Overview t={t} isDark={theme === "dark"} privacy={privacy} provider={provider} setProvider={setProvider}
               colors={{ codex: colorOf(traffic, "codex"), claude: colorOf(traffic, "claude"),

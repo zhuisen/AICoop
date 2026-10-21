@@ -78,6 +78,9 @@ export const THEMES = {
     // Windows 的 ─ □ ✕ 用它;关闭键例外,hover 走固定的 #e81123(那是 Windows 的系统语义色)。
     chromeHoverBg:"rgba(255,255,255,.08)",
     railBg:"#0a0e12", railBorder:"rgba(255,255,255,.06)",
+    // 主导航（AICoop P10_Nav 方案 A）。深色值照稿；浅色稿没给 ⇒ 图标沿用 muted / text，提示框用深色块（浅底上浅色块看不见）。
+    navOn:"#062b27", navOff:"#8f99a6", navHover:"#e3e8ee", navHoverBg:"rgba(255,255,255,.07)",
+    navTipBg:"#eef2f7", navTipFg:"#0e1117", navDivider:"rgba(255,255,255,.08)", navBorder:"rgba(255,255,255,.07)",
     text:"#eef2f7", text2:"#aab3c0", muted:"#798390",
     heroBg:"#131c20", heroBorder:"rgba(45,212,191,.25)", heroShadow:"none",
     cardBg:"#141a22", cardBorder:"rgba(255,255,255,.06)", curCardBg:"rgba(45,212,191,.07)",
@@ -100,6 +103,8 @@ export const THEMES = {
     chromeBg:"#f7f9fb", chromeBorder:"rgba(0,0,0,.1)", titleText:"#39414b",
     chromeHoverBg:"rgba(0,0,0,.06)",
     railBg:"#e7ebf0", railBorder:"rgba(0,0,0,.06)",
+    navOn:"#ffffff", navOff:"#606b77", navHover:"#161b22", navHoverBg:"rgba(0,0,0,.06)",
+    navTipBg:"#1c2128", navTipFg:"#eef2f7", navDivider:"rgba(0,0,0,.08)", navBorder:"rgba(0,0,0,.06)",
     text:"#161b22", text2:"#4d5663", muted:"#606b77",
     heroBg:"#ffffff", heroBorder:"rgba(14,159,142,.3)", heroShadow:"0 1px 3px rgba(0,0,0,.05)",
     cardBg:"#ffffff", cardBorder:"rgba(0,0,0,.07)", curCardBg:"rgba(14,159,142,.05)",

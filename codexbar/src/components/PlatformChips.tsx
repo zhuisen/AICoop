@@ -1,5 +1,5 @@
 import PlatformLogo, { type LogoPlatform } from "./PlatformLogo";
-import { numColor } from "../live";
+import { numColor, type PlatformKey } from "../live";
 import { MONO } from "./mb/vars";
 
 /** 菜单栏的平台档。★ 比主窗的 `PoolKey` 多一个 `claude`（交接包 4f：Codex · Claude · Gemini · Grok）。 */
@@ -17,7 +17,7 @@ export interface ChipItem {
 }
 
 /** 档位 → logo / 数字色用的平台键（请求账本那套：Gemini 的键是 `agy`）。 */
-export const LOGO_OF: Record<MbPlat, LogoPlatform> = { codex: "codex", claude: "claude", gemini: "agy", grok: "grok" };
+export const LOGO_OF: Record<MbPlat, LogoPlatform & PlatformKey> = { codex: "codex", claude: "claude", gemini: "agy", grok: "grok" };
 
 const Lock = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>

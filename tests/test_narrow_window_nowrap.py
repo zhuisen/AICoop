@@ -134,57 +134,24 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         tabs = strip_comments((SRC / "components" / "ov" / "OvHeader.tsx").read_text(encoding="utf-8"))
         self.assertIn("layout.tabNames &&", tabs, "平台档的名字没跟版式走")
 
-    def test_narrow_threshold_and_min_width_agree(self):
-        """★ 自动折叠阈值 与 窗口 `minWidth` 是**一对**,只改一个就会破。
+    def test_rail_is_fixed_and_min_width_fits_three_columns(self):
+        """★ AICoop P10_Nav（2026-10-21）：侧栏固定 64 宽，**不再折叠/展开**（原 `NARROW_W` 自动折叠随之删除）。
 
-        ★★ 2026-08-26 两处一起改了,**下限随字号走**:用户选了 D 档字号(整体 +3),
-        实测卡片宽 **≥240px 才站得住**、≤235px 就页脚内折行 ⇒ 对应窗口下限整体抬高:
-          · 侧栏展开 ≥960 干净(卡宽 240)、940 起破;
-          · 侧栏折叠 ≥840 干净(卡宽 241)、820 起破。差 124px = 侧栏宽度差(176-52)。
-        取 `NARROW_W = 960`、`minWidth = 860`(比折叠下限留 20px 余量)。
-
-        ★ **方向**:`NARROW_W` 是"低于它就折叠"。所以窗口 ≥ `NARROW_W` 时侧栏是**开**的,
-          必须 `NARROW_W >= 展开态下限` —— 否则在 [展开下限, NARROW_W) 这段里侧栏还开着、
-          卡片已经挤破了。原来这里写的是 `<=`(方向反的),因为当时两个数恰好都是 860,
-          错了也一直是绿的 —— **相等会让方向错误隐形**,所以现在两个数不同了才暴露。
-        单独调其中一个的症状:**窗口能被拖到某个宽度,那里侧栏还没折叠、卡片已经溢出** ——
-        而且不报错,只是右边少一块。
+        于是窗口下限只剩一条约束：最小窗口下总览仍要排得下 3 列（P5_Spec §01「860 最小窗口 3 列」）。
+        内容宽 = minWidth − 64（侧栏）− 32（内容区左右各 16）；3 列要 ≥ 3·245 + 2·12 = 759。
+        单改其中一个数（侧栏变宽 / 内边距变大 / minWidth 变小）的症状是：最小窗口退成 2 列，不报错。
         """
         import json
-        m = re.search(r"const NARROW_W = (\d+);", self.app)
-        self.assertIsNotNone(m, "找不到 NARROW_W —— 自动折叠可能被删了")
-        narrow = int(m.group(1))
-
-        conf = json.loads((ROOT / "codexbar" / "src-tauri" / "tauri.conf.json")
-                          .read_text(encoding="utf-8"))
+        nav = strip_comments((ROOT / "codexbar" / "src" / "components" / "NavRail.tsx").read_text(encoding="utf-8"))
+        self.assertIn("width: 64,", nav, "★ 侧栏不是 64 宽（P10_Nav）")
+        self.assertNotIn("NARROW_W", self.app, "★ 自动折叠又回来了 —— P10_Nav 没有折叠态")
+        m = re.search(r'flex: 1, minWidth: 0, padding: (\d+),', self.app)
+        self.assertIsNotNone(m, "找不到内容区的内边距 —— 断言可能打空了")
+        pad = int(m.group(1))
+        conf = json.loads((ROOT / "codexbar" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
         win = conf["app"]["windows"][0]
-        self.assertIn("minWidth", win,
-                      "窗口没有 minWidth —— 能被拖到任意窄,就没有可以宣称干净的宽度")
-        self.assertGreaterEqual(narrow, 960,
-                                "NARROW_W({}) 低于展开态实测下限 960 —— 那段宽度里侧栏还开着,"
-                                "而卡片已经挤破了".format(narrow))
-        self.assertGreaterEqual(win["minWidth"], 840,
-                                "minWidth({}) 低于折叠态实测下限 840".format(win["minWidth"]))
-        self.assertLess(win["minWidth"], narrow,
-                        "minWidth 应当**低于**折叠阈值,否则自动折叠永远不会触发")
-
-    def test_auto_collapse_does_not_persist(self):
-        """★ 自动折叠是**显示层覆盖**,绝不能写进偏好。
-
-        写了的话,用户把窗口拖窄一次,「侧栏默认展开」这条设置就被永久抹掉 ——
-        拿一次布局意外去改一条长期偏好。判据:那个 effect 里不得出现 `patchSettings`。
-        """
-        # 不用正则:这段要匹配的字面量里同时有 `\d`、`(`、`"`,写成正则会在转义上翻车
-        # (第一版就翻了两次)。切片取 effect 的作用域即可,判据一样硬。
-        i = self.app.find("const NARROW_W")
-        self.assertNotEqual(i, -1, "找不到自动折叠的 effect —— 断言可能打空了")
-        j = self.app.find('removeEventListener("resize"', i)
-        self.assertNotEqual(j, -1, "自动折叠的 effect 没有解绑 resize 监听")
-        block = self.app[i:j]
-        self.assertNotIn("patchSettings", block,
-                         "自动折叠写了偏好 —— 用户拖窄一次,「默认展开」就没了")
-        self.assertIn("getSettings().navOpen", block,
-                      "变宽时没有从偏好读回来,侧栏会一直停在折叠态")
+        self.assertGreaterEqual(win["minWidth"] - 64 - 2 * pad, 759,
+                                "最小窗口下总览排不下 3 列：minWidth=%d pad=%d" % (win["minWidth"], pad))
 
     def test_scrollbars_are_themed_and_not_a_dead_rule(self):
         """★ 主窗滚动条必须有样式,且浅色主题那条**不能是死规则**。

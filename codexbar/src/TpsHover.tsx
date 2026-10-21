@@ -5,6 +5,8 @@ import { useLive } from "./hooks/useLive";
 import { PLATFORM_NAME, PLATFORM_ORDER, fmtTokens, fmtTps, numColor, runningRows, type PlatformKey, type RunningRow } from "./live";
 import PlatformLogo, { logoSrc } from "./components/PlatformLogo";
 import * as L from "./tpsHoverLogic";
+import IdleGrid from "./components/IdleGrid";
+import { parseIdleLayout, type IdleLayout } from "./idleGridLayout";
 import "./tpsHover.css";
 
 /**
@@ -50,6 +52,10 @@ export default function TpsHover() {
   const [reduce, setReduce] = useState<boolean>(prefersReduce);
   const [mode, setMode] = useState<Mode>("closed");
   const [layout, setLayout] = useState<L.HoverLayout | null>(null);
+  /** 这次打开的是空闲额度格子（P11 §6）还是在跑速度面板。由 Rust 的 `tpshover-open` payload `mode` 定。 */
+  const [idleLay, setIdleLay] = useState<IdleLayout | null>(null);
+  const [kind, setKind] = useState<"run" | "idle">("run");
+  const [closeWhy, setCloseWhy] = useState("");
   const [flew, setFlew] = useState(false);
   const [flying, setFlying] = useState<Fly[]>([]);
   const [ex, dispatch] = useReducer(L.expandReduce, L.EXPAND0);
@@ -100,8 +106,8 @@ export default function TpsHover() {
   const clearTimers = () => { timers.current.forEach((t) => window.clearTimeout(t)); timers.current = []; };
 
   // 用 ref 拿事件回调里的最新值（监听只挂一次）
-  const st = useRef({ shown, blocks, layout, reduce });
-  st.current = { shown, blocks, layout, reduce };
+  const st = useRef({ shown, blocks, layout, reduce, kind });
+  st.current = { shown, blocks, layout, reduce, kind };
 
   const startOpen = useCallback((raw: unknown) => {
     clearTimers();
@@ -109,9 +115,13 @@ export default function TpsHover() {
     const red = prefersReduce();
     setReduce(red);
     dispatch({ t: "reset" });
+    const il = parseIdleLayout(raw);
+    setIdleLay(il);
+    setKind(il ? "idle" : "run");
+    setMode("open");
+    if (il) { goRef.current = null; setFlying([]); setFlew(false); return; }
     const lay = L.parseLayout(raw);
     setLayout(lay);
-    setMode("open");
     // 落点按「全部折叠」算（打开时展开态清零）
     const cur = st.current.shown;
     const pl0 = L.layoutPanel(cur.map((s) => ({ multi: isMulti(s.row), open: false, nSess: s.row.sessions.length, collapsed: s.phase === "collapsing" })));
@@ -129,6 +139,7 @@ export default function TpsHover() {
   const startClose = useCallback((reason: string) => {
     clearTimers();
     goRef.current = null;
+    setCloseWhy(reason);
     if (reason === "click") {
       // 点击 = Rust 160 ms 后藏窗、走原有菜单栏弹窗（两个独立窗口，没法真的「长成」352）：这里只快速淡出
       setMode("clicked");
@@ -136,6 +147,7 @@ export default function TpsHover() {
       return;
     }
     setMode("closing");
+    if (st.current.kind === "idle") { setFlying([]); return; }
     const { layout: lay, reduce: red, shown: cur, blocks: bl } = st.current;
     const win = winRef.current;
     if (!lay || red || !win) { setFlying([]); return; }
@@ -180,6 +192,8 @@ export default function TpsHover() {
   const modeRef = useRef(mode);
   modeRef.current = mode;
   useEffect(() => {
+    // 空闲额度格子自己报高度（`IdleGrid`）
+    if (kind === "idle") { lastH.current = null; return; }
     const h = pl.height;
     if (lastH.current === h) return;
     if (resizeT.current != null) window.clearTimeout(resizeT.current);
@@ -194,10 +208,10 @@ export default function TpsHover() {
     };
     const d = L.resizeDelay(lastH.current, h, reduce);
     if (d === 0) send(); else resizeT.current = window.setTimeout(send, d);
-  }, [pl.height, reduce]);
+  }, [pl.height, reduce, kind]);
 
   const isDark = theme === "dark";
-  const isOpen = mode === "open";
+  const isOpen = mode === "open" && kind === "run";
   // 没有一行能展开 ⇒ 箭头列整列让出来（`.hv-nochev`），logo 落点跟着变（`LOGO_X_NOCHEV`）
   const chev = shown.some((s) => isMulti(s.row));
   const shellTr = reduce ? "opacity 150ms"
@@ -309,6 +323,7 @@ export default function TpsHover() {
           <a href="#" className="hv-link" data-hover-link onClick={openLink}>请求页 →</a>
         </div>
       </div>
+      <IdleGrid mode={kind === "idle" ? mode : "closed"} active={kind === "idle"} flyBack={closeWhy !== "idle"} layout={idleLay} isDark={isDark} reduce={reduce} />
       {flying.map((f) => (
         <img key={f.key} className="hv-fly" data-hover-fly={f.key} alt="" draggable={false}
              src={logoSrc(f.key as PlatformKey, isDark)} width={L.PILL_LOGO} height={L.PILL_LOGO}

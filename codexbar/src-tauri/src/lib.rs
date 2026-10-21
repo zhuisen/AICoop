@@ -17,6 +17,7 @@ mod notch;
 mod activity;
 /// 托盘胶囊（page 1 定稿 D）：纯版面 + 动画 + NSImage 绘制。
 mod tray_pill;
+mod tray_idle;
 /// 托盘胶囊的悬停面板窗口 `tpshover`（page 2）。
 #[cfg(target_os = "macos")]
 mod tps_hover;
@@ -803,6 +804,37 @@ async fn claude_otel(action: String) -> Result<String, String> {
 #[tauri::command]
 fn set_tps_tray(app: AppHandle, enabled: bool) {
     tray_pill::set_enabled(&app, enabled);
+}
+
+/// 空闲托盘（P11）：「空闲时菜单栏 = AI 图标」开关 + 前端算好的 2–3 家 `[{key, remaining, red}]`。
+/// 菜单栏 webview 常驻，数据或设置一变就重发（`hooks/useIdleTray.ts`）。关 ⇒ 回文字标题。
+#[tauri::command]
+fn set_idle_tray(app: AppHandle, enabled: bool, slots: Value, cells: Option<usize>) {
+    #[cfg(target_os = "macos")]
+    tps_hover::set_idle_cells(cells.unwrap_or(0));
+    #[cfg(not(target_os = "macos"))]
+    let _ = cells;
+    tray_pill::set_idle_tray(&app, enabled, &slots);
+}
+
+/// 设置页「鼠标靠近光晕」「打招呼」（`off` / `daily` / `idle1h`），外加前端记下的「上次打招呼」与
+/// 「上次 AI 活动」（epoch 秒；重启后接上，否则每次重启 / 部署都会再打一次招呼）。
+#[tauri::command]
+fn set_idle_prefs(glow: bool, hello: String, last_hello: Option<f64>, last_active: Option<f64>) {
+    if let Some(e) = last_active { tray_pill::seed_last_active(e); }
+    #[cfg(target_os = "macos")]
+    tps_hover::set_idle_prefs(glow, &hello, last_hello);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (glow, hello, last_hello);
+}
+
+/// 悬停面板里点了一格（空闲额度格子 → 打开该 AI 总览）：收起面板。
+#[tauri::command]
+fn tpshover_dismiss(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    tps_hover::dismiss(&app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 }
 
 /// 悬停面板量出来的自然高度。
@@ -2481,6 +2513,28 @@ fn toggle_menubar(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
 
 // ---- 单实例闸门 ----
 
+/// 旧名 `CodexBar` 的开机自启 plist（autostart 插件按 productName 命名）。只认指向
+/// `CodexBar.app` 可执行文件的那一份 —— 同名但内容不是我们的，不碰。
+fn legacy_autostart_plist(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    let p = home.join("Library/LaunchAgents/CodexBar.plist");
+    let body = fs::read_to_string(&p).ok()?;
+    body.contains("/CodexBar.app/Contents/MacOS/codexbar").then_some(p)
+}
+
+/// 开机自启只迁到**装好的** AICoop（`/Applications` 或 `~/Applications`）。插件把**当前可执行文件**写进新 plist，
+/// 从构建树、`tauri dev`、挂载的 `.dmg` 里跑一次就会让开机自启指向一个临时路径，同时删掉旧的（四方评审 Opus H2）。
+fn autostart_migration_allowed(exe: &std::path::Path, home: &std::path::Path) -> bool {
+    let tail = std::path::Path::new("AICoop.app/Contents/MacOS");
+    let Some(dir) = exe.parent() else { return false };
+    [std::path::PathBuf::from("/Applications"), home.join("Applications")].iter().any(|root| dir == root.join(tail))
+}
+
+/// 新 plist 真的写好了、指着当前可执行文件 —— 核实之后才删旧的（失败时旧的至少还能用）。
+fn new_autostart_ok(home: &std::path::Path, exe: &std::path::Path) -> bool {
+    fs::read_to_string(home.join("Library/LaunchAgents/AICoop.plist"))
+        .map(|b| b.contains(&*exe.to_string_lossy())).unwrap_or(false)
+}
+
 /// 抢占单实例锁。**拿不到就说明已经有一个 CodexBar 在跑,本进程必须立刻退出。**
 ///
 /// 用户 2026-08-11 报「死机重启后会打开两个 CodexBar」。根因是**两条启动路径在开机时并发**:
@@ -2668,6 +2722,28 @@ pub fn run() {
                 }
             }
 
+            // ★ 改名 CodexBar → AICoop（2026-10-21）：autostart 插件按 productName 起 plist 名，
+            //   旧的 `~/Library/LaunchAgents/CodexBar.plist` 指着已不存在的 `/Applications/CodexBar.app`。
+            //   用户开过「开机自启」⇒ 用新名重新启用，再删旧文件；没开过就什么都不做。
+            //   ★ 只在从装好的位置启动时迁（`autostart_migration_allowed`），写完核实新 plist 再删旧的。
+            #[cfg(target_os = "macos")]
+            if let (Some(home), Ok(exe)) = (std::env::var_os("HOME").map(std::path::PathBuf::from), std::env::current_exe()) {
+                if let Some(old) = legacy_autostart_plist(&home) {
+                    if autostart_migration_allowed(&exe, &home) {
+                        use tauri_plugin_autostart::ManagerExt;
+                        match app.autolaunch().enable() {
+                            Ok(()) if new_autostart_ok(&home, &exe) => {
+                                if let Err(e) = fs::remove_file(&old) { log::warn!("autostart migration: old plist not removed: {}", e); }
+                            }
+                            Ok(()) => log::warn!("autostart migration: new plist missing or not ours — kept the old one"),
+                            Err(e) => log::warn!("autostart migration: enable failed: {}", e),
+                        }
+                    } else {
+                        log::info!("autostart migration skipped: running from {} (not an installed AICoop.app)", exe.display());
+                    }
+                }
+            }
+
             // Hide from Dock — LSUIElement alone isn't reliable with Tauri.
             // ★ Both the method and the enum are #[cfg(macos)] in tauri 2.x, so an un-gated call
             //   is a hard compile error on Windows — not a no-op. `apply_activation_policy()`
@@ -2693,7 +2769,7 @@ pub fn run() {
                 "menubar",
                 WebviewUrl::App("menubar.html".into()),
             )
-            .title("CodexBar")
+            .title("AICoop")
             .inner_size(352.0, 580.0)
             .decorations(false)
             // ★ 与主窗同理:`.mb-root` 的 `border-radius: 16px` 一直都在,但窗口不透明时
@@ -2772,7 +2848,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let hover = WebviewWindowBuilder::new(handle, tps_hover::LABEL, WebviewUrl::App("tps-hover.html".into()))
-                    .title("CodexBar t/s")
+                    .title("AICoop t/s")
                     .inner_size(tps_hover::PANEL_W, 240.0)
                     .decorations(false)
                     .transparent(true)
@@ -3000,7 +3076,7 @@ pub fn run() {
             set_notch_hud, notch_status, notch_geometry, notch_panel_height, notch_activity,
             notch_card_resize, notch_layout,
             read_requests, read_live, read_statusline_quota, claude_otel,
-            set_tps_tray, tpshover_resize, tpshover_layout, tray_pill_hide_logos,
+            set_tps_tray, set_idle_tray, set_idle_prefs, tpshover_dismiss, tpshover_resize, tpshover_layout, tray_pill_hide_logos,
             set_main_visible,
             read_auth_tokens,
             read_logs,
@@ -3182,5 +3258,49 @@ mod live_script_tests {
         assert!(run_py_script(&empty, &[]).unwrap_err().contains("printed nothing"));
         let ok = tmp_script("ok.py", "print('{\"v\":1}')\n");
         assert_eq!(run_py_script(&ok, &[]).unwrap(), "{\"v\":1}");
+    }
+}
+
+#[cfg(test)]
+mod legacy_name_tests {
+    use std::fs;
+    #[test]
+    fn legacy_autostart_only_matches_our_old_app() {
+        let d = std::env::temp_dir().join(format!("aicoop_la_{}", std::process::id()));
+        let la = d.join("Library/LaunchAgents");
+        fs::create_dir_all(&la).unwrap();
+        assert!(super::legacy_autostart_plist(&d).is_none(), "no file → None");
+        fs::write(la.join("CodexBar.plist"), "<string>/Applications/Other.app/Contents/MacOS/x</string>").unwrap();
+        assert!(super::legacy_autostart_plist(&d).is_none(), "someone else's plist → untouched");
+        fs::write(la.join("CodexBar.plist"), "<string>/Applications/CodexBar.app/Contents/MacOS/codexbar</string>").unwrap();
+        assert!(super::legacy_autostart_plist(&d).is_some());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn migration_only_from_an_installed_app() {
+        use std::path::Path;
+        let home = Path::new("/Users/x");
+        let ok = |p: &str| super::autostart_migration_allowed(Path::new(p), home);
+        assert!(ok("/Applications/AICoop.app/Contents/MacOS/codexbar"));
+        assert!(ok("/Users/x/Applications/AICoop.app/Contents/MacOS/codexbar"));
+        assert!(!ok("/Users/x/repo/codexbar/src-tauri/target/release/bundle/macos/AICoop.app/Contents/MacOS/codexbar"), "构建树");
+        assert!(!ok("/Users/x/repo/codexbar/src-tauri/target/debug/codexbar"), "tauri dev");
+        assert!(!ok("/Volumes/AICoop/AICoop.app/Contents/MacOS/codexbar"), "挂载的 .dmg");
+        assert!(!ok("/Applications/CodexBar.app/Contents/MacOS/codexbar"), "旧名");
+    }
+
+    #[test]
+    fn old_plist_is_kept_until_the_new_one_points_at_us() {
+        let d = std::env::temp_dir().join(format!("aicoop_la2_{}", std::process::id()));
+        let la = d.join("Library/LaunchAgents");
+        fs::create_dir_all(&la).unwrap();
+        let exe = std::path::Path::new("/Applications/AICoop.app/Contents/MacOS/codexbar");
+        assert!(!super::new_autostart_ok(&d, exe), "没写出来 ⇒ 不删旧的");
+        fs::write(la.join("AICoop.plist"), "<string>/tmp/elsewhere/codexbar</string>").unwrap();
+        assert!(!super::new_autostart_ok(&d, exe), "★ 指着别处 ⇒ 不删旧的");
+        fs::write(la.join("AICoop.plist"), "<string>/Applications/AICoop.app/Contents/MacOS/codexbar</string>").unwrap();
+        assert!(super::new_autostart_ok(&d, exe));
+        let _ = fs::remove_dir_all(&d);
     }
 }

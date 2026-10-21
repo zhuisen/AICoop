@@ -29,7 +29,7 @@ const LIGHT_EXTRA: Record<string, string> = {
   "--ovAb": "#4d5663", "--ovAbLine": "rgba(15,23,42,.14)", "--ovFoot": "rgba(15,23,42,.07)",
   "--ovBtnLine": "rgba(15,23,42,.12)", "--ovGrpLine": "rgba(15,23,42,.10)",
   "--ovTrackBar": "rgba(15,23,42,.05)", "--ovTick": "rgba(15,23,42,.10)",
-  "--ovSwOff": "rgba(15,23,42,.18)", "--ovNum": "#0a7a6e", "--ovNextTx": "#ffffff",
+  "--ovSwOff": "rgba(15,23,42,.18)", "--ovNum": "#0a7a6e", "--ovNextTx": "#062b27",
   "--ovTagOff": "rgba(15,23,42,.06)", "--ovStripLine": "rgba(15,23,42,.16)",
   "--ovMenu": "#ffffff", "--ovMenuShadow": "0 12px 32px rgba(15,23,42,.18)",
   "--ovBdIn": "rgba(14,159,142,.5)", "--ovBdCool": "rgba(183,121,31,.35)", "--ovBdBad": "rgba(229,57,27,.32)",

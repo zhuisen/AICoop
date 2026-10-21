@@ -21,6 +21,7 @@ import { usePlatformPrefs } from "../hooks/usePlatformPrefs";
 import type { TrafficData, PlatformPrefs } from "../traffic";
 import { CACHE_MODES, cacheModeLabel, cacheModeDesc, orderedKeys, fmtTok } from "../traffic";
 import { sourceNotes } from "../scanHealth";
+import { TRAY_KEYS } from "../idleTray";
 import { CLAUDE_OTEL_DESC, claudeOtelLocked, claudeOtelOn, claudeOtelWarn, type ClaudeOtelStatus } from "../claudeOtel";
 
 /** 菜单栏标题样式(用户 2026-08-12 从 demo 里三选一)。索引与 Rust 的 TRAY_STYLE 一一对应。 */
@@ -51,8 +52,21 @@ interface Settings {
   tpsTray: boolean;
   trayStyle: TrayStyle;
   intro: boolean;
-  navOpen: boolean;
   autoRefresh: boolean;
+  /** 空闲托盘（AICoop P11 §7）：空闲时菜单栏画 AI 图标（true）还是原来的文字标题（false）。 */
+  idleIcons: boolean;
+  idleSlots: 2 | 3;
+  idleRankBy: "requests" | "tokens";
+  idleDays: 7 | 14 | 30;
+  /** 固定到菜单栏（最多 2 家，平台 key）。 */
+  idlePinned: string[];
+  idleGlow: boolean;
+  idleHello: "off" | "daily" | "idle1h";
+  /** 悬停面板（P9 S1「悬停面板」组）。样式目前只有「格子 · 精简」。 */
+  idleHoverScope: "used" | "all" | "bar";
+  idleHoverMax: 4 | 8;
+  idleHoverReset: boolean;
+  idleHoverUnconnected: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -66,10 +80,24 @@ const DEFAULTS: Settings = {
   tpsTray: true,             // 「在跑时显示 t/s」默认**开**(交接包 page 1)。关 = 托盘始终是额度标题
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
-  navOpen: false,            // 侧栏默认**折叠**(用户 2026-08-16 指定),展开后带中文名
   autoRefresh: true,         // 后台自动保鲜默认**开**(现有行为)。关掉只停后台心跳,
                              // 「打开页面/弹出托盘就刷新」照旧 —— 见 useTraffic 的 autoRefreshEnabled()
+  idleIcons: true,           // P11 §7 默认「AI 图标」；文字标题四档仍在（选它时 `trayStyle` 生效）
+  idleSlots: 3,
+  idleRankBy: "requests",
+  idleDays: 14,
+  idlePinned: [],
+  idleGlow: true,
+  idleHello: "daily",
+  idleHoverScope: "used",
+  idleHoverMax: 4,
+  idleHoverReset: true,
+  idleHoverUnconnected: false,
 };
+
+/** 空闲托盘设置变了：菜单栏 webview（`useIdleTray`）收到后重读并重发 `set_idle_tray`。localStorage 跨 webview 不推送。 */
+export const IDLE_TRAY_EVENT = "idle-tray-settings";
+const IDLE_NAME: Record<string, string> = { codex: "Codex", claude: "Claude", agy: "Gemini", grok: "Grok", kimi: "Kimi", deepseek: "DeepSeek" };
 
 const KEY = "codexbar_settings";
 
@@ -285,6 +313,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
   const update = (patch: Partial<Settings>) => {
     const next = { ...s, ...patch }; setS(next); save(next);
   };
+  const updIdle = (patch: Partial<Settings>) => { update(patch); void emit(IDLE_TRAY_EVENT).catch(() => {}); };
 
   const { mode: cacheMode, setMode: setCacheMode } = useCacheMode();
   const [confirmQuit, setConfirmQuit] = useState(false);
@@ -326,7 +355,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
                   paddingRight: 4 }}>
       <span style={{ fontSize: 20, fontWeight: 700, marginBottom: 12, flexShrink: 0 }}>设置</span>
 
-      <Row label="开机自启" desc="登录 macOS 时自动启动 CodexBar(后台常驻菜单栏)">
+      <Row label="开机自启" desc="登录 macOS 时自动启动 AICoop(后台常驻菜单栏)">
         <div onClick={toggleAutostart} style={{
           width: 38, height: 22, borderRadius: 11, padding: 2, cursor: autostartBusy ? "default" : "pointer",
           background: autostart ? t.accent : t.barTrack, transition: "background .2s", opacity: autostartBusy ? 0.6 : 1,
@@ -395,9 +424,109 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
       </OneLineRow>
       )}
 
+      {/* ★ 空闲时菜单栏（AICoop P11 / P9 S1「菜单栏与刘海」）。AI 图标 = 空闲托盘（官方 logo，用掉的部分由上往下变灰）；
+          文字标题 = 原来的四档（下面换成「文字标题样式」，托盘 6 行隐藏）。设置改完广播 `IDLE_TRAY_EVENT`：
+          选位与取数在常驻的菜单栏 webview（`useIdleTray`），localStorage 跨 webview 不推送。Windows 托盘没有图，整组不画。 */}
+      {!isWindowsUI() && (
+      <OneLineRow t={t} label="空闲时菜单栏" desc="显示 2–3 家 AI 图标，用掉的额度变灰；在跑时始终是 t/s 胶囊">
+        <div style={{ flexShrink: 0, marginLeft: 12 }} data-idle-icons>
+          <Seg opts={["icons", "text"] as const} cur={s.idleIcons ? "icons" : "text"} t={t}
+               label={(v) => (v === "icons" ? "AI 图标" : "文字标题")}
+               on={(v) => updIdle({ idleIcons: v === "icons" })} />
+        </div>
+      </OneLineRow>
+      )}
+
+      {!isWindowsUI() && s.idleIcons && (<>
+      <OneLineRow t={t} label="菜单栏显示几家" desc="常驻 2 家 + 动态 1 家（24 h 内最近用过）；剩余 < 10% 的插队占动态位，带红点">
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={[2, 3] as const} cur={s.idleSlots} t={t} label={(v) => `${v} 家`} on={(v) => updIdle({ idleSlots: v })} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="排序依据" desc="决定常驻哪 2 家和悬停面板顺序">
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={["requests", "tokens"] as const} cur={s.idleRankBy} t={t}
+               label={(v) => (v === "requests" ? "请求数" : "Token 数")} on={(v) => updIdle({ idleRankBy: v })} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="统计窗口" desc="排名、插队、悬停面板共用；每天 00:00（本机时区）重算">
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={[7, 14, 30] as const} cur={s.idleDays} t={t} label={(v) => `${v} 天`} on={(v) => updIdle({ idleDays: v })} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="固定到菜单栏"
+                  desc={s.idlePinned.length ? `固定的先占常驻位；选第 3 家时挤掉最早固定的` : "不固定 · 按排名自动选常驻 2 家"}>
+        <div data-idle-pin style={{ display: "flex", gap: 2, padding: 2, flexShrink: 0, marginLeft: 12,
+                                     border: `1px solid ${t.ghostBorder}`, borderRadius: 9 }}>
+          {TRAY_KEYS.map((k) => {
+            const on = s.idlePinned.includes(k);
+            return (
+              <span key={k} data-pin={k} data-on={on ? 1 : 0}
+                    onClick={() => updIdle({ idlePinned: on ? s.idlePinned.filter((x) => x !== k) : [...s.idlePinned, k].slice(-2) })}
+                    style={{ padding: "4px 9px", borderRadius: 7, fontSize: 11, whiteSpace: "nowrap", cursor: "pointer",
+                             userSelect: "none", fontWeight: on ? 700 : 400, color: on ? t.accentText : t.muted,
+                             background: on ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
+                {IDLE_NAME[k]}
+              </span>
+            );
+          })}
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="鼠标靠近光晕" desc="鼠标移近托盘时，每个 logo 后亮起平台色光晕">
+        <div data-idle-glow onClick={() => updIdle({ idleGlow: !s.idleGlow })} style={{
+          width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer", flexShrink: 0, marginLeft: 12,
+          background: s.idleGlow ? t.accent : t.barTrack, transition: "background .2s",
+        }}>
+          <div style={{ width: 18, height: 18, borderRadius: 9, background: "#fff", transform: s.idleGlow ? "translateX(16px)" : "translateX(0)", transition: "transform .2s" }} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="打招呼"
+                  desc={`${s.idleHello === "idle1h" ? "空闲 1 小时后第一次靠近托盘时" : "每天第一次靠近托盘时"}，logo 依次轻跳一下；有 AI 在跑或面板开着时跳过`}>
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={["off", "daily", "idle1h"] as const} cur={s.idleHello} t={t}
+               label={(v) => (v === "off" ? "关闭" : v === "daily" ? "每天一次" : "空闲 1 小时后")}
+               on={(v) => updIdle({ idleHello: v })} />
+        </div>
+      </OneLineRow>
+      </>)}
+
+      {/* ★ 悬停面板（P9 S1「悬停面板」组；P11 §6）：空闲时悬停托盘弹出各家剩余额度格子，两种空闲托盘都弹。
+          样式目前只有「格子 · 精简」（「列表 · 全量」未做，不放一个点了没反应的选项）。 */}
+      {!isWindowsUI() && (<>
+      <OneLineRow t={t} label="悬停显示哪些" desc="鼠标移到菜单栏时弹出各家剩余额度；菜单栏里的排最前">
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={["used", "all", "bar"] as const} cur={s.idleHoverScope} t={t}
+               label={(v) => (v === "used" ? "用过的" : v === "all" ? "全部" : "只看菜单栏")} on={(v) => updIdle({ idleHoverScope: v })} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="悬停最多显示" desc="一行 4 家；两行 8 家">
+        <div style={{ flexShrink: 0, marginLeft: 12 }}>
+          <Seg opts={[4, 8] as const} cur={s.idleHoverMax} t={t} label={(v) => (v === 4 ? "4 家 · 一行" : "8 家 · 两行")}
+               on={(v) => updIdle({ idleHoverMax: v })} />
+        </div>
+      </OneLineRow>
+      <OneLineRow t={t} label="悬停细节" desc="格子大数字固定是 5h 额度；按量计费的不写重置时间">
+        <div data-idle-detail style={{ display: "flex", gap: 2, padding: 2, flexShrink: 0, marginLeft: 12,
+                                       border: `1px solid ${t.ghostBorder}`, borderRadius: 9 }}>
+          {([["idleHoverReset", "重置时间"], ["idleHoverUnconnected", "未接入的平台"]] as const).map(([k, lab]) => {
+            const on = s[k];
+            return (
+              <span key={k} data-detail={k} data-on={on ? 1 : 0} onClick={() => updIdle({ [k]: !on })}
+                    style={{ padding: "4px 9px", borderRadius: 7, fontSize: 11, whiteSpace: "nowrap", cursor: "pointer",
+                             userSelect: "none", fontWeight: on ? 700 : 400, color: on ? t.accentText : t.muted,
+                             background: on ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
+                {lab}
+              </span>
+            );
+          })}
+        </div>
+      </OneLineRow>
+      </>)}
+
       {/* ★ 菜单栏标题样式。Rust 侧存在 `TRAY_STYLE`(atomic),这里改完立刻调命令刷标题;
           启动时由 App.tsx 再应用一次 —— 否则重启后 Rust 回到默认 0,设置还显示着别的档。 */}
-      <Row label="菜单栏标题" desc={trayStyleDesc(s.trayStyle)}>
+      {(isWindowsUI() || !s.idleIcons) && (
+      <Row label="文字标题样式" desc={trayStyleDesc(s.trayStyle)}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, marginLeft: 12 }}>
           <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono'", color: t.text2,
                          background: t.isDark ? "#0e1319" : t.cardBg, whiteSpace: "nowrap",
@@ -411,6 +540,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
                }} />
         </div>
       </Row>
+      )}
 
       {/* ★ 在跑时显示 t/s（交接包 page 1 托盘胶囊，默认开）。Rust 的开关是进程内 atomic、默认关，
           所以 App.tsx 每次启动重发一次（同 `set_tray_style`）。关 ⇒ Rust 立刻画回额度标题（`tray_pill::set_enabled`），
@@ -531,7 +661,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
       {/* The tray no longer carries a native menu (both mouse buttons open the popover instead), so
           this is the quit path. Confirm first — with the Dock icon off (the default) a stray click
           here would leave the menu bar empty with no obvious way back. */}
-      <Row label="退出 CodexBar" desc="完全退出(菜单栏图标消失);仅关闭窗口用 ⌘W">
+      <Row label="退出 AICoop" desc="完全退出(菜单栏图标消失);仅关闭窗口用 ⌘W">
         {!confirmQuit ? (
           <span onClick={() => setConfirmQuit(true)} style={{ fontSize: 11.5, fontWeight: 600, color: "#E0524D", border: "1px solid #E0524D40", padding: "6px 13px", borderRadius: 8, cursor: "pointer", userSelect: "none" }}>退出</span>
         ) : (
@@ -908,12 +1038,12 @@ function About({ t }: { t: Theme }) {
 
       <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, marginBottom: 12 }}>关于</div>
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <img src={logo} width={64} height={64} alt="CodexBar"
+        <img src={logo} width={64} height={64} alt="AICoop"
              style={{ borderRadius: 14, flexShrink: 0,
                       boxShadow: "0 4px 16px rgba(0,0,0,.35)" }} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
-            <span style={{ fontSize: 19, fontWeight: 700 }}>CodexBar</span>
+            <span style={{ fontSize: 19, fontWeight: 700 }}>AICoop</span>
             <span style={{ fontSize: 12.5, fontWeight: 700, color: t.accent,
                            fontFamily: "'JetBrains Mono'" }}>{ver ? `v${ver}` : "…"}</span>
           </div>

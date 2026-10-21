@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Build, sign, deploy CodexBar to /Applications.
+# Build, sign, deploy AICoop (formerly CodexBar) to /Applications.
 # Auto-uses "CodexBar Self-Signed" if available (run setup-signing.sh once first).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IDENTITY="CodexBar Self-Signed"
-APP="/Applications/CodexBar.app"
-BUILD="$ROOT/src-tauri/target/release/bundle/macos/CodexBar.app"
+APP="/Applications/AICoop.app"
+BUILD="$ROOT/src-tauri/target/release/bundle/macos/AICoop.app"
+# 改名前的安装位置（2026-10-21 CodexBar → AICoop）。同 bundle id，留着会和新包抢单实例锁。
+LEGACY_APP="/Applications/CodexBar.app"
 
 cd "$ROOT"
 
@@ -31,22 +33,60 @@ npx tauri build --bundles app 2>&1 | tail -3
 # ★ 必须**优雅**退出,不能直接 SIGKILL。窗口尺寸/位置由 tauri-plugin-window-state 保存,而它只在
 #   `CloseRequested` / `RunEvent::Exit` 时写盘 —— `pkill -9` 不给退出处理任何机会,于是
 #   「调好高度 → 跑一次更新 → 尺寸又回默认」,正是这个持久化要解决的问题本身。
+# ★ 预检放在停旧实例**之前**（四方评审 2026-10-21 Opus M8）：等到装完才发现旧包移不走，旧实例已被杀、新包没签名也没启动。
+if [ -d "$LEGACY_APP" ]; then
+    _arch="$HOME/archive/codex-account-rotator/legacy-codexbar-app-$(date +%Y%m%d)"
+    if ! mkdir -p "$_arch" || [ ! -w "$(dirname "$LEGACY_APP")" ] || [ ! -w "$_arch" ]; then
+        echo "🛑 旧的 $LEGACY_APP 移不走（${_arch} 建不了或没有写权限）—— 它和新包同 bundle id，会抢单实例锁。什么都没动，处理后重跑。"
+        exit 1
+    fi
+fi
+
 echo "==> stopping old instance (graceful)"
-osascript -e 'tell application "CodexBar" to quit' 2>/dev/null || true
+# ★ 按**可执行文件路径**找进程（新旧两个安装位置），强杀也只杀这些 PID —— 不用宽泛的 `pkill -f`。
+_ours() { ps -Ao pid=,comm= | awk -v a="$APP/Contents/MacOS/codexbar" -v b="$LEGACY_APP/Contents/MacOS/codexbar" '$2 == a || $2 == b {print $1}'; }
+# ★ 只在真有进程时才发 quit，且按 bundle id 发、带超时（四方评审 Opus M4）：
+#   按 app 名发时，第一次部署（/Applications 里还没有 AICoop）会弹「AICoop 在哪里？」对话框把脚本卡住；
+#   app 卡死时 Apple Event 默认要等 2 分钟。新旧两个名字共用同一个 bundle id，发一次就够。
+if [ -n "$(_ours)" ]; then
+    osascript -e 'with timeout of 5 seconds' -e 'tell application id "com.doushutangmu.codexbar" to quit' -e 'end timeout' 2>/dev/null || true
+fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    pgrep -f "/Applications/CodexBar.app/Contents/MacOS/codexbar" >/dev/null 2>&1 || break
+    [ -z "$(_ours)" ] && break
     sleep 0.3
 done
 # 兜底:优雅退出没成功(比如 app 卡住)才强杀,此时状态确实会丢,但总比装不上强。
-if pgrep -f "/Applications/CodexBar.app/Contents/MacOS/codexbar" >/dev/null 2>&1; then
-    echo "    (graceful quit timed out — force killing; window geometry may reset)"
-    pkill -9 -f "CodexBar" 2>/dev/null || true
+_left="$(_ours)"
+if [ -n "$_left" ]; then
+    echo "    (graceful quit timed out — force killing pid $_left; window geometry may reset)"
+    kill -9 $_left 2>/dev/null || true
     sleep 1
 fi
 
 echo "==> deploying to $APP"
 rm -rf "$APP"
 cp -R "$BUILD" "$APP"
+# 改名后旧包移进归档（不删：它是回滚点）。不移走的话旧的开机自启项会先把它拉起来、抢走单实例锁。
+# ★ 同一天跑两次时目标已存在：`mv` 会失败（或把它塞进已有的包里）—— 换一个不撞的名字，失败就停（四方评审 Opus M3）。
+# ★ 归档后从 LaunchServices 注销：同 bundle id 的另一份留在登记里，`open -b` / 开机恢复可能拉起它。
+LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+if [ -d "$LEGACY_APP" ]; then
+    _dst="$_arch/CodexBar.app"
+    [ -e "$_dst" ] && _dst="$_arch/CodexBar-$(date +%H%M%S).app"
+    if mv "$LEGACY_APP" "$_dst"; then
+        echo "==> moved old $LEGACY_APP → $_dst"
+        "$LSREG" -u "$_dst" 2>/dev/null || true
+    else
+        echo "🛑 没能把旧的 $LEGACY_APP 移走 —— 它和新包同 bundle id，会抢单实例锁。请手动移走后重跑。"
+        exit 1
+    fi
+fi
+# 构建树里改名前的那份旧产物（同 bundle id，可重建）：删掉，免得被 LaunchServices 当成可启动的副本
+_old_build="$ROOT/src-tauri/target/release/bundle/macos/CodexBar.app"
+if [ -d "$_old_build" ]; then
+    "$LSREG" -u "$_old_build" 2>/dev/null || true
+    rm -rf "$_old_build"
+fi
 
 # ⚠️ 不用 `grep -q`：它匹配到就退出，`security` 若还在写会吃 SIGPIPE，pipefail 让整个条件
 #   变成**假** —— 静默落到下面 ad-hoc 那一支，下次启动重新弹 TCC 授权（同 `_running` 那条竞态）。
@@ -90,7 +130,7 @@ elif [ "$(ps -o comm= -p "$_running")" != "$APP/Contents/MacOS/codexbar" ]; then
     echo "   期望: $APP/Contents/MacOS/codexbar"
     echo "   实际: $(ps -o comm= -p "$_running")  (pid $_running)"
     echo "   原因：同 bundle id 的另一个副本先抢到了单实例锁，新装的这份静默退出了。"
-    echo "   处理：先退掉上面那个进程（osascript -e 'tell application \"CodexBar\" to quit'），"
+    echo "   处理：先退掉上面那个进程（kill ${_running}），"
     echo "        再重新 open '$APP'；并考虑把那个陈旧副本移走/改名。"
 fi
 

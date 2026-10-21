@@ -53,7 +53,7 @@ jobs:
         with:
           projectPath: codexbar
           tagName: ${{ github.ref_name }}
-          releaseName: 'CodexBar ${{ github.ref_name }}'
+          releaseName: 'AICoop ${{ github.ref_name }}'
           releaseDraft: true          # 先出草稿,人工核过产物再公开
           # 带连字符的 tag（v1.12.0-beta.1）= 预发布：不标成 Latest；app 内「检查更新」只认三段数字 tag，也不会推给普通用户
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -70,7 +70,7 @@ jobs:
       - name: 安装包脚本冒烟（.dmg 布局）
         if: runner.os == 'macOS'
         run: |
-          APP="$(find codexbar/src-tauri/target -type d -path '*/bundle/macos/CodexBar.app' | head -1)"
-          test -n "$APP" || { echo "找不到构建出的 CodexBar.app"; exit 1; }
+          APP="$(find codexbar/src-tauri/target -type d -path '*/bundle/macos/AICoop.app' | head -1)"
+          test -n "$APP" || { echo "找不到构建出的 AICoop.app"; exit 1; }
           python3 -m pip install --quiet pytest
           CODEXBAR_BUNDLE_SCRIPTS="$APP/Contents/Resources/scripts" python3 -m pytest tests/test_store_root_dmg_layout.py -q -rs

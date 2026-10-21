@@ -83,13 +83,12 @@ VIEWS = [
     #   窗口能被拖到任意窄,于是"小尺寸下排版乱"根本没有一个可以宣称干净的宽度。
     #   实测(D 档字号,2026-08-26):卡宽 ≥240 干净、≤235 页脚内折行 ⇒ 展开 ≥960、折叠 ≥840。
     #   **不扫 900 以下** —— 那已经不是支持范围,报了只会制造永远修不完的噪音。
-    # ★ 两个下限,都是实测:侧栏**展开** ≥960;**折叠** ≥840。字号一改这两个数就要重测。
-    #   差 120px = 侧栏宽度差(176-52)。窗口 <860 时侧栏自动折叠,所以 860 以下必须用折叠态扫。
-    #   `minWidth=740` 就钉在折叠态的下限上 —— 两个数一起改,闸在 test_narrow_window_nowrap.py。
+    # ★ 2026-10-21 起侧栏固定 64px（AICoop P10_Nav，没有展开 / 折叠）。下面两组原来是「展开 / 折叠」两态，
+    #   现在扫的是同一种侧栏、两段宽度；名字保留只为与历史报告对得上。`minWidth` 的闸在 test_narrow_window_nowrap.py。
     # ★ 1120/1080/1040 是**对齐闸的危险区**，不是随手加的采样点：卡片页脚在这一段
     #   「一张折行、另一张不折」，两头（1000 与 1160）都是干净的。只挑整百宽度截图必漏。
-    ("总览·侧栏展开",    "/harness.html?nav=home&rail=open&grok=ok",                  [1200, 1120, 1080, 1040, 1000, 960]),
-    ("总览·侧栏折叠",    "/harness.html?nav=home&grok=ok",                            [940, 900, 860]),
+    ("总览·宽窗",    "/harness.html?nav=home&grok=ok",                  [1200, 1120, 1080, 1040, 1000, 960]),
+    ("总览·窄窗",    "/harness.html?nav=home&grok=ok",                            [940, 900, 860]),
     # ★★ 这一行被改过两次,两次都是因为**它在假装测东西**:
     #    · 2026-08-26:点的是 hero 卡(名字有两份),hero 没有 onSelect ⇒ 动作条不展开 ⇒ 恒绿空测;
     #    · 2026-09-05:`Pro1` 已变成死号 —— 死号只在折叠的「失效账号」区渲染,同样没有 onSelect
@@ -99,34 +98,34 @@ VIEWS = [
     #    序号 1(名字在当前布局里只出现一次,`~2` 那条理由已过时)。
     #    ★ 定这个目标前**正面验过它真的展开**:点击后动作词从 14 处涨到 22 处。
     #      「点中了」≠「展开了」—— 只看 click 不报错,就会退回上面那两种假装。
-    ("总览·动作条",      "/harness.html?nav=home&rail=open&grok=ok&click=" + CLICK_ACC + "~1", [1200, 1000, 960]),
-    ("总览·grok降级",    "/harness.html?nav=home&rail=open&grok=stale",               [1000, 960]),
+    ("总览·动作条",      "/harness.html?nav=home&grok=ok&click=" + CLICK_ACC + "~1", [1200, 1000, 960]),
+    ("总览·grok降级",    "/harness.html?nav=home&grok=stale",               [1000, 960]),
     # ★ agy 卡让总览的格子从 4 张变 5 张 —— 换行位置整个变了,所以这几行不是"再验一遍",
     #   而是验一个**新的**布局。`agy=tight` 让数字进红区(位数与颜色都变),
     #   `agy=noproc` 验"没在跑"仍然显示上次读数且**不染警告色**(它是常态不是故障)。
-    ("总览·agy低额度",   "/harness.html?nav=home&rail=open&grok=ok&agy=tight",        [1200, 1080, 1000, 960]),
-    ("总览·agy没在跑",   "/harness.html?nav=home&rail=open&grok=ok&agy=noproc",       [1000, 960]),
+    ("总览·agy低额度",   "/harness.html?nav=home&grok=ok&agy=tight",        [1200, 1080, 1000, 960]),
+    ("总览·agy没在跑",   "/harness.html?nav=home&grok=ok&agy=noproc",       [1000, 960]),
     ("总览·agy折叠",     "/harness.html?nav=home&grok=ok&agy=tight",                  [940, 900, 860]),
     # ★ `agy=idle`(四桶全满)是唯一会把倒计时渲染成**「未启动」**的 agy 夹具。
     #   `tight`/`noproc` 都走不到那条分支 —— 卡上只取每个窗口**最紧**的桶,而 100% 的桶
     #   永远不是最紧的(`--dump-dom` 实测,2026-09-06)。少了这一行,那个分支的排版没人扫。
-    ("总览·agy未启动",   "/harness.html?nav=home&rail=open&grok=ok&agy=idle",         [1200, 1000, 960]),
+    ("总览·agy未启动",   "/harness.html?nav=home&grok=ok&agy=idle",         [1200, 1000, 960]),
     # ★ 需要 `CODEXBAR_UNPROBED=1` 生成的 harness 才有第 3 个号（见 make_harness 同名夹具）。
     #   没有它时这一行等价于「总览·侧栏展开」,不会假红,只是少测两件事。
-    ("总览·未探测号",    "/harness.html?nav=home&rail=open&grok=ok",                  [1200, 1000, 960]),
+    ("总览·未探测号",    "/harness.html?nav=home&grok=ok",                  [1200, 1000, 960]),
     # ★ 1037 / 913 是**紧凑区列宽的“谷底”**（发版前评审算出来的）：
     #   `auto-fill` 的格宽随窗宽呈锯齿波，谷底处每格只剩 264px、名字仅余 68px，
     #   `Antigravity`（注册表里最长）余量近零。**整百宽度全落在舒适段，只挑整百必漏**。
     #   另：`make_harness.py` 的探针对 `textOverflow: ellipsis` 直接跳过，
     #   所以“名字被截断”这类缺陷**结构上抢不到**，只能靠宽度采样 + 人看。
-    ("用量总览",         "/harness.html?nav=traffic&rail=open",                       [1200, 1037, 1000, 960]),
+    ("用量总览",         "/harness.html?nav=traffic",                       [1200, 1037, 1000, 960]),
     ("用量总览·谷底",     "/harness.html?nav=traffic",                                 [940, 913, 880]),
-    ("平台详情",         "/harness.html?nav=platform:claude&rail=open",               [1200, 1000, 900]),
+    ("平台详情",         "/harness.html?nav=platform:claude",               [1200, 1000, 900]),
     # ★ agy 详情页是唯一有**两本账**的页面（token 图 + 额度消耗条）。它比 claude 那页多一整块，
     #   窄宽下是新的换行风险；而且那块里有「≥」前缀和一段较长的披露文案，都是折行的常见诱因。
-    ("平台详情·agy",     "/harness.html?nav=platform:agy&rail=open",                  [1200, 1000, 900]),
+    ("平台详情·agy",     "/harness.html?nav=platform:agy",                  [1200, 1000, 900]),
     ("平台详情·agy折叠",  "/harness.html?nav=platform:agy",                            [940, 860]),
-    ("设置",            "/harness.html?nav=settings&rail=open",                      [1200, 1000, 900]),
+    ("设置",            "/harness.html?nav=settings",                      [1200, 1000, 900]),
     # ★★ 日志页(2026-09-07 起分两个区)。**这一页此前完全不在 sweep 里** ——
     #   加进来的当天就靠它抓到两处真缺陷:四种角标齐全时账号行溢出 3px、
     #   `billed-unknown`(最长的 kind)在 78px 列里折行。
@@ -134,21 +133,21 @@ VIEWS = [
     #   角标数量由数据决定,拿常态夹具扫等于永远扫不到最挤的那一行。
     # ★ 用 `nav=logs`(按位置点侧栏)而不是 `click=日志`:窗口 <860 时侧栏只剩图标,
     #   文字压根不渲染 ⇒ 命中 0 个 ⇒ 那三档会**静默**扫一个空页面并报干净。
-    ("日志·满角标",      "/harness.html?nav=logs&rail=open&rot=busy",                 [1200, 1000, 960]),
+    ("日志·满角标",      "/harness.html?nav=logs&rot=busy",                 [1200, 1000, 960]),
     ("日志·折叠",        "/harness.html?nav=logs&rot=busy",                           [940, 900, 860]),
     # 诚实度脚注那一行(「N 行旧格式无时间戳、未计入 · 仅统计日志尾部」)最长,单独扫。
-    ("日志·未计入提示",   "/harness.html?nav=logs&rail=open&rot=undated",              [1000, 960]),
+    ("日志·未计入提示",   "/harness.html?nav=logs&rot=undated",              [1000, 960]),
     # ── 中转站（2026-09-09）。★ `nav=relay` 与 `nav=logs` 现在都按 `data-page` 身份点,
     #   不再按位置 —— 插入这一页时才发现按位置点会让日志视图静默扫到中转站页。
-    ("中转站·正常",      "/harness.html?nav=relay&rail=open&relay=relay",             [1200, 1000, 960]),
+    ("中转站·正常",      "/harness.html?nav=relay&relay=relay",             [1200, 1000, 960]),
     ("中转站·折叠",      "/harness.html?nav=relay&relay=relay",                       [940, 860]),
     # `profile_stale` 的文案最长（要把 实际→应为 的漂移原样印出来）,必扫窄档。
-    ("中转站·profile漂移", "/harness.html?nav=relay&rail=open&relay=stale",            [1200, 1000, 960, 860]),
-    ("中转站·profile缺失", "/harness.html?nav=relay&rail=open&relay=missing",          [1000, 960]),
-    ("中转站·路由损坏",   "/harness.html?nav=relay&rail=open&relay=corrupt",           [1000, 960]),
+    ("中转站·profile漂移", "/harness.html?nav=relay&relay=stale",            [1200, 1000, 960, 860]),
+    ("中转站·profile缺失", "/harness.html?nav=relay&relay=missing",          [1000, 960]),
+    ("中转站·路由损坏",   "/harness.html?nav=relay&relay=corrupt",           [1000, 960]),
     # 读不到时全是 `—`,列宽会塌 —— 与有数时是两种排版,都要看。
-    ("中转站·读不到",    "/harness.html?nav=relay&rail=open&relay=never",             [1000, 960]),
-    ("中转站·空",        "/harness.html?nav=relay&rail=open&relay=empty",             [1000]),
+    ("中转站·读不到",    "/harness.html?nav=relay&relay=never",             [1000, 960]),
+    ("中转站·空",        "/harness.html?nav=relay&relay=empty",             [1000]),
     ("菜单栏·账号",      "/harness-menubar.html?w=352&grok=ok",                       [520]),
     ("菜单栏·今日",      "/harness-menubar.html?w=352&tab=today&grok=ok",             [520]),
     ("菜单栏·grok降级",  "/harness-menubar.html?w=352&grok=stale",                    [520]),

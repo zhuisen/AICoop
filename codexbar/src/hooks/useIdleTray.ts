@@ -1,0 +1,200 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
+import { fmtEta, type Account } from "../helpers";
+import type { PlatformPrefs, TrafficData } from "../traffic";
+import { agyShown, agyWinRows, type AgySnapshot } from "../agy";
+import { grokLastGoodRemPct, grokRemPct, type GrokSnapshot } from "../grok";
+import { parseClaudeQuota, type ClaudeQuota, type ClaudeWin } from "../mbLogic";
+import { useAgyPool } from "./useAgyPool";
+import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
+import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
+         type IdlePanelData, type PanelIn } from "../idleTray";
+
+/** Claude 额度转写只在 Claude Code 刷新状态栏时才变，托盘瞄一眼的东西 5 分钟读一次足够（另在托盘弹出时读）。 */
+const CLAUDE_EVERY_MS = 5 * 60_000;
+/** 没有数据变化时也要按时重算：跨午夜重排、24 h 动态位过期。 */
+const TICK_MS = 60_000;
+
+/** 今天冻结的常驻 + 上一次打招呼（epoch 秒）。记进 localStorage：重启 / 部署后不重排、不再打一次招呼。 */
+const FROZEN_KEY = "codexbar_idle_frozen";
+const HELLO_KEY = "codexbar_idle_hello";
+type Frozen = { day: string; keep: string[]; sig: string };
+
+function loadFrozen(): Frozen | null {
+  try {
+    const o = JSON.parse(localStorage.getItem(FROZEN_KEY) ?? "null") as Partial<Frozen> | null;
+    return o && typeof o.day === "string" && typeof o.sig === "string" && Array.isArray(o.keep)
+      ? { day: o.day, sig: o.sig, keep: o.keep.filter((k): k is string => typeof k === "string") } : null;
+  } catch (_e: unknown) { return null; }
+}
+function saveFrozen(f: Frozen): void {
+  try { localStorage.setItem(FROZEN_KEY, JSON.stringify(f)); } catch (_e: unknown) { /* 存不下就只活在本进程 */ }
+}
+function loadHello(): number | null {
+  const v = Number(localStorage.getItem(HELLO_KEY));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * 空闲托盘（AICoop P11）的取数 + 选位，跑在**常驻的菜单栏 webview** 里；结果经 `set_idle_tray` 交给 Rust 画。
+ *
+ * ★ 选位逻辑全在 `idleTray.ts`（零 import，有行为闸）；这里只把各家的数拼成 `IdlePlatform[]`。
+ * ★ 额度只读不取（同刘海）：Codex 用 `useStore` 已有的在用号；agy 读池里当前号；grok / agy 本机读 sidecar + 收推送；
+ *   Claude 读状态栏转写。从不发起联网。读不到 ⇒ `remaining` 为空 ⇒ 整只灰色剪影，绝不当满或空。
+ * ★ 排名每天冻结一次（P11 §2「顺序与稳定」）：跨了本地午夜、空闲、鼠标不在托盘上时才换上新常驻。
+ *   固定 / 位数 / 排序依据 / 统计窗口是用户的动作，改了立刻生效。
+ */
+/** Claude 的一个窗口此刻的剩余：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口 ⇒ 未知（读数 5 分钟才更新一次）。 */
+function claudeRem(w: ClaudeWin | null | undefined, now: number): number | null {
+  if (!w) return null;
+  return !w.idle && w.resetsAt !== null && w.resetsAt * 1000 <= now ? null : w.rem;
+}
+
+export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | null, prefs: PlatformPrefs,
+                            running: boolean): void {
+  const [cfg, setCfg] = useState(getSettings);
+  const [claude, setClaude] = useState<ClaudeQuota | null>(null);
+  const [grok, setGrok] = useState<GrokSnapshot | null>(null);
+  const [agySnap, setAgySnap] = useState<AgySnapshot | null>(null);
+  const [tick, setTick] = useState(0);
+  const near = useRef(false);
+  const frozen = useRef<Frozen | null>(loadFrozen());
+  const agyPool = useAgyPool(false);
+
+  useEffect(() => {
+    const subs = [
+      listen(IDLE_TRAY_EVENT, () => setCfg(getSettings())),
+      listen<boolean>("idle-near", (e) => { near.current = !!e.payload; }),
+      listen<number>("idle-hello", (e) => {
+        try { localStorage.setItem(HELLO_KEY, String(e.payload)); } catch (_e: unknown) { /* 存不下：重启后可能再打一次 */ }
+      }),
+    ];
+    const id = window.setInterval(() => setTick((n) => n + 1), TICK_MS);
+    return () => { window.clearInterval(id); subs.forEach((p) => { void p.then((f) => f()); }); };
+  }, []);
+
+  // 额度：只读本机盘 + 收推送；读不到保留上一份（CLAUDE.md §7.0b）
+  useEffect(() => {
+    const readClaude = () => {
+      invoke<string>("read_statusline_quota").then((raw) => { const q = parseClaudeQuota(raw); if (q) setClaude(q); }).catch(() => {});
+    };
+    const readGrok = () => {
+      invoke<string | null>("read_grok_quota").then((raw) => {
+        if (!raw) return;
+        let d: GrokSnapshot;
+        try { d = JSON.parse(raw) as GrokSnapshot; } catch (_e: unknown) { return; }
+        setGrok((p) => (p && p.fetched_at >= d.fetched_at ? p : d));
+      }).catch(() => {});
+    };
+    const readAgy = () => {
+      invoke<string | null>("read_agy_quota").then((raw) => {
+        if (!raw) return;
+        let d: AgySnapshot;
+        try { d = JSON.parse(raw) as AgySnapshot; } catch (_e: unknown) { return; }
+        setAgySnap((p) => (p && p.fetched_at >= d.fetched_at ? p : d));
+      }).catch(() => {});
+    };
+    readClaude(); readGrok(); readAgy();
+    const id = window.setInterval(readClaude, CLAUDE_EVERY_MS);
+    const subs = [
+      listen("menubar-shown", readClaude),
+      listen("grok-quota-updated", readGrok),
+      listen("agy-quota-updated", readAgy),
+    ];
+    return () => { window.clearInterval(id); subs.forEach((p) => { void p.then((f) => f()); }); };
+  }, []);
+
+  const agyCur = agyPool.accounts.find((a) => a.sub === agyPool.liveSub);
+  const agyView = useMemo(() => {
+    const snap = agyCur ? agyPool.snapshotOf(agyCur, agySnap) : agyPool.accounts.length === 0 ? agySnap : null;
+    return agyShown(snap);
+  }, [agyCur, agyPool.snapshotOf, agyPool.accounts.length, agySnap]);
+  const agyQuota = agyView?.quota ?? null;
+  const agyStale = !!agyView?.stale;
+
+  const platforms = useMemo<PanelIn[]>(() => {
+    const now = Date.now();
+    const live = inUse && inUse.status !== "dead" ? inUse : null;
+    // 大数字固定是 5h：没有 5h 窗口 ⇒ 写 —，不拿周窗口顶替（倒计时也会跟着换了含义）
+    const w5 = live ? live.windows.find((w) => w.mins === 300) : undefined;
+    const c5 = claudeRem(claude?.fiveH, now);
+    const a5 = agyWinRows(agyQuota).find((r) => r.label === "5h");
+    const g = grok?.accounts[0];
+    const gNow = g ? grokRemPct(g) : null;
+    const gRem = g ? gNow ?? grokLastGoodRemPct(g) : null;
+    const rem: Record<string, (number | null)[]> = {
+      codex: live ? live.windows.map((w) => w.pct) : [],
+      claude: [c5, claudeRem(claude?.week, now)],
+      agy: agyWinRows(agyQuota).map((r) => r.remaining),
+      grok: g ? [gRem] : [],
+    };
+    // 面板大数字 = 5h 剩余；grok 只有周窗口 ⇒ 用周。右上角：5h 倒计时（grok 是周）；按量计费（Kimi / DeepSeek）不写
+    const main: Record<string, [number | null, string]> = {
+      codex: [w5?.pct ?? null, w5 ? w5.reset : ""],
+      claude: [c5, c5 === null || !claude?.fiveH ? "" : claude.fiveH.idle ? "未启动" : fmtEta(claude.fiveH.resetsAt ?? undefined)],
+      agy: [a5?.remaining ?? null, a5?.reset_at ? fmtEta(a5.reset_at) : ""],
+      grok: [gRem, g?.quota?.period_end ? fmtEta(g.quota.period_end) : ""],
+    };
+    // 候选 = 托盘认得的六家去掉设置里停用的（停用的已被 `applyPlatformPrefs` 移出快照）。快照里还没有的一家照样是候选：
+    // 用量记 0（不进排名），额度照读 —— 否则「固定」与「全部 + 未接入的平台」对它静默失效。
+    // 这一次没读到、拿的是上一次的读数（agy `last_good` / grok 上一次成功）⇒ 面板上降一级灰
+    const stale: Record<string, boolean> = { agy: agyStale, grok: gNow === null && gRem !== null };
+    return TRAY_KEYS.filter((k) => !!traffic?.platforms[k] || !prefs.by[k]?.off).map((k) => {
+      const [m, r] = main[k] ?? [null, ""];
+      return { key: k, remaining: rem[k] ?? [], ...usageOf(traffic?.platforms[k], cfg.idleDays, now),
+               main: m, reset: cfg.idleHoverReset && r && r !== "—" ? `↻ ${r}` : "", stale: !!stale[k] };
+    });
+  }, [inUse, claude, agyQuota, agyStale, grok, traffic, prefs, cfg.idleDays, cfg.idleHoverReset, tick]);
+
+  const panel = useRef<IdlePanelData | null>(null);
+  useEffect(() => {
+    const un = listen(IDLE_PANEL_WANT, () => { if (panel.current) void emit(IDLE_PANEL_EVENT, panel.current).catch(() => {}); });
+    return () => { void un.then((f) => f()); };
+  }, []);
+
+  const lastTray = useRef("");
+  useEffect(() => {
+    // 快照还没到 ⇒ 什么都不定（Rust 先照旧画文字标题）。在这里定下的「今天的常驻」会是空的，而空数组是真值，
+    // 快照到了也不会再冻结 ⇒ 一整天都按实时排名换位（三方评审 2026-10-21）。
+    if (!traffic) return;
+    const now = Date.now();
+    const sig = JSON.stringify([cfg.idleSlots, cfg.idleRankBy, cfg.idleDays, cfg.idlePinned]);
+    const f = frozen.current;
+    const userChanged = !f || f.sig !== sig;
+    const keep = userChanged || shouldRerank(f.day, now, !running, near.current) ? undefined : f.keep;
+    const slots = pickIdleSlots(platforms, { slots: cfg.idleSlots, rankBy: cfg.idleRankBy, pinned: cfg.idlePinned, now, keep });
+    const resident = slots.filter((s) => s.kind === "resident").map((s) => s.key);
+    // 冻结的常驻只增不换：今天新用了一家、补进了空着的常驻位 ⇒ 记进去（日期不变），之后它也不在白天被挤走
+    if (!keep) { frozen.current = { day: dayKey(now), keep: resident, sig }; saveFrozen(frozen.current); }
+    else if (resident.some((k) => !keep.includes(k))) { frozen.current = { day: f!.day, keep: resident, sig }; saveFrozen(frozen.current); }
+    // 选「文字标题」时托盘里没有 logo ⇒ 面板没有「菜单栏里的那几家」，按排名排；「只看菜单栏」在这时没有对象 ⇒ 按「用过的」
+    const bar = cfg.idleIcons ? slots : [];
+    const scope = !cfg.idleIcons && cfg.idleHoverScope === "bar" ? "used" : cfg.idleHoverScope;
+    const next: IdlePanelData = {
+      cells: panelCells(platforms, bar, { scope, max: cfg.idleHoverMax,
+                                          showUnconnected: cfg.idleHoverUnconnected, rankBy: cfg.idleRankBy }),
+      max: cfg.idleHoverMax,
+    };
+    // 同一份就不再发：Rust 每收一次都会重画一张 NSImage。`cells` = 面板有几格（0 格时 Rust 不弹空面板）
+    const tray = JSON.stringify({ enabled: cfg.idleIcons, slots: trayPayload(slots), cells: next.cells.length });
+    if (tray !== lastTray.current) {
+      lastTray.current = tray;
+      invoke("set_idle_tray", JSON.parse(tray) as Record<string, unknown>).catch(() => { lastTray.current = ""; });
+    }
+    if (JSON.stringify(next) !== JSON.stringify(panel.current)) {
+      panel.current = next;
+      void emit(IDLE_PANEL_EVENT, next).catch(() => {});
+    }
+  }, [platforms, cfg, running, traffic]);
+
+  // 「上次 AI 活动」= 用量快照里最近一次使用（小时桶末尾，只会偏晚 ⇒ 只会少打招呼）。重启后 Rust 靠它接上
+  const lastActive = useMemo(() => {
+    const ts = platforms.map((p) => p.lastUsedAt ?? 0);
+    const m = ts.length ? Math.max(...ts) : 0;
+    return m > 0 ? Math.floor(m / 600_000) * 600 : null;   // 取整到 10 分钟：当前小时内它随 now 走，别每分钟发一次
+  }, [platforms]);
+  useEffect(() => {
+    invoke("set_idle_prefs", { glow: cfg.idleGlow, hello: cfg.idleHello, lastHello: loadHello(), lastActive }).catch(() => {});
+  }, [cfg.idleGlow, cfg.idleHello, lastActive]);
+}

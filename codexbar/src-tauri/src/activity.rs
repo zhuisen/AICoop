@@ -26,6 +26,8 @@ pub const LIVE_HUNG_SECS: u64 = 10;
 /// 订阅者（位掩码）。
 pub const NOTCH: u8 = 1;
 pub const TPS: u8 = 2;
+/// 空闲托盘（P11）：打招呼要「谁在跑」「上次 AI 活动」，关掉 t/s 胶囊时也要。
+pub const IDLE_TRAY: u8 = 4;
 static CONSUMERS: AtomicU8 = AtomicU8::new(0);
 
 /// 正在跑的检测线程领到的号；0 = 没有。★ 新起的一条**直接接管**（store），旧的看到不是自己就退 ——

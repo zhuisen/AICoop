@@ -82,3 +82,36 @@ body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-se
 }
 .cb-hoverwrap:hover .cb-hoverpop { opacity: 1; visibility: visible; }
 @media (prefers-reduced-motion: reduce) { .cb-hoverpop { transition: none; } }
+
+/* ── 主导航（AICoop P10_Nav 方案 A，1:1）──────────────────────────────── */
+.cb-nv { position: relative; z-index: 2; width: 40px; height: 40px; border: 0; border-radius: 10px; background: transparent;
+         display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; flex-shrink: 0;
+         transition: color .15s ease-out; font-family: inherit; }
+.cb-nv + .cb-nv { margin-top: 8px; }
+.cb-nv-ic { display: flex; }
+.cb-nv-ic svg * { transform-box: fill-box; transform-origin: center; transition: transform .24s cubic-bezier(.2,.9,.3,1); }
+/* 柱子从底边长高：原点放在基础规则里 —— 只放在 :hover 里时，移开那一刻原点跳回中心，柱子先往下缩一下 */
+.cb-nv-ic .a-bars { transform-origin: 50% 100%; }
+.cb-nv:focus-visible { outline: 2px solid var(--cb-focus, #2dd4bf); outline-offset: 2px; }
+.cb-nv:hover .a-gear { transform: rotate(60deg); }
+.cb-nv:hover .a-rot { transform: rotate(180deg); }
+.cb-nv:hover .a-bars { transform: scaleY(1.18); }
+.cb-nv:hover .dr2 { transform: translateY(-1.5px); }
+.cb-nv:hover .a-dots circle { transform: scale(1.25); }
+.cb-nv:hover .a-lines .l1 { transform: translateX(1.5px); }
+.cb-nv:hover .a-lines .l2 { transform: translateX(3px); transition-delay: .03s; }
+.cb-nv:hover .a-lines .l3 { transform: translateX(1.5px); transition-delay: .06s; }
+.cb-nv-tip { position: absolute; left: calc(100% + 10px); top: 50%; transform: translate3d(0,-50%,0); padding: 4px 8px;
+             border-radius: 6px; font-size: 11.5px; font-weight: 500; white-space: nowrap;
+             pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.4); z-index: 50; transform-origin: 0 50%;
+             animation: cbNvTipIn .16s cubic-bezier(.2,.9,.3,1); }
+@keyframes cbNvTipIn { from { opacity: 0; transform: translate3d(-4px,-50%,0) scale(.9); } to { opacity: 1; transform: translate3d(0,-50%,0) scale(1); } }
+/* 减弱动态效果：图标不动，提示只淡入。★ 不用 `!important`：它会盖掉热身时内联的 `animation: none`（热身后不该重播）；
+   ★ 淡入的关键帧必须带着 `translate3d(0,-50%,0)`，否则提示框丢了垂直居中、往下偏半个身高（四方评审 Opus L1）。 */
+@media (prefers-reduced-motion: reduce) {
+  .cb-nv-ic svg * { transition: none; }
+  .cb-nv:hover .a-gear, .cb-nv:hover .a-rot, .cb-nv:hover .a-bars, .cb-nv:hover .dr2,
+  .cb-nv:hover .a-dots circle, .cb-nv:hover .a-lines path { transform: none; }
+  .cb-nv-tip { animation-name: cbNvTipFade; animation-timing-function: ease-out; }
+}
+@keyframes cbNvTipFade { from { opacity: 0; transform: translate3d(0,-50%,0); } to { opacity: 1; transform: translate3d(0,-50%,0); } }

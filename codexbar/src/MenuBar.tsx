@@ -25,6 +25,7 @@ import { useGrokQuota } from "./hooks/useGrokQuota";
 import { useAgyQuota } from "./hooks/useAgyQuota";
 import { useClaudeQuota } from "./hooks/useClaudeQuota";
 import { useLive } from "./hooks/useLive";
+import { useIdleTray } from "./hooks/useIdleTray";
 import { runningRows, type PlatformKey } from "./live";
 import { fmtAgo, fmtEta, cardLeftText } from "./helpers";
 import { grokRemPct } from "./grok";
@@ -213,7 +214,7 @@ export default function MenuBar() {
   useDawnProbe();
 
   // 交接稿 §5「弹窗只读缓存,不重复解析」。数据与主窗口共用同一份快照和同一条新鲜度规则。
-  const { data: traffic, cacheMode, prefs, busy: trafficBusy, refresh: refreshTraffic, refreshIfStale } =
+  const { data: traffic, raw: trafficRaw, cacheMode, prefs, busy: trafficBusy, refresh: refreshTraffic, refreshIfStale } =
     useTraffic();
   const today = useMemo(() => todayView(traffic), [traffic]);
   const platColors = useMemo(
@@ -224,6 +225,10 @@ export default function MenuBar() {
   // 在跑条：`read_live` + `tps-live` 推送（与托盘胶囊 / 悬停面板 / 刘海同源同值）。
   const { live } = useLive();
   const running = useMemo(() => runningRows(live), [live]);
+
+  // 空闲托盘（P11）：菜单栏 webview 常驻，由它选 2–3 家交给 Rust 画。Token 数按未重塑的快照算（排名不随缓存口径变）。
+  const inUseAcct = useMemo(() => accounts.find((a) => a.aid === inUseNode), [accounts, inUseNode]);
+  useIdleTray(inUseAcct, trafficRaw, prefs, running.length > 0);
 
   // ★ 托盘弹出时按新鲜度重扫。30s 的阈值比定时器的 2 分钟更紧:用户主动点开就是想看现在的数。
   useEffect(() => {
@@ -500,7 +505,7 @@ export default function MenuBar() {
                     padding: "0 10px 0 14px", flexShrink: 0 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
           <span style={{ color: "var(--acc)" }}><IconBolt /></span>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>CodexBar</span>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>AICoop</span>
           <span data-mb-status={headerRun ? "running" : "idle"}
                 style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12,
                          color: headerRun ? "var(--acc)" : "var(--tx3)", transition: "color 300ms" }}>
