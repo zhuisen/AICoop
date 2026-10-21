@@ -1,15 +1,16 @@
-"""总览卡片「删除」二段确认不许把布局弄乱（用户 2026-10-16 截图：点删除后「取消」折两行、「探针」被挤截断）。
+"""总览卡片「删除」的确认不许把布局弄乱（用户 2026-10-16 截图：点删除后「取消」折两行、「探针」被挤截断）。
 
-## 2026-10-19 换了载体，守的东西没变
+## 2026-10-21 第三次换载体（AICoop P5 §5），守的东西没变
 
-原来确认态挤在卡片的动作条里（320px 宽的卡差 ~80px），修法是确认态整条只剩「删除 X？/ 确认删除 / 取消」。
-交接包 page5 起删除收进底栏 ⋯ 菜单：第一次点只把**那一项的文字**原位换成「再点一次确认删除」，
-5 秒内再点才执行，点菜单外 / Esc 即取消。所以「不乱」的判据跟着换成：
+✗ 2026-10-19 版（⋯ 菜单里那一项原位换成「再点一次确认删除」）已被 P5 取代：
+⋯ → 删除 ⇒ **Alert Dialog**（宽 340，默认焦点在「取消」，Esc / 点背板 = 取消）⇒ 确认后先隐藏、toast 带「撤销」，
+toast 到期才真删（延迟删除另有闸：`test_overview_p5::RenderedInteractions::test_delete_waits_for_the_undo_window`）。
+所以「不乱」的判据跟着换成：
 
-1. 第一次点**不删**（不发命令）—— 不可逆动作必须两步。
-2. 确认态那一项一行、不截断，高度与菜单里其它项相同（菜单不跳）；卡片仍是 148 高。
-3. 确认态旁边**不挨着**「切换 / 探针」：它在菜单里，那两个在底栏，不是同一行。
-4. 关掉菜单再打开，回到「删除这个号」（确认态不残留）。
+1. 点「删除」**不删**（不发命令），只弹确认框 —— 不可逆动作必须两步。
+2. 确认框的标题与两个按钮各一行、不截断；卡片仍是 148 高（确认框是 fixed 浮层，不进卡片）。
+3. 默认焦点在「取消」：连按回车不能删掉一个号。
+4. Esc 关掉确认框，仍不发命令；再开 ⋯ 菜单，删除项还是「删除」。
 
 真 bundle，codex + Gemini 两个池 × 860 / 1200 两档。harness 没起 ⇒ skip（不是绿）。
 """
@@ -29,19 +30,23 @@ ITEM = """() => {
   if (!menu) return null;
   const it = menu.querySelector('[data-ov-mi="remove"]');
   const lines = e => { const tops = new Set();
-    for (const n of e.childNodes) { if (n.nodeType !== 3 || !n.textContent.trim()) continue;
+    const tw = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) { if (!n.textContent.trim()) continue;
       const rg = document.createRange(); rg.selectNodeContents(n);
-      for (const x of rg.getClientRects()) if (x.width > 0) tops.add(Math.round(x.top)); }
-    return tops.size; };
-  const others = [...menu.querySelectorAll('[data-ov-mi]')].filter(e => e !== it).map(e => Math.round(e.getBoundingClientRect().height));
+      const ts = new Set([...rg.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top)));
+      if (ts.size > 1) tops.add(n.textContent.trim()); }
+    return [...tops]; };
+  const dlg = document.querySelector('[data-ov-confirm] [role="alertdialog"]');
+  const btns = dlg ? [...dlg.querySelectorAll('[data-confirm-cancel], [data-confirm-delete]')] : [];
   return { open: menu.hasAttribute('data-open'), text: it ? it.textContent.trim() : null,
-           armed: it ? it.hasAttribute('data-confirm-delete') : false,
-           h: it ? Math.round(it.getBoundingClientRect().height) : null, others,
-           lines: it ? lines(it) : 0, clip: it ? it.scrollWidth > it.clientWidth + 1 : true,
+           dialog: !!dlg, wrapped: dlg ? lines(dlg).filter(t => btns.some(b => b.textContent.includes(t)) || dlg.querySelector('b').textContent.includes(t)) : [],
+           clip: btns.some(b => b.scrollWidth > b.clientWidth + 1),
+           focus: document.activeElement && document.activeElement.hasAttribute('data-confirm-cancel'),
            cardH: Math.round(card.getBoundingClientRect().height),
-           inFooter: !!(it && it.closest('[data-ov-actions]') && !it.closest('[data-ov-menu]')) };
+           inCard: !!(dlg && dlg.closest('[data-aid]')) };
 }"""
-SENT = "(window.__RUN_ROTATE__ || []).filter(a => a[0] === 'remove').length"
+# ★ 两个池各走各的命令：codex `run_rotate`、Gemini `run_agy_rotate` —— 只数前者，Gemini 那一档就恒为 0（空闸）。
+SENT = "[...(window.__RUN_ROTATE__ || []), ...(window.__RUN_AGY__ || [])].filter(a => a[0] === 'remove').length"
 
 
 def _run(prov, w, h):
@@ -64,11 +69,22 @@ def _run(prov, w, h):
         pg.evaluate(remove); pg.wait_for_timeout(250)
         armed = pg.evaluate(ITEM)
         sent_after_first = pg.evaluate(SENT)
+        pg.keyboard.press("Enter"); pg.wait_for_timeout(200)       # 焦点在「取消」⇒ 回车 = 取消
+        after_enter = pg.evaluate(ITEM)
+        pg.evaluate(more); pg.wait_for_timeout(250)
+        pg.evaluate(remove); pg.wait_for_timeout(250)
         pg.keyboard.press("Escape"); pg.wait_for_timeout(200)
+        after_esc = pg.evaluate(ITEM)
         pg.evaluate(more); pg.wait_for_timeout(250)
         reopened = pg.evaluate(ITEM)
+        sent_end = pg.evaluate(SENT)
+        # 已知阳性：真点「删除」、等 toast 到期（3.2 s）⇒ 计数器必须数到 1，否则上面的 0 证明不了任何事
+        pg.evaluate(remove); pg.wait_for_timeout(250)
+        pg.evaluate("document.querySelector('[data-confirm-delete]').click()")
+        pg.mouse.move(5, 5); pg.wait_for_timeout(3800)
+        sent_real = pg.evaluate(SENT)
         br.close()
-    return before, armed, sent_after_first, reopened
+    return before, armed, sent_after_first, after_enter, after_esc, reopened, sent_end, sent_real
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
@@ -80,23 +96,23 @@ class TheDeleteConfirmStaysOnOneRow(unittest.TestCase):
                     r = _run(prov, w, h)
                     if r is None:
                         self.skipTest("harness 3304 没起 —— skip 不是绿")
-                    before, armed, sent, reopened = r
+                    before, armed, sent, after_enter, after_esc, reopened, sent_end, sent_real = r
                     self.assertIsNotNone(before, "★ 第 2 张卡没有 ⋯ 菜单")
                     self.assertTrue(before["open"], "★ ⋯ 没打开")
-                    self.assertIn(before["text"], ("删除这个号", "从池里移除"), "★ 菜单里没有删除项")
-                    self.assertFalse(before["armed"])
-                    self.assertTrue(armed["armed"], "★★ 第一次点没有进入确认态")
-                    self.assertRegex(armed["text"], r"^再点一次确认(删除|移除)$")
-                    self.assertEqual(sent, 0, "★★★ 第一次点就删了 —— 不可逆动作必须两步")
-                    self.assertEqual(armed["lines"], 1, "★★ 确认态折行了")
-                    self.assertFalse(armed["clip"], "★ 确认态被截断")
-                    self.assertTrue(armed["others"], "★ 菜单里没有别的项可比")
-                    self.assertEqual({armed["h"]}, set(armed["others"]), "★★ 确认态那一项与别的项不等高 —— 菜单在跳")
+                    self.assertEqual(before["text"], "删除", "★ 菜单里没有删除项")
+                    self.assertFalse(before["dialog"], "★ 还没点删除就有确认框")
+                    self.assertTrue(armed["dialog"], "★★ 点删除没有弹确认框")
+                    self.assertEqual(sent, 0, "★★★ 点删除就删了 —— 不可逆动作必须两步")
+                    self.assertEqual(armed["wrapped"], [], "★★ 确认框的标题 / 按钮折行了")
+                    self.assertFalse(armed["clip"], "★ 确认框按钮被截断")
+                    self.assertTrue(armed["focus"], "★★ 默认焦点不在「取消」—— 连按回车会删号")
                     self.assertEqual(armed["cardH"], 148, "★★ 卡片高度变了")
-                    self.assertFalse(armed["inFooter"], "★ 确认态跑进了底栏，挨着切换 / 探针")
-                    self.assertFalse(reopened["armed"], "★★ 关掉再开，确认态还残留着")
-                    self.assertIn(reopened["text"], ("删除这个号", "从池里移除"))
-
+                    self.assertFalse(armed["inCard"], "★ 确认框画进了卡片里")
+                    self.assertFalse(after_enter["dialog"], "★ 回车（焦点在取消）没关掉确认框")
+                    self.assertFalse(after_esc["dialog"], "★ Esc 没关掉确认框")
+                    self.assertEqual(sent_end, 0, "★★★ 取消之后还是发了删除命令")
+                    self.assertEqual(reopened["text"], "删除")
+                    self.assertEqual(sent_real, 1, "★ 已知阳性：真确认删除后计数器没数到 —— 上面的「0」没有判别力")
 
 if __name__ == "__main__":
     unittest.main()

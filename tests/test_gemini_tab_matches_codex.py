@@ -31,6 +31,13 @@ def code(p):
 
 
 OV = SRC / "components" / "ov" / "Overview.tsx"
+
+
+def _member(src, head):
+    """`cx` / `gx` 里一个成员的定义：从 `head` 到下一个成员（或注释 / 对象结尾）。P5 评审修复 2026-10-22。"""
+    i = src.index(head)
+    m = re.compile(r"\n    (?:[A-Za-z]+: |//)|\n  };").search(src, i + len(head))
+    return src[i:m.start()]
 OVCARD = SRC / "components" / "ov" / "OvCard.tsx"
 
 
@@ -60,70 +67,80 @@ class TheGeminiCardHasTheSameActionBar(unittest.TestCase):
 
     def test_the_card_has_the_same_hover_footer(self):
         """★ 2026-10-19 改写：「选中后出动作条」换成交接包的「悬停时底栏原位换成操作」——
-        两张卡都把操作交给共用的 `OvCard`（`actions=` + ⋯ 菜单），谁也不自己画一份。"""
+        两张卡都把操作交给共用的 `OvCard`（`actions=` + ⋯ 菜单），谁也不自己画一份。
+        P5（2026-10-21）：⋯ 菜单换成共用的 `CardMenu`（`OvMenu` 删除）。"""
         for f in (CARD, ACC):
             c = code(f)
             with self.subTest(f=f.name):
                 i = c.index("<OvCard ")
-                self.assertIn("actions={actions}", c[i:c.index("/>", c.index("footRight=", i))],
+                self.assertIn("actions={actions}", c[i:c.index("drag={drag} />", i)],
                               "★★ %s 的操作不是交给共用卡片画的" % f.name)
-                self.assertIn("<OvMenu ", c, "★★ %s 没有 ⋯ 菜单" % f.name)
+                self.assertIn("<CardMenu ", c, "★★ %s 没有 ⋯ 菜单" % f.name)
 
     def test_the_action_bar_is_the_same_floating_overlay(self):
-        """★★ 与账号卡**同款浮层**（§5c 页面统一性）。
+        """★★ 与账号卡**同款**（§5c 页面统一性）：默认底栏与操作组在共用 `OvCard` 的**同一个 28 高底栏**里互换。
 
-        ⚠️ 2026-09-21 换代：这条原来断言的是「同排预留一条隐形动作条」——
-          那套机制（`reserveActions` / `visibility:hidden` 占位）是为了让**会长高的**
-          内嵌动作条不把兄弟卡顶歪。用户当天要求「不改变高度，弹出功能按钮」，
-          动作条改成绝对定位的浮层 ⇒ **卡片高度恒定，预留的理由本身消失了**，
-          连代码一起删（本仓：删功能就连组件本体一起删，不留骨架）。
-        ★ 真正的行为闸在 `test_card_uniformity.SelectingACardNeverChangesAnyHeight`
-          （量真实高度）；这里只守「两张卡用的是同一套」。
+        ✗ 2026-10-19 版（`.ov-fdef` / `.ov-fact` 各自 `position:absolute; inset:0` 叠放、换透明度）
+          已被 AICoop P5（2026-10-21）取代：§3.3「条件渲染互换，不是交叉淡化」⇒ CSS 切 `display`，
+          底栏是定高 28 的盒子。行为闸在 `test_overview_5b::CardsAreFixedAndNothingWraps`（悬停前后量真实高度）。
         """
-        # ★ 2026-10-19：`CardActionBar` 浮层随交接包 page5 删除，操作改成「底栏原位换成操作」：
-        #   `.ov-fact` 与事实底栏叠在**同一个 28 高的槽**里（绝对定位），换的是透明度不是布局 ⇒ 卡片仍定高。
-        #   行为闸在 `test_overview_5b::CardsAreFixedAndNothingWraps`（悬停前后量真实高度）。
         ov = code(OVCARD)
+        i = ov.index('<div data-ov-foot=""')
+        foot = ov[i:ov.index("</div>", i)]
+        self.assertIn("height: 28", foot[:foot.index(">")], "★★ 底栏不再定高 —— 悬停会把卡顶高")
         for cls in ("ov-fdef", "ov-fact"):
             with self.subTest(layer=cls):
-                i = ov.index('<div className="%s"' % cls)
-                tag = ov[i:ov.index(">", ov.index("style={{", i))]
-                self.assertIn('position: "absolute", inset: 0', tag, "★★ %s 回到文档流里 —— 悬停会把卡顶高" % cls)
+                self.assertIn('className="%s"' % cls, foot, "★★ %s 不在同一个底栏里" % cls)
+        css = (SRC / "components" / "ov" / "overview.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.ov-card \.ov-fact \{ display: none;", "★★ 操作组默认不是藏起来的")
         for f in (CARD, ACC):
             self.assertNotIn("CardActionBar", code(f), "★ 删掉的浮层又被引用了")
             self.assertNotIn("reserveActions", code(f), "★★ 预留逻辑又回来了 —— 它守的行为已经不存在了")
 
     def test_it_has_switch_rename_and_remove(self):
+        """P5（2026-10-21）：改名从卡片挪进「详情」面板（交接包 §5 名字行可就地改），两档共用一个 `DetailSheet`。"""
         c = code(CARD)
-        for tok, why in (("onRename", "改名"), ("onRemove", "移除"), ("onSwitch", "切换")):
+        for tok, why in (("onShowDetail", "详情（含改名）"), ("onRemove", "移除"), ("onSwitch", "切换")):
             with self.subTest(action=why):
                 self.assertIn(tok, c, f"★★ agy 卡缺「{why}」—— 与 codex 卡不对齐")
+        ov = code(OV)
+        self.assertEqual(ov.count("<DetailSheet "), 2, "★★ 两档的详情不是同一个面板")
+        self.assertEqual(ov.count("onRename={(next) =>"), 2, "★★ 有一档的详情不能改名")
+        self.assertIn("p.agyPool.renameTo(a.label, next)", ov, "★★ Gemini 改名没接 agy-rotate")
+        self.assertIn('["rename", a.aid, next]', ov, "★★ Codex 改名身份不是 aid")
 
     def test_remove_asks_twice(self):
-        """★★★ 移除不可逆。把「确认删除」也压成图标等于让人凭记忆点。"""
-        # ★ 2026-10-19：删除收进 ⋯ 菜单，二段确认由共用的 `OvMenu` 做（第一次点只换文字，再点才执行）。
-        #   判据仍打在**分支条件**和**按钮做什么**上，不是「有没有确认两个字」。行为闸在
-        #   `test_delete_confirm_one_row`（真 bundle、两池：第一次点零命令）。
-        c = code(CARD)
-        self.assertIn('{ key: "remove", label: "从池里移除", bad: true, confirm: "再点一次确认移除", onClick: onRemove', c,
-                      "★★★ agy 卡的移除没挂二段确认")
-        m = code(OVCARD)
-        self.assertIn("if (it.confirm && arm !== it.key) { setArm(it.key); return; }", m,
-                      "★★★ 第一次点就执行了 —— 不可逆操作一键就走")
-        self.assertIn('{ key: "remove", label: "删除这个号"', code(ACC), "★ 账号卡的删除不在 ⋯ 里")
+        """★★★ 移除不可逆。
+
+        ✗ 2026-10-19 版（⋯ 菜单里「再点一次确认」）已被 AICoop P5（2026-10-21）取代：
+          ⋯ → 删除 ⇒ Alert Dialog（默认焦点在「取消」）⇒ 确认后先隐藏、toast 带「撤销」，**toast 到期才真删**。
+          行为闸在 `test_overview_p5::RenderedInteractions::test_delete_waits_for_the_undo_window`。
+        """
+        for f in (CARD, ACC):
+            with self.subTest(f=f.name):
+                self.assertRegex(code(f), r'\{ key: "remove", label: "删除", icon: <IcTrash />, bad: true, onClick: onRemove \}',
+                                 "★★★ %s 的删除不在 ⋯ 里" % f.name)
+        ov = code(OV)
+        self.assertEqual(ov.count("remove: (a: "), 2, "★★ 两档的删除不是同一条路")
+        self.assertEqual(ov.count("setConfirmDel({ id: a."), 2, "★★★ 有一档的删除没先弹确认")
+        self.assertIn("onConfirm={() => { const c = confirmDel; setConfirmDel(null); c.go(); }}", ov,
+                      "★★★ 确认框的「删除」没走延迟删除")
 
     def test_rename_does_not_submit_on_blur(self):
-        """★ 与账号卡同一条：`onBlur` 一律放弃，不静默提交。"""
-        c = code(CARD)
-        i = c.index("onBlur")
-        self.assertIn("setEditing(null)", c[i:i + 80], "★ onBlur 静默提交了")
+        """★ 与账号卡同一条：失焦不静默提交（P5：改名框在详情面板的名字行里，只有 ✓ / Enter 才提交）。"""
+        c = code(SRC / "components" / "ov" / "OvLayers.tsx")
+        i = c.index("function NameRow(")
+        body = c[i:c.index("\n}\n", i)]
+        self.assertIn("data-ov-rename", body, "★ 已知阳性：没找到改名框")
+        self.assertNotIn("onBlur", body, "★ 失焦会提交改名")
 
     def test_the_rename_box_swallows_the_shortcut_keys(self):
         """★★ 全局 ⌘1~⌘9 是切号快捷键，输入框不拦的话打数字会切号
         （账号卡那边踩过一次）。"""
-        c = code(CARD)
-        i = c.index("onKeyDown")
-        self.assertIn("stopPropagation", c[i:i + 120], "★★ 在改名框里打数字会切号")
+        c = code(SRC / "components" / "ov" / "OvLayers.tsx")
+        i = c.index("data-ov-rename")
+        j = c.index("onKeyDown", i)
+        self.assertIn("e.stopPropagation()", c[j:j + 60], "★★ 在改名框里打数字会切号")
 
 
 class TheThingsDeliberatelyLeftOut(unittest.TestCase):
@@ -140,7 +157,12 @@ class TheThingsDeliberatelyLeftOut(unittest.TestCase):
         改写后守的是真正的那条：**Gemini 档绝不能去跑 codex 的那条命令。**
         """
         b = gemini_block()
-        self.assertIn("agyPool.probe(", b, "★★ Gemini 档没有自己的探针")
+        # P5 评审修复 2026-10-22：头部按钮经计费在途锁 `gx.probeAll()`；它的定义才是真发命令的地方，两处都验
+        self.assertIn("gx.probeAll()", b, "★★ Gemini 档没有自己的探针")
+        self.assertNotIn("cx.probeAll", b, "★★★ Gemini 档调了 codex 的全池探针")
+        d = _member(code(OV), 'probeAll: () => withBilled("agy:*"')
+        self.assertIn("agyPool.probe(", d, "★★ gx.probeAll 没有走 agyPool.probe()")
+        b = b + d
         for bad in ('"probe-all"', '["probe", "--all"]', 'run("probe'):
             with self.subTest(token=bad):
                 self.assertNotIn(bad, b,

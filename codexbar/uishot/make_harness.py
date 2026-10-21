@@ -157,6 +157,11 @@ STUB = """
       var q3 = STATE.slots[ids[2]].quota || {};
       if (q3.primary) q3.primary.used_percent = 94; else if (q3.secondary) q3.secondary.used_percent = 94;
     }
+    // `?ovdead=1` 一个不在用的活号凭证失效（`auth_dead`）—— P5 起「失效」折叠条是总览唯一的折叠条，真夹具里常常一个失效号都没有
+    if (p.get('ovdead') === '1' && ids.length > 3) {
+      var dd = ids.slice().reverse().filter(function (a) { return a !== STATE.active && a !== STATE.last_aid; })[0];
+      if (dd) { STATE.slots[dd].auth_dead = true; STATE.slots[dd].auth_dead_at = now - 3600; }
+    }
     if (p.get('anon') === '1') {
       var labels = Object.keys(STATE.slots || {}).map(function (a) { return STATE.slots[a].label || a; }).sort();
       labels.forEach(function (l, i) { ANON[l] = '号' + String.fromCharCode(65 + i); });
@@ -985,6 +990,8 @@ function relayEntry() {
         //    于是「现读回来之前 `liveSub` 是什么」这个中间态窄到采不着 ——
         //    而 2026-09-14 用户报的「切档跳来跳去」**整个就发生在那个窗口里**。
         //    同 `?snap_delay=`：打桩同步给 = 按设计绕开竞态 = 看不见任何竞态缺陷。
+        // ★ 记下每次调用（同 `__RUN_ROTATE__`）：交互闸要能数「Gemini 档点了删除之后到底发没发 remove」。
+        (window.__RUN_AGY__ = window.__RUN_AGY__ || []).push(args.args || []);
         var _agyD = parseInt(p.get('agy_delay') || '0', 10);
         var _later = function (v) {
           if (!_agyD) return Promise.resolve(v);
@@ -1277,6 +1284,28 @@ function relayEntry() {
         if (_a[0] === 'borrow') {
           if (_a[1] === '--off') STATE.borrow_off = true; else delete STATE.borrow_off;
         }
+        // 置顶 / 停轮换也真改 STATE：总览的置顶分区、FLIP 换位、「不轮换」标签要走真链路才验得到（P5）。
+        if (_a[0] === 'pin') {
+          var byLabel = {}; Object.keys(STATE.slots).forEach(function (k) { byLabel[STATE.slots[k].label] = k; });
+          var cur = (STATE.pinned || []).slice();
+          if (_a[1] === '--add') { var ad = byLabel[_a[2]]; if (ad && cur.indexOf(ad) < 0) cur.push(ad); }
+          else if (_a[1] === '--remove') { var rm = byLabel[_a[2]]; cur = cur.filter(function (x) { return x !== rm; }); }
+          else if (_a[1] === '--clear') cur = [];
+          else cur = _a.slice(1).map(function (l) { return byLabel[l]; }).filter(Boolean);
+          if (cur.length) STATE.pinned = cur; else delete STATE.pinned;
+        }
+        if (_a[0] === 'rotate' && STATE.slots[_a[1]]) {
+          if (_a[2] === '--off') STATE.slots[_a[1]].rotate_off = true; else delete STATE.slots[_a[1]].rotate_off;
+        }
+        // `remove <aid|label>` 真删夹具里的号：延迟删除提交之后，`read_state` 回来就不该再有它（P5 删除闸要验这一步）
+        if (_a[0] === 'remove') {
+          var rk = STATE.slots[_a[1]] ? _a[1] : Object.keys(STATE.slots).filter(function (k) { return STATE.slots[k].label === _a[1]; })[0];
+          if (rk) delete STATE.slots[rk];
+        }
+        // `?probe_delay=<ms>`：探针晚点回来（真机一次 3–30 s）—— 在途锁的闸要在「还没回来」那段时间里连点
+        if (_a[0] === 'probe' && p.get('probe_delay')) {
+          return new Promise(function (res) { setTimeout(function () { res('probe ok'); }, parseInt(p.get('probe_delay'), 10)); });
+        }
         if (_a[0] === 'priority' && _a[1] === '--set') {
           var want = _a.slice(2);
           var byLabel = {};
@@ -1297,6 +1326,17 @@ function relayEntry() {
         return Promise.resolve(Object.fromEntries(Object.keys(STATE.slots).map(function (k) {
           return [k, { exp: Math.floor(Date.now() / 1000) + 7 * 86400 }];
         })));
+      // 总览详情 Sheet 下半的技术信息。`?nodetail=1` 验「读不到」那一态（不能永远停在「正在读…」）。
+      case 'read_account_detail': {
+        if (p.get('nodetail') === '1') return Promise.reject('harness: no detail');
+        var sl = STATE.slots[args && args.aid] || {};
+        return Promise.resolve({ account_id: 'user-HARNESSabcdef', email: sl.email, label: sl.label, plan: sl.plan || 'plus',
+          sub_until: '2026-11-15T00:00:00Z', sub_checked: '2026-10-15T00:00:00Z', last_refresh: '2026-10-21T09:00:00Z',
+          file: (args && args.aid) + '.json', access_token_tail: 'abcd1234', access_token_len: 1820,
+          access_exp: Math.floor(Date.now() / 1000) + 86400, access_iat: Math.floor(Date.now() / 1000) - 3600,
+          refresh_token_tail: 'wxyz9876', refresh_token_len: 64, id_token_len: 1300, quota_source: 'usage-api',
+          quota_captured_at: Math.floor(Date.now() / 1000) - 120 });
+      }
       // ★★ 构建号 `B`（`vX.Y.Z+B`）。**不打桩就是假绿**：落到 default 返回 null ⇒
       //   `fullVersion()` 的 catch 接住 ⇒ 版本退回纯 `X.Y.Z` ⇒ 截图里**永远看不到 `+B`**，
       //   而页面照常渲染、零报错。这正是本仓反复记的「打桩缺口 ⇒ 零渲染看着像通过」。

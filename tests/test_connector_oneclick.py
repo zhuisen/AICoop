@@ -152,10 +152,11 @@ class AnAccountOutOfRotationSaysSoOnTheOverview(unittest.TestCase):
         code = _code(CARD)
         ov = _code(CARD.parent / "ov" / "Overview.tsx")
         tag = _code(CARD.parent / "ov" / "OvCard.tsx")
-        self.assertIn("off: !a.rotates", ov, "★★★ 停用状态不是由 `rotates` 驱动的 —— 它会和真实状态分叉")
-        self.assertIn(': state === "off" ? { text: "已停用", kind: "off" as const }', code)
-        self.assertIn('{!a.rotates && state === "inuse" && <OvTag tag={{ text: "已停用", kind: "off" }}', code,
-                      "★★ 在用但停了轮换的号没说出「已停用」")
+        # P5（2026-10-21）：停轮换的号留在主网格，标签换成「不轮换」（覆盖原状态标签，含在用号）+ 名称行 ⊘ 角标。
+        self.assertIn("const off = !a.rotates && state !== \"dead\";", code, "★★★ 停用状态不是由 `rotates` 驱动的 —— 它会和真实状态分叉")
+        self.assertIn('const tag = off ? { text: "不轮换", kind: "off" as const }', code,
+                      "★★ 停了轮换的号（含在用号）没说出「不轮换」")
+        self.assertIn("off={off}", code[code.index("<OvCard "):], "★ 卡片外壳不知道它停了轮换（62% 透明那条）")
         self.assertIn('data-rotate-off={tag.kind === "off" ? "" : undefined}', tag, "★ 角标没有可供闸定位的标记")
 
     def test_it_is_amber_not_red(self):

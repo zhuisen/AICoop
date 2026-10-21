@@ -117,8 +117,11 @@ class TheCardsRenderFromTheOrderedList(unittest.TestCase):
             and not l.strip().startswith("/*"))
 
     def test_the_cards_render_from_the_same_list(self):
-        self.assertIn("grid = grid0(codexShown.map((a, i) => codexCard(a, i, true)))", self.code,
+        # ★ P5（2026-10-21）：网格分「置顶 / 其余」两区，两区都从排序后的 `codexShown` 切出来。
+        self.assertIn("grid = grid0(sections(codexPinned, codexRest, (a, i) => codexCard(a, i, true)))", self.code,
                       "★★ 卡片没走排序后的列表 —— 拖完不生效")
+        self.assertIn("const codexRest = codexShown.filter(", self.code, "★★ 「其余」区没从排序后的列表切出来")
+        self.assertIn("const codexPinned = codexShown.filter(", self.code, "★★ 「置顶」区没从排序后的列表切出来")
         self.assertIn("const codexShown = p.preview ? applyOrder(codexSorted, p.preview", self.code,
                       "★★ 拖动中的预览顺序没接进网格")
         self.assertRegex(self.code, r"const codexSorted = ovSort\(cMain,[\s\S]{0,200}codexMode === \"custom\" \? savedCodex : null\)",
@@ -141,8 +144,9 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
         cls.app = "\n".join(l for l in app.splitlines() if not l.strip().startswith(("//", "*", "/*")))
 
     def test_gemini_cards_render_from_the_ordered_list(self):
-        self.assertIn("agyShownList.map((a, i) => agyCard(a, i, true))", self.code,
+        self.assertIn("sections(agyPinned, agyRest, (a, i) => agyCard(a, i, true))", self.code,
                       "★ Gemini 卡片没走排序后的列表")
+        self.assertIn("const agyRest = agyShownList.filter(", self.code, "★ Gemini「其余」区没从排序后的列表切出来")
 
     def test_grok_gets_no_handle(self):
         """单卡档不给手柄。判据：GrokCard 的调用点不传 `drag`。"""
@@ -165,7 +169,8 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
         #   2026-10-19 前这里只读 `pick_order` ⇒ 拖完写进了 `card_order`，重开 app 又按旧顺序画。
         self.assertIn('const savedCodex = p.state.card_order ?? p.state.pick_order', self.code,
                       "★★★ codex 档没从 state.json 读顺序 —— 会与代理分叉")
-        self.assertIn('p.setAgyOrder(next)', self.code, "★ gemini 档的拖拽没写顺序")
+        # ★ P5：拖拽只排「其余」区，写回时把置顶的号接在后面（顺序表里不能丢号）。
+        self.assertIn('p.setAgyOrder([...next, ...agyPinned.map((x) => x.sub)])', self.code, "★ gemini 档的拖拽没写顺序")
         self.assertIn('setAgyOrder={(ids) => setOrderFor("gemini", ids)}', self.app,
                       "★ gemini 档仍该留在 localStorage")
         self.assertNotIn('setOrderFor("codex"', self.app,
@@ -392,7 +397,8 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 #:    （能拖，但位置不变）。
 _PROBE_JS = r"""
 const out = {};
-const cards = () => [...document.querySelectorAll('[data-cards-grid] > div[data-aid]')];
+// ★ 只取可拖的「其余」区（置顶卡不参与拖拽，P5 2026-10-21）
+const cards = () => [...document.querySelectorAll('[data-cards-grid] > div[data-aid]:not([data-ov-pinned])')];
 const ids = () => cards().map(d => d.dataset.aid);
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const pe = (t, el, x, y) => el.dispatchEvent(new PointerEvent(t, {
@@ -560,7 +566,8 @@ class DraggingOneCardActuallyMovesIt(unittest.TestCase):
 _THRESHOLD_JS = r"""
 const out = {};
 const wait = ms => new Promise(r => setTimeout(r, ms));
-const cards = () => [...document.querySelectorAll('[data-cards-grid] > div[data-aid]')];
+// ★ 只取可拖的「其余」区（置顶卡不参与拖拽，P5 2026-10-21）
+const cards = () => [...document.querySelectorAll('[data-cards-grid] > div[data-aid]:not([data-ov-pinned])')];
 const pe = (t, el, x, y) => el.dispatchEvent(new PointerEvent(t, {
   bubbles: true, cancelable: true, pointerId: 1, isPrimary: true,
   button: 0, buttons: 1, clientX: x, clientY: y }));

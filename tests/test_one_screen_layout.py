@@ -48,7 +48,8 @@ CARDS_JS = """() => {
   let sc = g.parentElement;
   while (sc && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement;
   const top = sc.getBoundingClientRect().top;
-  const rs = [...g.children].map(c => c.getBoundingClientRect());
+  // P5（2026-10-21）：网格里还有「置顶 / 其余」两条区段标签（整行），只量卡片
+  const rs = [...g.children].filter(c => c.hasAttribute('data-aid')).map(c => c.getBoundingClientRect());
   const rowBottoms = [...new Set(rs.map(r => Math.round(r.bottom - top)))].sort((a, b) => a - b);
   const root = document.querySelector('.ov-root');
   return {n: rs.length, h: Math.round(rs[0].height), visible: sc.clientHeight, oy: getComputedStyle(sc).overflowY,

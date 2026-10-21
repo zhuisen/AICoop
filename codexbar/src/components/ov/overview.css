@@ -11,23 +11,101 @@
 .ov-card {
   box-sizing: border-box; height: 148px; display: flex; flex-direction: column; justify-content: space-between;
   padding: 12px 14px 4px; border-radius: 12px; background: var(--ovCard); border: 1px solid var(--line);
-  min-width: 0; position: relative; outline: none;
-  transition: background 160ms, border-color 160ms;
+  min-width: 0; position: relative; outline: none; container-type: inline-size;
+  transition: background-color 160ms, border-color 160ms, opacity 200ms;
 }
 .ov-card:hover, .ov-card.ov-hov, .ov-card:focus-within, .ov-card.ov-menu-open {
-  background: var(--ovCardH) !important; border-color: var(--ovLineH) !important;
+  background: var(--ovCardH) !important; border-color: var(--ovLineH); z-index: 10;
 }
-.ov-card .ov-fdef { transition: opacity 140ms, transform 220ms var(--sp); }
-.ov-card .ov-fact {
-  opacity: 0; transform: translateY(6px); pointer-events: none;
-  transition: opacity 160ms, transform 260ms var(--sp);
-}
-.ov-card:hover .ov-fdef, .ov-card.ov-hov .ov-fdef, .ov-card:focus-within .ov-fdef, .ov-card.ov-menu-open .ov-fdef {
-  opacity: 0; transform: translateY(-6px);
-}
+/* 停了自动轮换：整卡 62%，悬停 / 菜单开着时回到 1（P5 §2.1） */
+.ov-card.ov-off { opacity: .62; }
+.ov-card.ov-off:hover, .ov-card.ov-off.ov-hov, .ov-card.ov-off:focus-within, .ov-card.ov-off.ov-menu-open { opacity: 1; }
+/* 底栏：默认 ↔ 悬停是换着显示（不是交叉淡化），悬停那组 inUp .16s 入场 */
+@keyframes ovInUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ov-card .ov-fact { display: none; align-items: center; gap: 5px; flex-shrink: 0; min-width: 0; }
+.ov-card:hover .ov-fdef, .ov-card.ov-hov .ov-fdef, .ov-card:focus-within .ov-fdef, .ov-card.ov-menu-open .ov-fdef { display: none !important; }
 .ov-card:hover .ov-fact, .ov-card.ov-hov .ov-fact, .ov-card:focus-within .ov-fact, .ov-card.ov-menu-open .ov-fact {
-  opacity: 1; transform: none; pointer-events: auto;
+  display: inline-flex; animation: ovInUp .16s cubic-bezier(.2,.9,.25,1);
 }
+/* 环比 / 最优：悬停时整个消失，给图钉让位（无过渡） */
+.ov-card:hover .ov-delta, .ov-card.ov-hov .ov-delta, .ov-card:focus-within .ov-delta, .ov-card.ov-menu-open .ov-delta { display: none; }
+
+/* 琥珀 `--ovAmb`：深色 = 稿子的 #fbbf24；浅色白底上 #fbbf24 只有 1.57:1（实测），换深一档（`ovVars.ts`）。 */
+/* 名称行角标 `.mk`：图钉（置顶常亮 / 未置顶悬停才出幽灵）· ⊘ 停轮换 */
+.ov-mk { height: 20px; min-width: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+  gap: 3px; padding: 0 5px; box-sizing: border-box; font-family: 'JetBrains Mono', monospace; font-size: 11px; cursor: pointer;
+  flex-shrink: 0; user-select: none; }
+.ov-mk:hover { filter: brightness(1.25); }
+.ov-mk-pin { background: rgba(45,212,191,.14); color: var(--ovNum); }
+.ov-mk-ghost { background: rgba(255,255,255,.05); color: var(--tx3); display: none; }
+.ov-card:hover .ov-mk-ghost, .ov-card.ov-hov .ov-mk-ghost, .ov-card:focus-within .ov-mk-ghost, .ov-card.ov-menu-open .ov-mk-ghost { display: inline-flex; }
+.ov-mk-rot { background: rgba(251,191,36,.14); color: var(--ovAmb); }
+
+/* 图标按钮 `.ib`（24×22） */
+.ov-ib { position: relative; width: 24px; height: 22px; border-radius: 6px; border: 1px solid var(--ovAbLine); box-sizing: border-box;
+  background: transparent; display: inline-flex; align-items: center; justify-content: center; color: var(--ovAb);
+  cursor: pointer; flex-shrink: 0; user-select: none; transition: background-color .12s ease-out; }
+.ov-ib:hover { background: var(--hov2); }
+.ov-ib.ov-ib-warn { color: var(--ovAmb); border-color: rgba(251,191,36,.35); }
+.ov-ib.ov-ib-warnOn { color: var(--ovAmb); border-color: rgba(251,191,36,.45); background: rgba(251,191,36,.12); }
+.ov-ib.ov-ib-dim { opacity: .35; cursor: default; }
+.ov-ib.ov-ib-dim:hover { background: transparent; }
+@keyframes ovSpin { to { transform: rotate(360deg); } }
+.ov-spin { display: block; width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%;
+  border: 2px solid rgba(251,191,36,.3); border-top-color: var(--ovAmb); animation: ovSpin .8s linear infinite; }
+/* 卡宽 < 240：底栏 ⚡ 让位给 ··· 菜单首项（P5 §3.5）。★ 容器查询量的是**内容宽**（外框 − 左右 padding 28 − 边框 2），
+   所以外框 240 对应这里的 210 —— 写成 239 时 1200 宽下的 266 卡（内容 236）也被藏了，实测踩到。 */
+.ov-mi-narrow { display: none !important; }
+@container (width < 210px) {
+  .ov-ib-probe { display: none !important; }
+  .ov-mi-narrow { display: flex !important; }
+}
+
+/* 「在用」：同一个位置、禁用、青字青边 */
+.ov-ab.ov-abc { cursor: default; color: var(--ovNum); border-color: rgba(45,212,191,.35); background: rgba(45,212,191,.12); font-weight: 600; }
+
+/* 精简提示 `.tp`（热身：`.ov-tp-inst` 不播入场） */
+@keyframes ovTipIn { from { opacity: 0; transform: translateX(-50%) translateY(4px) scale(.7); } }
+.ov-tp { position: absolute; left: 50%; bottom: calc(100% + 7px); transform: translateX(-50%); padding: 4px 8px; border-radius: 6px;
+  background: #eef2f7; color: #0e1117; font-size: 11px; font-weight: 500; box-shadow: 0 6px 18px rgba(0,0,0,.4); z-index: 30;
+  pointer-events: none; white-space: nowrap; animation: ovTipIn .26s cubic-bezier(.3,1.35,.5,1); }
+.ov-tp.ov-tp-inst { animation: none; }
+
+/* ··· 菜单（P5 §5.1）：底栏下方弹出，可越出卡片；放不下时朝上 */
+@keyframes ovDdIn { from { opacity: 0; transform: scale(.96); } }
+.ov-cmenu { position: absolute; right: 0; top: 26px; width: 124px; padding: 4px; box-sizing: border-box; border-radius: 10px;
+  background: var(--ovMenu); box-shadow: 0 0 0 1px var(--line2), var(--ovMenuShadow); z-index: 20;
+  transform-origin: 100% 0; animation: ovDdIn .14s cubic-bezier(.2,.9,.3,1); display: flex; flex-direction: column; }
+.ov-cmenu.ov-cmenu-up { top: auto; bottom: 26px; transform-origin: 100% 100%; }
+.ov-cmenu:not([data-open]) { display: none; }
+.ov-cmenu .ov-mi { position: relative; z-index: 1; height: 30px; padding: 0 10px; font-size: 12.5px; color: var(--tx); gap: 8px; }
+.ov-cmenu .ov-mi:hover { background: transparent; }
+.ov-cmenu .ov-mi.ov-mi-bad { color: var(--badTx); }
+.ov-cmenu .ov-mi.ov-mi-warn { color: var(--ovWarnTx); }
+.ov-mi-ic { width: 14px; display: inline-flex; justify-content: center; flex-shrink: 0; }
+.ov-cm-hl { position: absolute; left: 4px; right: 4px; top: 4px; height: 30px; border-radius: 6px; background: var(--hov2); pointer-events: none; }
+
+/* 用卡成功的扫光（.7 s，A/B 交替以便重播） */
+@keyframes ovShineA { to { transform: translate3d(320%,0,0) skewX(-18deg); } }
+@keyframes ovShineB { to { transform: translate3d(320%,0,0) skewX(-18deg); } }
+.ov-shine { position: absolute; top: 0; bottom: 0; left: 0; width: 34%; will-change: transform;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.16), rgba(255,255,255,0));
+  transform: translate3d(-120%,0,0) skewX(-18deg); }
+.ov-shine-a { animation: ovShineA .7s cubic-bezier(.4,0,.2,1) both; }
+.ov-shine-b { animation: ovShineB .7s cubic-bezier(.4,0,.2,1) both; }
+
+/* 状态标签 Swapping Text */
+.ov-tag { transition: width .24s cubic-bezier(.2,.9,.3,1), background-color .24s ease-out; }
+.ov-swl { will-change: transform, opacity; }
+@keyframes ovSwOutA { to { opacity: 0; transform: translate3d(0,-100%,0); } }
+@keyframes ovSwOutB { to { opacity: 0; transform: translate3d(0,-100%,0); } }
+@keyframes ovSwInA { from { opacity: 0; transform: translate3d(0,100%,0); } }
+@keyframes ovSwInB { from { opacity: 0; transform: translate3d(0,100%,0); } }
+.ov-sw-out-a { animation: ovSwOutA .2s ease-in both; }
+.ov-sw-out-b { animation: ovSwOutB .2s ease-in both; }
+.ov-sw-in-a { animation: ovSwInA .26s cubic-bezier(.2,.9,.3,1) both; }
+.ov-sw-in-b { animation: ovSwInB .26s cubic-bezier(.2,.9,.3,1) both; }
+
 /* 拖拽手柄：只在悬停时出现（与底栏操作同一个触发），拖动中一直可见。 */
 .ov-card .ov-drag { opacity: 0; transition: opacity 140ms; }
 .ov-card:hover .ov-drag, .ov-card.ov-hov .ov-drag, .ov-card:focus-within .ov-drag, .ov-card.ov-dragging .ov-drag { opacity: 1; }
@@ -98,9 +176,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ov-root .ov-pg { animation: none; }
-  .ov-card, .ov-card .ov-fdef, .ov-card .ov-fact, .ov-fold, .ov-fold .ov-fold-grid, .ov-strip .ov-chev,
+  .ov-card, .ov-fold, .ov-fold .ov-fold-grid, .ov-strip .ov-chev, .ov-tag, .ov-bar, .ov-cm-hl,
   .ov-sw, .ov-sw > i { transition-duration: 0s !important; transition-delay: 0s !important; }
-  .ov-card .ov-fdef, .ov-card .ov-fact { transform: none !important; }
+  /* README §3.5：减弱动态效果时一律只淡入淡出 —— 不缩放、不滑动、不扫光 */
+  .ov-card .ov-fact, .ov-tp, .ov-cmenu, .ov-swl, .ov-shine, [data-flip] { animation: none !important; }
+  .ov-shine { display: none; }
 }
 
 /* 「快到期」堆叠警告（`ExpiryStack.tsx`）：收着 = 琥珀角标 + 身后两层纸；悬停 = 条目从叠着的位置依次展开。 */
@@ -129,4 +209,69 @@
 .ov-xs:hover .ov-xs-it, .ov-xs:focus-within .ov-xs-it, .ov-xs.ov-xs-on .ov-xs-it { transform: none; }
 @media (prefers-reduced-motion: reduce) {
   .ov-xs-pop, .ov-xs-it { transition-duration: 0s !important; transition-delay: 0s !important; }
+}
+
+/* 重置卡 chip（P5 §3.2）：悬停只缩字不挪位 */
+.ov-chip { height: 20px; border-radius: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; box-sizing: border-box;
+  font-size: 11px; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; cursor: pointer; user-select: none;
+  border: 1px solid transparent; flex-shrink: 0; transition: box-shadow .12s ease-out; }
+.ov-chip:hover { box-shadow: 0 0 0 3px rgba(45,212,191,.18); }
+.ov-chip-ok { background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.35); color: var(--ovNum); }
+.ov-chip-warn { background: rgba(251,191,36,.1); border-color: rgba(251,191,36,.5); color: var(--ovWarnTx); }
+.ov-chip-open { background: rgba(251,191,36,.16); border-color: rgba(251,191,36,.5); color: var(--ovWarnTx); }
+.ov-chip-none { background: transparent; border-color: var(--line2); color: var(--tx3); cursor: default; }
+.ov-chip-none:hover { box-shadow: none; }
+.ov-chip .ov-chip-short { display: none; }
+@container (width < 226px) { .ov-chip-warn .ov-chip-word, .ov-chip-open .ov-chip-word { display: none; } }
+.ov-card:hover .ov-chip .ov-chip-long, .ov-card.ov-hov .ov-chip .ov-chip-long, .ov-card:focus-within .ov-chip .ov-chip-long,
+.ov-card.ov-menu-open .ov-chip .ov-chip-long { display: none; }
+.ov-card:hover .ov-chip .ov-chip-short, .ov-card.ov-hov .ov-chip .ov-chip-short, .ov-card:focus-within .ov-chip .ov-chip-short,
+.ov-card.ov-menu-open .ov-chip .ov-chip-short { display: inline; }
+
+/* 用重置卡弹层（P5 §6）：卡片水平居中、向上弹；放不下朝下 */
+.ov-credit { position: absolute; left: 50%; margin-left: -133px; bottom: 30px; width: 266px; padding: 12px; box-sizing: border-box;
+  border-radius: 12px; background: var(--ovMenu); box-shadow: 0 0 0 1px var(--line2), 0 16px 40px rgba(0,0,0,.55); z-index: 20;
+  display: flex; flex-direction: column; gap: 8px; transform-origin: 50% 100%; animation: ovDdIn .12s cubic-bezier(.2,.9,.3,1);
+  font-family: 'Space Grotesk', sans-serif; cursor: default; }
+.ov-credit.ov-credit-down { bottom: auto; top: 30px; transform-origin: 50% 0; }
+.ov-credit:not([data-open]) { display: none; }
+.ov-credit-row { position: relative; z-index: 1; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: transparent; color: var(--tx); font: inherit; font-size: 12.5px; display: flex; align-items: center; gap: 8px; cursor: pointer;
+  text-align: left; }
+.ov-credit-sel { position: absolute; left: 0; right: 0; top: 0; height: 32px; border-radius: 8px; border: 1px solid rgba(45,212,191,.5);
+  background: rgba(45,212,191,.08); box-sizing: border-box; pointer-events: none; transition: transform .16s cubic-bezier(.2,.9,.3,1); }
+.ov-radio { width: 14px; height: 14px; border-radius: 7px; box-shadow: inset 0 0 0 1.5px rgba(127,127,127,.5); display: inline-flex;
+  align-items: center; justify-content: center; flex-shrink: 0; transition: box-shadow .14s; }
+.ov-radio > i { width: 8px; height: 8px; border-radius: 4px; background: #2dd4bf; transform: scale(0); transition: transform .14s cubic-bezier(.2,.9,.3,1); }
+.ov-radio[data-on] { box-shadow: inset 0 0 0 1.5px #2dd4bf; }
+.ov-radio[data-on] > i { transform: scale(1); }
+.ov-dbtn { height: 28px; padding: 0 12px; border-radius: 7px; display: inline-flex; align-items: center; font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--line2); color: var(--tx); user-select: none; box-sizing: border-box; }
+.ov-dbtn:hover { background: var(--hov2); }
+.ov-dbtn-amber { background: #fbbf24; border-color: #fbbf24; color: #2a1d00; font-weight: 700; }
+.ov-dbtn-amber:hover { background: #fcd34d; }
+.ov-dbtn-red { background: #e5484d; border-color: #e5484d; color: #fff; font-weight: 600; }
+.ov-dbtn-red:hover { background: #ec5d61; }
+.ov-dbtn-pri { background: #2dd4bf; border-color: #2dd4bf; color: #062b27; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) {
+  .ov-credit, .ov-credit-sel, .ov-radio, .ov-radio > i { animation: none !important; transition-duration: 0s !important; }
+}
+
+/* Sheet / 删除确认 / ⌘K 的入场（P5 §5.2 / §5.3 / §8） */
+@keyframes ovPopIn { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+@keyframes ovDlgIn { from { opacity: 0; transform: translate(-50%,-50%) scale(.95); } }
+@keyframes ovKIn { from { opacity: 0; transform: translate3d(-50%,-4px,0) scale(.98); } }
+.ov-pop { animation: ovPopIn .16s ease-out; }
+.ov-dlg { animation: ovDlgIn .16s cubic-bezier(.2,.9,.3,1); }
+.ov-kpal { animation: ovKIn .14s cubic-bezier(.2,.9,.3,1); }
+/* ⌘K chip（标题「总览」旁） */
+.ov-kchip { height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line2); background: transparent; color: var(--tx3);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0;
+  box-sizing: border-box; user-select: none; }
+.ov-kchip:hover { color: var(--tx); border-color: var(--ovLineH); }
+/* 置顶 / 其余分区标题（网格里占满一行；高 12 + 网格间距 12 = 稿里的 24 标题带） */
+.ov-sec { grid-column: 1 / -1; height: 12px; line-height: 12px; font-size: 12px; padding-left: 2px; margin-bottom: 0; }
+.ov-sec-rest { margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .ov-pop, .ov-dlg, .ov-kpal, .ov-sheet { animation: none !important; transition-duration: 0s !important; }
 }

@@ -34,7 +34,8 @@ MENUBAR = SRC / "MenuBar.tsx"
 #   「可关、按卡身份记忆、单行」三条规则一条不少，只是判据换到了新的落点。
 NOTICE = SRC / "components" / "mb" / "NoticeBar.tsx"
 # 2026-10-19：重置卡角标的本体从 CardBadge 组件并进 AccountCard 的页脚（交接包 page5），悬浮文字随之搬家。
-BADGE = SRC / "components" / "AccountCard.tsx"
+# P5（2026-10-21）：卡上的重置卡角标是 `ov/CreditChip.tsx`（chip + 弹层同一个组件）。
+BADGE = SRC / "components" / "ov" / "CreditChip.tsx"
 HOOK = SRC / "hooks" / "useCardBannerDismiss.ts"
 
 
@@ -169,15 +170,15 @@ class DismissingLosesNoInformation(unittest.TestCase):
         """★ 平时那句是噪音 —— 「披露的寿命跟着它描述的事实走」。"""
         badge = _strip(BADGE.read_text(encoding="utf-8"))
         i = badge.index("/usage")
-        seg = badge[max(0, i - 400):i]
-        self.assertIn("expiring", seg,
-                      "★ 用法没有按「是否快到期」加条件 —— 会一直挂在悬浮里")
+        seg = badge[max(0, i - 120):i]
+        self.assertIn("(warn ? ", seg, "★ 用法没有按「是否快到期」加条件 —— 会一直挂在悬浮里")
+        self.assertIn("const warn = n > 0 && isCardExpiring(a);", badge, "★ warn 不是「快到期」")
 
     def test_the_count_and_expiry_are_on_the_badge(self):
         """★ 张数与到期日也要在角标上（横幅原本也说了这两件）。"""
         badge = _strip(BADGE.read_text(encoding="utf-8"))
-        self.assertIn("a.cards", badge)
-        self.assertIn("cardExp", badge)
+        self.assertIn("const n = a.cards > 0 ? a.cards : 0;", badge)
+        self.assertIn("最早一张到期 ${a.cardExp", badge)
 
 
 class TheBannerIsOneLineNow(unittest.TestCase):

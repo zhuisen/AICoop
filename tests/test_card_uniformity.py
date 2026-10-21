@@ -99,7 +99,9 @@ const heights = () => cards().map(c => Math.round(c.getBoundingClientRect().heig
 //   `:hover`，`--dump-dom` 下窗口没焦点、`focus()` 也激活不了 `:focus-within` ⇒ 直接挂上 harness 用的
 //   `ov-hov` 类（与 `:hover` 同一条 CSS 规则）。这只验排版与显隐，不验 `:hover` 触发本身。
 const click = i => cards().forEach((c, j) => c.classList.toggle('ov-hov', j === i));
-const shown = () => [...document.querySelectorAll('[data-ov-actions]')].filter(e => +getComputedStyle(e).opacity > 0.5);
+// ★ P5（2026-10-21）：底栏是 `display` 互换（交接包 §3.3「条件渲染互换，不是交叉淡化」），没显示的那组 opacity 仍是 1 ⇒ 按 display 判。
+//   入场动画 `ovInUp` 在 `--virtual-time-budget` 下不一定推进（停在 opacity 0），所以只看 display。
+const shown = () => [...document.querySelectorAll('[data-ov-actions]')].filter(e => getComputedStyle(e).display !== 'none');
 
 (async () => {
   try {
@@ -116,6 +118,7 @@ const shown = () => [...document.querySelectorAll('[data-ov-actions]')].filter(e
     await wait(600); measure('codex-selected');
     out.heights['选中第 1 张'] = heights();
     out.actions = shown().length;
+    out.barAnimation = shown()[0] ? getComputedStyle(shown()[0]).animationName : null;
     // ★ 「换行」的判据是**按钮的 y 坐标出现了两种**，不是 `flexWrap` 写了什么 ——
     //   写 nowrap 却让内容溢出，同样是坏的，而只看属性看不出来。
     const bar = shown()[0];
@@ -310,7 +313,7 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         #   `.ov-root * { white-space: nowrap }` 管文字，flex 容器本身不许 wrap。
         strip = lambda raw: re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
         ov = strip((SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8"))
-        i = ov.index('<div className="ov-fact" data-ov-actions=""')
+        i = ov.index('<span className="ov-fact" data-ov-actions=""')
         self.assertNotIn("flexWrap", ov[i:i + 300], "★ 操作栏允许换行了 —— 保险没了")
         css = (SRC / "components" / "ov" / "overview.css").read_text(encoding="utf-8")
         self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", css, "★ 总览的 nowrap 保险没了")
@@ -363,11 +366,15 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
 
     def test_the_swap_is_animated_not_instant(self):
         """★ 用户 2026-09-21：「弹出动态效果要好看自然贴切 codexbar 风格」。
-        2026-10-19 起是交接包的「底栏原位换成操作」：操作栏淡入并上移 6px（`.ov-fact` 的 transition），
-        旧的 `cbRise` 缩放入场随浮层一起删除。判据是**渲染后真的挂着过渡**，不是源码里写了类名。"""
-        tp = self.r.get("barTransition") or ""
-        self.assertIn("opacity", tp, f"★ 操作栏没有淡入：{tp!r}")
-        self.assertIn("transform", tp, f"★ 操作栏没有上移：{tp!r}")
+        ✗ 2026-10-19 版（`.ov-fact` 的 opacity / transform 过渡）已被 AICoop P5（2026-10-21）取代：
+        §3.3 默认底栏与操作组 `display` 互换，操作组入场 `inUp .16s`（opacity 0 + translateY(4px) → none）。
+        判据是**渲染后那组真的挂着这段动画**，且 keyframes 里真有淡入与上移。"""
+        self.assertEqual(self.r.get("barAnimation"), "ovInUp", f"★ 操作组没有入场动画：{self.r.get('barAnimation')!r}")
+        css = (SRC / "components" / "ov" / "overview.css").read_text(encoding="utf-8")
+        m = re.search(r"@keyframes ovInUp \{([^\n]*)\}", css)
+        self.assertIsNotNone(m, "★ 没有 ovInUp keyframes")
+        self.assertIn("opacity: 0", m.group(1), "★ 入场没有淡入")
+        self.assertIn("translateY(4px)", m.group(1), "★ 入场没有上移")
 
 
 class TheRowMathAndTheGridShareOneNumber(unittest.TestCase):

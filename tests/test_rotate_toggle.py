@@ -183,11 +183,12 @@ class UiIsWiredToTheCli(unittest.TestCase):
     def test_toggle_invokes_the_cli(self):
         # 2026-10-19：卡片网格从 App 搬进 `ov/Overview.tsx`（交接包 page5）。第一处是 codex 卡。
         app = (ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
-        i = app.index("onToggleRotate=")
-        body = app[i:i + 400]
-        self.assertIn('"rotate"', body, "开关没有调 `codex-rotate rotate`")
-        self.assertNotIn("localStorage", body, "开关写了 localStorage —— 真源分叉")
-        self.assertIn("a.aid", body, "传的是 label 不是 aid —— 重名会操作到错的号上")
+        # P5（2026-10-21）：卡片只回调 `cx.rotate(a, on)`，命令在 `cx` 那张处理表里（toast + 撤销都在那儿）。
+        self.assertIn("onToggleRotate={(on) => cx.rotate(a, on)}", app, "codex 卡的开关没接到 cx.rotate")
+        i = app.index("rotate: (a: Account, on: boolean) => ")
+        body = app[i:app.index("\n    ", i + 40)]
+        self.assertIn('["rotate", a.aid, on ? "--on" : "--off"]', body, "开关没有调 `codex-rotate rotate`，或传的是 label 不是 aid —— 重名会操作到错的号上")
+        self.assertNotIn("localStorage", app[i:i + 900], "开关写了 localStorage —— 真源分叉")
 
     def test_command_is_whitelisted(self):
         rs = (ROOT / "codexbar" / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
@@ -199,10 +200,16 @@ class UiIsWiredToTheCli(unittest.TestCase):
         """★ 判据打在 **onClick 传的值**上,不是"`a.rotates` 这个词出现过" ——
         它同时出现在 title 与样式里,把 onClick 改成恒传 `true`(开关只能开不能关)时
         第一版断言照样绿(变异测试抓到)。本仓空守卫六型里的第 ② 型。"""
+        # P5（2026-10-21）：开关是底栏的 ⊘ 图标钮 `RotIb`，点了传「现在是不是停着」= 新的 on 值；
+        #   名称行的 ⊘ 角标只做「恢复」。行为闸在 `test_overview_p5::RenderedInteractions`（停了再恢复）。
         card = (ROOT / "codexbar" / "src" / "components" / "AccountCard.tsx").read_text(encoding="utf-8")
-        i = card.index("onToggleRotate(")
-        self.assertIn("!a.rotates", card[i:i + 60],
+        self.assertIn("const off = !a.rotates && state !== \"dead\";", card, "off 不是由 rotates 取反得来")
+        self.assertIn("<RotIb off={off} onToggle={(wasOff) => onToggleRotate(wasOff)} />", card,
                       "开关没有传当前状态的取反 —— 它会变成单向的,关不掉或开不回来")
+        self.assertIn("<RotMark onRestore={() => onToggleRotate(true)} />", card, "⊘ 角标不是「恢复」")
+        ov = (ROOT / "codexbar" / "src" / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
+        i = ov.index("export function RotIb(")
+        self.assertIn("onClick={() => onToggle?.(off)}", ov[i:i + 500], "RotIb 点了没传「现在停着 ⇒ 恢复」")
 
 
 if __name__ == "__main__":

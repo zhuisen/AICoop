@@ -23,11 +23,13 @@ URL = "http://127.0.0.1:3304/harness.html?nav=home&agypool=3&agyname0=tomyhuohuo
 BADGES = ("在用", "下一个", "只读", "已停用", "冷却中", "ULTRA")
 PROBE = """(badges) => [...document.querySelectorAll('[data-ov-page] [data-ov-card]')].map(card => {
   // 只量文字节点：「在用」带一个 ✓ 图标（svg），它的矩形顶边和字不同，会被误数成第二行。
-  const lines = e => { const tops = new Set();
-    for (const n of e.childNodes) { if (n.nodeType !== 3 || !n.textContent.trim()) continue;
+  // P5（2026-10-21）：标签文字包在换字动画的 `ov-swl` 里（不再是直接子节点）⇒ 逐个文字节点量、取最多的行数。
+  const lines = e => { let most = 0; const tw = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) { if (!n.textContent.trim()) continue;
       const rg = document.createRange(); rg.selectNodeContents(n);
-      for (const x of rg.getClientRects()) if (x.width > 0) tops.add(Math.round(x.top)); }
-    return tops.size; };
+      const tops = new Set([...rg.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top)));
+      most = Math.max(most, tops.size); }
+    return most; };
   const badge = [...card.querySelectorAll('[data-ov-tag]')].filter(e => e.getBoundingClientRect().width > 0)
                      .map(e => ({ t: e.textContent.trim(), lines: lines(e) }));
   const name = card.querySelector('[data-card-name]');

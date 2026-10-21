@@ -19,11 +19,14 @@ def _up():
         return False
 
 
-FOOT_JS = """() => [...document.querySelectorAll('[data-ov-foot] .ov-fdef')].map(f => {
-  const kids = [...f.children];
-  return { n: kids.length, txt: f.innerText,
+# P5（2026-10-21）：重置卡 chip 挪到底栏最右、在默认底栏 `.ov-fdef` **之外**（悬停也不让位）⇒ 量整条底栏：
+#   默认那组的每个子元素 + chip 本身都不许被省略；底栏与默认那组都不许溢出。
+FOOT_JS = """() => [...document.querySelectorAll('[data-ov-foot]')].map(foot => {
+  const f = foot.querySelector('.ov-fdef');
+  const kids = [...f.children, ...foot.querySelectorAll('[data-card-badge]')];
+  return { n: kids.length, txt: foot.innerText,
            cut: kids.filter(k => k.scrollWidth > k.clientWidth + 0.5).map(k => k.innerText),
-           over: f.scrollWidth > f.clientWidth + 0.5 };
+           over: f.scrollWidth > f.clientWidth + 0.5 || foot.scrollWidth > foot.clientWidth + 0.5 };
 })"""
 
 
@@ -53,7 +56,8 @@ class Rendered(unittest.TestCase):
             feet = pg.evaluate(FOOT_JS)
             self.assertGreaterEqual(len(feet), 3, "@%d 卡片没渲染出来 —— 闸此刻没有判别力" % w)
             self.assertTrue(any("到期" in f["txt"] for f in feet), "@%d 没有一张卡写着到期日" % w)
-            self.assertTrue(any("重置卡" in f["txt"] for f in feet), "@%d 没有一张卡带重置卡角标" % w)
+            # 860 宽（内容宽 < 226）下带「· 剩 N天」的 chip 会藏掉「重置卡」三个字，「×N」总在
+            self.assertTrue(any("×" in f["txt"] for f in feet), "@%d 没有一张卡带重置卡 chip" % w)
             for f in feet:
                 self.assertEqual(f["cut"], [], "★★ @%d 底栏被省略：%r" % (w, f["txt"]))
                 self.assertFalse(f["over"], "★★ @%d 底栏溢出：%r" % (w, f["txt"]))

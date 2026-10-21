@@ -82,8 +82,10 @@ export function useCardDrag(gridSelector = "[data-cards-grid]"): {
   /** 提交之后要把内联 transform 清掉（在同一个 layout effect 里，避免看见跳变）。 */
   const needsClear = useRef(false);
 
+  // ★ 置顶卡不参与拖拽（P5：置顶区的顺序 = 置顶先后，`data-ov-pinned`）。槽位必须与调用方传的 `baseIds`
+  //   （只有「其余」区）一一对应 —— 把置顶卡也量进来，序号就整体错位，拖哪张落哪都不对。
   const allCards = useCallback(
-    () => Array.from(document.querySelectorAll<HTMLElement>(`${gridSelector} > div[data-aid]`)),
+    () => Array.from(document.querySelectorAll<HTMLElement>(`${gridSelector} > div[data-aid]:not([data-ov-pinned])`)),
     [gridSelector]);
 
   const measure = useCallback((): Slot[] => allCards().map((el) => {
@@ -172,7 +174,10 @@ export function useCardDrag(gridSelector = "[data-cards-grid]"): {
       // ★ 提交：React 重排 DOM，随后在同一个 layout effect 里清掉 transform（见上）
       needsClear.current = true;
       setPreview(next);
-      void Promise.resolve(commit(next));
+      // 写完真源就撤掉预览：成功时真源已是这个顺序（codex 的 `run` 先 refresh 再返回；Gemini 写 localStorage 是同步的），
+      //   失败（`priority --set` 被拒）时界面回到真源 —— 不能停在一个没存下来的顺序上（评审 codex#7）。
+      //   预览一直挂着还会让 `useFlip` 永远以为在拖（它在预览非空时不播）。
+      void Promise.resolve(commit(next)).finally(() => setPreview((cur) => (cur === next ? null : cur)));
     };
 
     return {

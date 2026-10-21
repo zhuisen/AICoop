@@ -56,7 +56,9 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         """★ 先证明被测文件还是那个文件 —— 组件改名后断言会静默打空。"""
         self.assertIn("inline-flex", self.ghost, "GhostButton:不再是 inline-flex 按钮?")
         self.assertRegex(self.css, r"\.ov-ab \{\s*display: inline-flex", "卡片底栏按钮不再是 inline-flex?")
-        self.assertIn('className="ov-ab ov-abw"', self.probe, "探针不再用底栏按钮的样式?")
+        # P5（2026-10-21）：探针是底栏的图标钮 `IconBtn`（`.ov-ib`），不再是带字的 `.ov-ab`
+        self.assertIn('data="probe" className="ov-ib-probe"', self.probe, "探针不再是底栏的图标钮?")
+        self.assertRegex(self.css, r"\.ov-ib \{[^}]*display: inline-flex", "底栏图标钮不再是 inline-flex?")
         self.assertIn("总览", self.ov)
 
     # ---- ① 原子不断字 --------------------------------------------------------
@@ -116,8 +118,8 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         # 2026-10-19：这些原子都在 `.ov-root` 下，由根规则 `white-space: nowrap` 统一兜住；这里守「它们还在」
         #   且「不会被 flex 压扁」。真折没折由 `test_overview_5b` 在 1200 / 860 实量（文本节点的行数）。
         self.assertIn(".ov-root, .ov-root * { white-space: nowrap; }", self.css)
-        # 2026-10-21 短日期（用户「到期日期挡住了」）：`{shortDate(a.exp, …)} 到期`，完整日期进悬浮
-        self.assertRegex(self.card, r"\{shortDate\(a\.exp, Date\.now\(\)\)\} 到期", "找不到卡片上的「到期」那段 —— 断言可能打空了")
+        # 2026-10-21 短日期（用户「到期日期挡住了」），P5 同日改成稿子的词序 `到期 {shortDate(a.exp, …)}`，完整日期进悬浮
+        self.assertRegex(self.card, r"到期 \{shortDate\(a\.exp, Date\.now\(\)\)\}", "找不到卡片上的「到期」那段 —— 断言可能打空了")
         # ★ 「临时借用」角标：左列收窄后实测被劈成「临时借 / 用」（2026-09-21 截图）。要让的是旁边带省略号的邮箱。
         mb = re.search(r"<span data-runway-borrowed[\s\S]*?>临时借用", self.hero)
         self.assertIsNotNone(mb, "找不到「临时借用」角标 —— 断言可能打空了")
@@ -129,7 +131,7 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         """★ 2026-10-19 **改写**（交接包 page5 §4「窗口变窄」）：头部是**定高 32 的一行**，变窄时
         按钮先去掉文字只留图标、平台档只留 logo + 数字 —— 不再整块换行（原来那条「容器要 flexWrap」作废）。
         守的仍是同一件事：窄窗下不断字、不横向溢出；实量在 `test_overview_5b`（860 宽头部五个动作都在、零折行）。"""
-        self.assertIn('<div data-overview-head="" style={{ display: "flex", alignItems: "center", gap: 12, height: 32, flexShrink: 0, minWidth: 0 }}>',
+        self.assertIn('<div data-overview-head="" style={{ display: "flex", alignItems: "center", gap: 8, height: 32, flexShrink: 0, minWidth: 0 }}>',
                       self.ov, "头部不再是定高的一行")
         self.assertIn("labels={layout.labels}", self.ov, "头部按钮的文字没跟版式走 —— 窄窗只能挤或折")
         tabs = strip_comments((SRC / "components" / "ov" / "OvHeader.tsx").read_text(encoding="utf-8"))

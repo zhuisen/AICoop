@@ -81,3 +81,18 @@ export function reorderByHit(ids: string[], aid: string, slots: SlotRect[],
   if (to < 0 || to >= ids.length) return ids;   // 落在网格空白处 ⇒ 保持现状，不是"回到开头"
   return moveItem(ids, from, to);
 }
+
+/**
+ * 「置顶 / 取消置顶」这一条 toast 的撤销：只逆转**这一步**，作用在撤销那一刻的**当前**顺序上。
+ *
+ * ★ 原来是把动作前的整份顺序覆盖回去（四方评审 2026-10-22 codex#4）：`[A,B]` → 置顶 C → 取消 A →
+ *   撤销「置顶 C」得到 `[A,B]`，把后来那次「取消 A」也一起撤了。
+ * - `wasAt === null`（这一步是置顶）⇒ 从当前顺序里拿掉它。
+ * - `wasAt = k`（这一步是取消置顶，它原来排第 k 个）⇒ 插回第 k 位（当前更短就接在末尾）。
+ */
+export function undoPinStep(current: readonly string[], name: string, wasAt: number | null): string[] {
+  const rest = current.filter((x) => x !== name);
+  if (wasAt === null) return rest;
+  const k = Math.max(0, Math.min(wasAt, rest.length));
+  return [...rest.slice(0, k), name, ...rest.slice(k)];
+}

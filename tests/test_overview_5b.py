@@ -232,7 +232,7 @@ PROBE = r"""() => {
   const cards = [...document.querySelectorAll('[data-ov-card]')].map(c => {
     const a = c.querySelector('[data-ov-actions]'), d = c.querySelector('.ov-fdef');
     return { id: c.dataset.aid, st: c.dataset.ovCard, h: Math.round(c.getBoundingClientRect().height * 10) / 10,
-             off: !!c.closest('[data-cards-off]'), vis: vis(c), act: vis(a), def: vis(d),
+             off: !!c.closest('[data-cards-off]'), offc: c.hasAttribute('data-ov-off'), vis: vis(c), act: vis(a), def: vis(d),
              abs: [...c.querySelectorAll('[data-ov-ab]')].map(e => e.dataset.ovAb) };
   });
   const wrapped = [];
@@ -315,7 +315,8 @@ class CardsAreFixedAndNothingWraps(unittest.TestCase):
             for w in (1200, 1000, 860):
                 with self.subTest(q=q, w=w):
                     d = _dom(q, w)
-                    states = {c["st"] for c in d["cards"]}
+                    # ★ P5（2026-10-21）：停轮换的号留在主网格、`data-ov-off` + 标签「不轮换」，不再是一种 `data-ov-card` 状态。
+                    states = {c["st"] for c in d["cards"]} | ({"off"} if any(c["offc"] and not c["off"] for c in d["cards"]) else set())
                     self.assertTrue(want <= states, "★ 夹具没给出要验的状态 %s（实际 %s）—— 闸没有判别力" % (want, states))
                     hs = {c["h"] for c in d["cards"] if c["vis"]}
                     self.assertTrue(hs, "★★ 一张可见卡片都没有")
@@ -433,9 +434,10 @@ class HoverAndTheDisabledStrip(unittest.TestCase):
         self.assertNotIn("switch", main[0]["abs"], "★★ 在用的那张卡有「切换」")
 
     def test_the_strip_folds_but_stays_in_the_dom(self):
-        closed, opened = _dom("ovplat=codex"), _dom("ovplat=codex&ovoff=1")
-        self.assertEqual([s["open"] for s in closed["strips"] if s["kind"] == "off"], [False])
-        self.assertEqual([s["open"] for s in opened["strips"] if s["kind"] == "off"], [True])
+        # ★ P5（2026-10-21）：停轮换的号回到主网格（标签「不轮换」），折叠条只剩失效号（`kind="dead"`）。
+        closed, opened = _dom("ovplat=codex&ovdead=1"), _dom("ovplat=codex&ovdead=1&ovoff=1")
+        self.assertEqual([s["open"] for s in closed["strips"] if s["kind"] == "dead"], [False])
+        self.assertEqual([s["open"] for s in opened["strips"] if s["kind"] == "dead"], [True])
         off_c = [c for c in closed["cards"] if c["off"]]
         off_o = [c for c in opened["cards"] if c["off"]]
         self.assertTrue(off_c, "★★ 折叠时停用卡离开了 DOM（本仓：折叠用 CSS，不用条件渲染）")

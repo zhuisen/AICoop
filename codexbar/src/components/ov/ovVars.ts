@@ -20,7 +20,7 @@ const DARK_EXTRA: Record<string, string> = {
   "--ovMenu": "#1b2330", "--ovMenuShadow": "0 12px 32px rgba(0,0,0,.5)",
   "--ovBdIn": "rgba(45,212,191,.5)", "--ovBdCool": "rgba(245,181,68,.35)", "--ovBdBad": "rgba(255,77,46,.35)",
   "--ovTagIn": "rgba(45,212,191,.12)", "--ovTagWarn": "rgba(245,181,68,.12)", "--ovTagBest": "rgba(45,212,191,.08)",
-  "--ovB5": "#2dd4bf", "--ovBw": "#22b573", "--ovWarnTx": "#f5b544",
+  "--ovB5": "#2dd4bf", "--ovBw": "#22b573", "--ovWarnTx": "#f5b544", "--ovAmb": "#fbbf24",
 };
 const LIGHT_EXTRA: Record<string, string> = {
   "--ovCard": "#ffffff", "--ovCardH": "#f6f8fb", "--ovLineH": "rgba(15,23,42,.18)",
@@ -37,7 +37,7 @@ const LIGHT_EXTRA: Record<string, string> = {
   "--ovB5": "#0e9f8e", "--ovBw": "#16a34a",
   // ★ 琥珀 / 青**当文字**用时的浅色值：`--warn` #b7791f、`--acc` #0e9f8e 在白卡上只有 3.4 / 3.3
   //   （`tests/test_card_action_bar.py` 实测「探针」3.42 不过 4.5）。图形（环 / 条）仍用原色。
-  "--ovWarnTx": "#8a5a0e",
+  "--ovWarnTx": "#8a5a0e", "--ovAmb": "#9a6512",
 };
 
 export function ovVars(isDark: boolean): Record<string, string> {

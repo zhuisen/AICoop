@@ -237,20 +237,23 @@ export function useAgyPool(enabled: boolean, opts?: {
   busy: boolean;
   err: string | null;
   refresh: () => void;
-  switchTo: (label: string) => void;
+  /** 成功与否（总览的 toast 要分开说）。 */
+  switchTo: (label: string) => Promise<boolean>;
   /** 改显示名。★ 与 codex 同款：label 只是昵称，身份始终是 `sub`。 */
-  renameTo: (label: string, next: string) => void;
-  /** 从池里移除。★ **不可逆** —— 卡片上有两段确认，CLI 侧另有一道拒绝删当值号的守卫。 */
-  removeIt: (label: string) => void;
+  renameTo: (label: string, next: string) => Promise<boolean>;
+  /** 从池里移除。★ **不可逆** —— 总览先弹确认框、再给 3.2 s 撤销窗口才真删；CLI 侧另有一道拒绝删当值号的守卫。 */
+  removeIt: (label: string) => Promise<boolean>;
   /** 逐号验凭证还有效吗。**零消耗**（刷 token + 打 `fetchAvailableModels`）。 */
   health: () => void;
   /** ★★★ **计费探针 —— 花的是 agy 自己的额度**（起一次 `agy -p`，实测约 15k token）。
    *  回答 `health` 回答不了的那个问题：这个号**真的还能干活吗**。 */
   probe: (label?: string) => Promise<AgyProbeResult[] | null>;
   /** 按号开关自动轮换。 */
-  setRotate: (label: string, on: boolean) => void;
+  setRotate: (label: string, on: boolean) => Promise<boolean>;
   /** 置顶 / 取消置顶。 */
-  togglePin: (label: string) => void;
+  togglePin: (label: string) => Promise<boolean>;
+  /** 整份覆盖置顶顺序（撤销「取消置顶」插回原位）；空 = 清空。 */
+  setPins: (labels: string[]) => Promise<boolean>;
   /** 全局自动切号开关。`null` = 还没读到。 */
   autoOn: boolean | null;
   setAuto: (on: boolean) => void;
@@ -507,23 +510,25 @@ export function useAgyPool(enabled: boolean, opts?: {
     return () => { dead = true; un?.(); };
   }, [readPool]);
 
-  const switchTo = useCallback((label: string) => {
+  /** 成功与否都返回（总览的 toast 要分开说「已换到」与「✗ 失败」）。 */
+  const switchTo = useCallback((label: string): Promise<boolean> => {
     setSwitching(label);
-    void invoke<string>("run_agy_rotate", { args: ["switch", label] })
+    return invoke<string>("run_agy_rotate", { args: ["switch", label] })
       .then(() => read(true))
-      .catch((e: unknown) => setErr(String(e).slice(0, 200)))
+      .then(() => true)
+      .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return false; })
       .finally(() => setSwitching(null));
   }, [read]);
 
-  /** `switch` 之外的写操作。都要重读池 —— 改完名字/删完号，卡片得跟着变。 */
-  const runThen = useCallback((args: string[]) => {
-    void invoke<string>("run_agy_rotate", { args })
+  /** `switch` 之外的写操作。都要重读池 —— 改完名字/删完号，卡片得跟着变。返回成功与否。 */
+  const runThen = useCallback((args: string[]): Promise<boolean> =>
+    invoke<string>("run_agy_rotate", { args })
       .then(() => read(true))
       // ★ 写完广播「池变了」：另一个 webview（菜单栏）与两边的续航条据此**只读盘**重读。
       //   收方只读、从不回发 —— 不会成环（`run_agy_rotate` 本身也不 emit）。
       .then(() => emit(POOL_EVT))
-      .catch((e: unknown) => setErr(String(e).slice(0, 200)));
-  }, [read]);
+      .then(() => true)
+      .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return false; }), [read]);
   const renameTo = useCallback((label: string, next: string) =>
     runThen(["rename", label, next]), [runThen]);
   /** 带"正在跑"标记的写操作 —— 探针要 30s+，按钮必须能转圈。 */
@@ -547,11 +552,13 @@ export function useAgyPool(enabled: boolean, opts?: {
     runThen(["rotate", label, on ? "--on" : "--off"]), [runThen]);
   const setAuto = useCallback((on: boolean) => {
     setAutoOn(on);                       // 乐观更新：开关点下去要立刻有反馈
-    runThen(["auto-switch", on ? "--on" : "--off"]);
+    void runThen(["auto-switch", on ? "--on" : "--off"]);
   }, [runThen]);
   const removeIt = useCallback((label: string) => runThen(["remove", label]), [runThen]);
   /** 置顶 / 取消置顶（2026-09-24 与 codex 对齐）。真源在池里 —— wrapper 在 app 没开时也要读。 */
   const togglePin = useCallback((label: string) => runThen(["pin", "--toggle", label]), [runThen]);
+  /** 整份覆盖置顶顺序（撤销「取消置顶」时插回原位用）；空 = 清空。 */
+  const setPins = useCallback((labels: string[]) => runThen(labels.length ? ["pin", ...labels] : ["pin", "--clear"]), [runThen]);
 
   const snapshotOf = useCallback((a: AgyPoolAccount, liveSnap: AgySnapshot | null) => {
     // ★★★ **本机 RPC 那份只在能证明归属时才用。**（2026-09-13 三方评审共同指出）
@@ -568,5 +575,5 @@ export function useAgyPool(enabled: boolean, opts?: {
 
   return { accounts, liveSub, drifted, snapshotOf, busy, err, refresh, switchTo,
            renameTo, removeIt, switching, health, probe, setRotate,
-           autoOn, setAuto, running: runningId, togglePin };
+           autoOn, setAuto, running: runningId, togglePin, setPins };
 }

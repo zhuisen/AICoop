@@ -65,9 +65,10 @@ def _measure():
               if (!card) return null;
               const fact = card.querySelector('[data-ov-actions]');
               const bg = getComputedStyle(card).backgroundColor;
-              const btns = [...fact.querySelectorAll('.ov-ab')].map(b => {
+              // P5（2026-10-21）：底栏 = 一个有字的「切换 / 在用」（`.ov-ab`）+ 三颗图标钮（⚡ / ⊘ / ⋯，`.ov-ib`）。
+              const btns = [...fact.querySelectorAll('.ov-ab, .ov-ib')].map(b => {
                 const cs = getComputedStyle(b);
-                return { t: b.textContent.trim(), cls: b.className, color: cs.color, bg: cs.backgroundColor,
+                return { t: b.textContent.trim(), cls: b.className, icon: b.classList.contains('ov-ib'), color: cs.color, bg: cs.backgroundColor,
                          op: +getComputedStyle(fact).opacity, w: b.getBoundingClientRect().width };
               });
               return { bg, btns, pageBg: getComputedStyle(document.querySelector('.ov-root')).color };
@@ -102,6 +103,19 @@ class TheHoverFooterStaysReadable(unittest.TestCase):
         """★ 新底栏不透明 —— 这是下面「直接拿 computed 颜色算」成立的前提，所以单独守。"""
         for theme in ("dark", "light"):
             self.assertEqual(_rgb(self.r[theme]["bg"])[1], 1.0, "★★ %s 卡片底是半透明的，色值算法不再成立" % theme)
+
+    def test_every_icon_clears_3(self):
+        """P5 的底栏多是图标钮（⚡ 探针 / ⊘ 轮换 / ⋯）：图形对比度 ≥ 3:1（WCAG 1.4.11 非文字）。"""
+        for theme in ("dark", "light"):
+            bg = _rgb(self.r[theme]["bg"])[0]
+            icons = [b for b in self.r[theme]["btns"] if b["icon"]]
+            self.assertGreaterEqual(len(icons), 3, "★★ %s 下图标钮没渲染出来" % theme)
+            for b in icons:
+                with self.subTest(theme=theme, btn=b["cls"]):
+                    fg = _rgb(b["color"])[0]
+                    own, oa = _rgb(b["bg"])
+                    under = own if oa >= .99 else bg
+                    self.assertGreaterEqual(_cr(fg, under), 3.0, "★★ %s 下图标「%s」看不清" % (theme, b["cls"]))
 
     def test_every_label_clears_4_5(self):
         for theme in ("dark", "light"):

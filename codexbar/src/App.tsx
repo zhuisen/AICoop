@@ -4,9 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isWindowsUI } from "./helpers";
 import { THEMES } from "./theme";
-import Toast from "./components/Toast";
-import DetailModal, { type AccountDetail } from "./components/DetailModal";
-import UseCreditDialog from "./components/UseCreditDialog";
+import ToastStack from "./components/ToastStack";
+import type { AccountDetail } from "./components/AccountTech";
 import LogsPage from "./pages/LogsPage";
 import RelayPage from "./pages/RelayPage";
 import TrafficPage from "./pages/TrafficPage";
@@ -45,7 +44,7 @@ const IconEyeOff = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="n
 
 
 export default function App() {
-  const { state, accounts, currentNode, inUseNode, tokens, lastRefreshAt, freshness, loadingAction, toast, refresh, run, showToast } = useStore();
+  const { state, accounts, currentNode, inUseNode, tokens, lastRefreshAt, freshness, loadingAction, toasts, dismissToast, holdToasts, refresh, run, showToast, pendingDel, deferDelete } = useStore();
   // ★ 主题真源 = localStorage `codexbar_theme`（设置页写 + 广播 `theme-changed`；菜单栏弹窗 / 悬停面板读同一个键）。
   const [theme, setTheme] = useState<ThemeName>(loadTheme);
   const changeTheme = (v: ThemeName) => { setTheme(v); saveTheme(v); };
@@ -90,9 +89,6 @@ export default function App() {
   useEffect(() => { savePoolKey(provider); }, [provider]);
 
   const [drill, setDrill] = useState<string | null>(null);   // 平台详情:null = 停在总览
-  const [detailModal, setDetailModal] = useState<AccountDetail | null>(null);
-  // 「使用重置卡」确认弹窗：只存 aid，账号数据每次渲染时从 `accounts` 现取（弹窗开着时数据变了也不会陈旧）。
-  const [creditConfirm, setCreditConfirm] = useState<string | null>(null);
   const [autoSwitch, setAutoSwitch] = useState(() => getSettings().autoSwitchEnabled);
   const { privacy, toggle: togglePrivacy } = usePrivacy();
 
@@ -324,7 +320,7 @@ export default function App() {
               colors={{ codex: colorOf(traffic, "codex"), claude: colorOf(traffic, "claude"),
                         gemini: colorOf(traffic, "agy"), grok: colorOf(traffic, "grok") }}
               state={state} accounts={accounts} inUseNode={inUseNode} currentNode={currentNode}
-              lastRefreshAt={lastRefreshAt} freshness={freshness} loadingAction={loadingAction} run={run} showToast={showToast}
+              lastRefreshAt={lastRefreshAt} freshness={freshness} loadingAction={loadingAction} run={run} showToast={showToast} pendingDel={pendingDel} deferDelete={deferDelete}
               integration={integration} onConnect={() => setPage("settings")}
               board={board} boardErr={boardErr}
               agyPool={agyPool} agyBoard={agyBoard} agyBoardErr={agyBoardErr}
@@ -336,8 +332,8 @@ export default function App() {
               agyOrder={cardOrder["gemini"]} setAgyOrder={(ids) => setOrderFor("gemini", ids)}
               preview={preview} makeDrag={makeDrag}
               platOff={{ agy: !!platPrefs.by?.agy?.off, grok: !!platPrefs.by?.grok?.off }}
-              onShowDetail={(aid) => { invoke<AccountDetail>("read_account_detail", { aid }).then(d => setDetailModal(d)).catch(() => {}); }}
-              onUseCredit={(aid) => setCreditConfirm(aid)}
+              loadDetail={(aid) => invoke<AccountDetail>("read_account_detail", { aid }).catch(() => null)}
+              onNav={(pg) => { setDrill(null); setPage(pg); }}
               onOpenUsage={(pk) => { setDrill(pk); setPage("traffic"); }}
               onLogs={() => setPage("logs")} />
           )}
@@ -358,19 +354,7 @@ export default function App() {
         </div>
       </div>
 
-      {creditConfirm && (() => {
-        const ca = accounts.find((x) => x.aid === creditConfirm);
-        return ca ? (
-          <UseCreditDialog a={ca} t={t} onCancel={() => setCreditConfirm(null)}
-            onConfirm={(cardId) => {
-              setCreditConfirm(null);
-              // ★ 传**弹窗里选中的那张的 id**：用户看到的就是将被用掉的，CLI 不再自己重算「最近」。
-              void run(`usecredit-${ca.aid}`, ["use-credit", ca.node, "--card", cardId], `用重置卡 ${ca.node}`, { resultToast: true });
-            }} />
-        ) : null;
-      })()}
-      {detailModal && <DetailModal detail={detailModal} privacy={privacy} t={t} onClose={() => setDetailModal(null)} />}
-      {toast && <Toast msg={toast} t={t} />}
+      <ToastStack items={toasts} isDark={theme === "dark"} onHold={holdToasts} onDismiss={dismissToast} />
     </div>
   );
 }

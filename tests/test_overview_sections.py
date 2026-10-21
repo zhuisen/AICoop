@@ -33,6 +33,13 @@ def _strip(src):
 # ★ 2026-10-19 总览照交接包 page5 重做：分档、头部动作、三栏、网格全在 `ov/Overview.tsx`，
 #   平台档本体在 `ov/OvHeader.tsx::OvTabs`（ProviderTabs 删除）。守的东西不变，锚点跟着真源走。
 OV = _strip((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8"))
+
+
+def _member(src, head):
+    """`cx` / `gx` 里一个成员的定义：从 `head` 到下一个成员（或注释 / 对象结尾）。P5 评审修复 2026-10-22。"""
+    i = src.index(head)
+    m = re.compile(r"\n    (?:[A-Za-z]+: |//)|\n  };").search(src, i + len(head))
+    return src[i:m.start()]
 TABS = _strip((SRC / "components" / "ov" / "OvHeader.tsx").read_text(encoding="utf-8"))
 # ★ 2026-09-13：平台清单搬到了 `platforms.ts`，主窗分档 Tab 与**菜单栏 logo 芯片行**
 #   共用这一份（菜单栏 v4 稿 §9.1）。判据跟着真源走。
@@ -83,7 +90,10 @@ class TheOverviewIsTabbedByProvider(unittest.TestCase):
         """★★ 计数是「主网格里画出来几张」，不是「池里有几个」。死号 / 停用号在下面的条里，
         算进来就会出现「Codex 7」配着 6 张卡 —— 而那个差额没有任何地方解释。"""
         self.assertIn('name: "Codex", count: cMain.length', OV, "★★ Codex 的计数不是主网格的张数")
-        self.assertIn("grid = grid0(codexShown.map((a, i) => codexCard(a, i, true)));", OV)
+        # P5（2026-10-21）：主网格分「置顶 / 其余」两区，两区合起来 = 排序后的 codexShown（= cMain）。
+        self.assertIn("grid = grid0(sections(codexPinned, codexRest, (a, i) => codexCard(a, i, true)));", OV)
+        self.assertIn("const codexPinned = codexShown.filter((a) => a.pinRank !== null)", OV)
+        self.assertIn("const codexRest = codexShown.filter((a) => a.pinRank === null)", OV, "★★ 两区合起来不等于 codexShown —— 计数与张数对不上")
         self.assertIn("const codexSorted = ovSort(cMain,", OV, "★★ 主网格画的不是 cMain —— 计数与张数对不上")
         self.assertRegex(OV, r"const codexShown = p\.preview \? applyOrder\(codexSorted,[^;]*: codexSorted;")
 
@@ -119,19 +129,24 @@ class CodexOnlyThingsStayOnTheCodexTab(unittest.TestCase):
         i = OV.index('<OvStrip kind="dead"')
         branch = OV[OV.rindex("if (codexOn) {", 0, i):i]
         self.assertNotIn("} else", branch, "★★ 失效条不在 Codex 档的分支里")
-        self.assertIn("{cDead.length > 0 && (", branch)
+        self.assertIn("below = cDead.length > 0 ? (", branch)   # P5：折叠条挪进网格下方的 `below` 槽
 
     def test_the_billed_probe_button_cannot_appear_on_another_tab(self):
         """★★★ 最危险的一条：探针**是花钱的**。挂错档 = 看着 A 的卡、花 B 的额度。
         每一档只能出现**花它自己钱**的那一颗，Claude / Grok 一颗都没有。"""
-        self.assertIn('p.run("probe-all", ["probe", "--all"]', ACTIONS["codex"], "★ Codex 档的探针不见了 —— 判据失准，先修闸")
-        self.assertIn("p.agyPool.probe()", ACTIONS["gemini"], "★ Gemini 档的探针不见了")
+        # P5 评审修复 2026-10-22：头部按钮经计费在途锁调 `cx.probeAll()` / `gx.probeAll()`，命令在定义里
+        self.assertIn("cx.probeAll()", ACTIONS["codex"], "★ Codex 档的探针不见了 —— 判据失准，先修闸")
+        self.assertIn("gx.probeAll()", ACTIONS["gemini"], "★ Gemini 档的探针不见了")
+        self.assertIn('p.run("probe-all", ["probe", "--all"]', _member(OV, 'probeAll: () => withBilled("codex:*"'))
+        self.assertIn("p.agyPool.probe()", _member(OV, 'probeAll: () => withBilled("agy:*"'))
         for k, seg in ACTIONS.items():
             with self.subTest(tab=k):
                 if k != "codex":
                     self.assertNotIn('"probe-all"', seg, f"★★★ codex 的探针出现在 {k} 档")
+                    self.assertNotIn("cx.probeAll", seg, f"★★★ codex 的探针出现在 {k} 档")
                 if k != "gemini":
                     self.assertNotIn("agyPool.probe", seg, f"★★★ agy 的探针出现在 {k} 档")
+                    self.assertNotIn("gx.probeAll", seg, f"★★★ agy 的探针出现在 {k} 档")
                 if k in ("claude", "grok"):
                     self.assertNotIn("<ProbeHold", seg, f"★★★ {k} 档有探针 —— 它根本没有可探的池")
 
@@ -161,7 +176,7 @@ class TheExtraCardsStillStayOutOfThePool(unittest.TestCase):
 
     def test_every_tab_owns_its_grid(self):
         """★ 每档各自一张 `data-cards-grid`。uishot 的对齐闸按排比较 —— 分档之后它只在同一档内比。"""
-        self.assertEqual(OV.count("<div data-cards-grid"), 1, "★ 网格有第二份写法")
+        self.assertEqual(len(re.findall(r"<div[^>]*\bdata-cards-grid=", OV)), 1, "★ 网格有第二份写法")
         self.assertEqual(len(re.findall(r"\bgrid = grid0\(", OV)), 4, "★ 不是四档各一张网格")
 
 

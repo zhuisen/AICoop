@@ -231,24 +231,37 @@ class Wiring(unittest.TestCase):
         self.assertNotIn("data-use-credit-disabled", code)
 
     def test_the_cli_is_only_reachable_through_the_confirm_dialog(self):
-        app = re.sub(r"\{/\*[\s\S]*?\*/\}", "", (SRC / "App.tsx").read_text(encoding="utf-8"))
-        app = re.sub(r"//[^\n]*", "", app)
-        self.assertEqual(app.count('"use-credit"'), 1, "★★ `use-credit` 出现在不止一处 —— 有别的入口绕过了确认弹窗")
-        self.assertGreater(app.index('"use-credit"'), app.index("<UseCreditDialog"),
-                           "★★★ 发 use-credit 的调用不在弹窗的 onConfirm 里 —— 不可逆动作没经过确认")
-        # 2026-10-19：卡上入口是 ⋯「使用重置卡」，它只回调 `onUseCredit(aid)` —— App 拿到后只是打开确认弹窗。
-        self.assertIn("onUseCredit={(aid) => setCreditConfirm(aid)}", app, "★★ 卡上的入口应该只是「请求」确认弹窗")
+        """✗ 2026-10-19 版（App 里的 `<UseCreditDialog>` 弹窗）已被 AICoop P5（2026-10-21）取代：
+        入口是底栏的重置卡 chip，点开**卡内单选弹层**（`ov/CreditChip.tsx`），只有「确认使用」才回调。
+        判据不变：`use-credit` 全前端只出现在一处，且那一处只能经由弹层的确认到达。"""
+        strip = lambda t: re.sub(r"//[^\n]*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", t))
+        ov = strip((SRC / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8"))
+        app = strip((SRC / "App.tsx").read_text(encoding="utf-8"))
+        self.assertEqual(app.count('"use-credit"'), 0, "★★ App 里又有一处 use-credit")
+        self.assertEqual(ov.count('"use-credit"'), 1, "★★ `use-credit` 出现在不止一处 —— 有别的入口绕过了确认")
+        # P5 评审修复 2026-10-22：外层加了计费在途锁 `withBilled`（同一号用卡不会并发两次）
+        self.assertIn('credit: (a: Account, cardId: string) => withBilled(`credit:${a.aid}`, () =>\n      p.run(`usecredit-${a.aid}`, ["use-credit", a.node, "--card", cardId]', ov,
+                      "★★★ 发出去的不是弹层里选中的那张（没带 --card）")
+        self.assertEqual(ov.count("cx.credit("), 1, "★★ cx.credit 有不止一个调用方")
+        self.assertIn("onUseCredit={(id) => cx.credit(a, id)}", ov, "★★ 卡上的入口不是经由 onUseCredit")
+        self.assertFalse((SRC / "components" / "UseCreditDialog.tsx").exists(), "★ 旧弹窗组件该随 P5 删除（不留骨架）")
 
     def test_the_badge_does_not_confirm_by_itself(self):
-        """卡片自己不发命令：⋯ 里的「使用重置卡」只调 `onUseCredit`（请求弹窗），菜单层拦住冒泡（不连带点开卡片）。"""
-        card = re.sub(r"\{/\*[\s\S]*?\*/\}", "", (SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8"))
-        self.assertRegex(card, r'key: "credit", label: `使用重置卡（\$\{a\.cards\} 张）`, hidden: [^,]+, onClick: onUseCredit \}',
-                         "★★ ⋯ 里没有「使用重置卡」，或者它不是只回调 onUseCredit")
-        for bad in ("invoke(", "run_rotate", '"use-credit"'):
-            self.assertNotIn(bad, card, "★★★ 卡片自己发了命令 —— 绕过了确认弹窗")
-        ov = (SRC / "components" / "ov" / "OvCard.tsx").read_text(encoding="utf-8")
-        self.assertIn('data-ov-menu="" data-open={open ? "" : undefined} onClick={(e) => e.stopPropagation()}', ov,
-                      "★★ 点菜单项会同时触发卡片点击")
+        """卡片自己不发命令：chip 只开关弹层，弹层只有「确认使用」才调 `onConfirm(选中那张的 id)`。"""
+        strip = lambda t: re.sub(r"//[^\n]*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", t))
+        card = strip((SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8"))
+        self.assertIn("<CreditChip a={a} busy={usingCredit} open={creditOpen} onOpenChange={setCreditOpen} onConfirm={onUseCredit} />", card,
+                      "★★ 卡上的重置卡入口不是 CreditChip，或者它的确认不是只回调 onUseCredit")
+        self.assertEqual(card.count("onUseCredit"), 3, "★★ onUseCredit 被别处调用了（应只有：解构 · 类型 · 传给 chip）")
+        chip = strip((SRC / "components" / "ov" / "CreditChip.tsx").read_text(encoding="utf-8"))
+        for f, code in (("AccountCard", card), ("CreditChip", chip)):
+            for bad in ("invoke(", "run_rotate", '"use-credit"'):
+                with self.subTest(f=f, bad=bad):
+                    self.assertNotIn(bad, code, "★★★ 卡片自己发了命令 —— 绕过了确认")
+        self.assertEqual(chip.count("onConfirm("), 1, "★★★ 弹层里不止一处会确认")
+        i = chip.index("onConfirm(")
+        self.assertIn("data-use-credit-confirm", chip[i - 200:i], "★★★ 确认不在「确认使用」按钮上")
+        self.assertNotRegex(chip, r'e\.key === "Enter"[^\n]*onConfirm', "★★★ 回车会确认 —— 连按回车会花掉一张卡")
 
 
 def _render():
@@ -293,61 +306,62 @@ def _dialog_probe():
         br = p.chromium.launch(executable_path=CHROME, headless=True)
         pg = br.new_page(viewport={"width": 1300, "height": 900})
         pg.goto(BASE, timeout=30000); pg.wait_for_timeout(3000)
-        # 2026-10-19：入口是每张卡 ⋯ 里的「使用重置卡」（`data-ov-mi="credit"`），底栏动作里不许有「用卡」按钮。
-        out = {"n_badges": pg.locator('[data-ov-mi="credit"]').count()}
+        # ★ P5（2026-10-21）：入口是底栏的重置卡 chip（`data-card-chip=N`），点开卡内单选弹层。
+        #   每张卡的弹层都常驻 DOM（CSS 显隐）⇒ 判「开着」一律看 `[data-open]`，选行也只在开着的那份里找。
+        out = {"n_badges": pg.locator('[data-card-chip]:not([data-card-chip="0"])').count()}
         bars = pg.evaluate("[...document.querySelectorAll('[data-ov-actions]')].map(e => e.textContent)")
-        out["bar_has_use"] = any("用卡" in b.replace("使用重置卡", "") for b in bars)
+        out["bar_has_use"] = any("用卡" in b for b in bars)
 
-        class _Entry:   # 与旧 `b.click()` 同一个用法：每次都从 Egan 那张卡的 ⋯ 里点「使用重置卡」
+        class _Entry:   # 每次都点 Egan 那张卡的 chip
             @staticmethod
             def click():
                 ok = pg.evaluate("""() => { const c = [...document.querySelectorAll('[data-ov-card]')]
                     .find(c => (c.querySelector('[data-card-name]') || {}).textContent === 'Egan');
-                  const it = c && c.querySelector('[data-ov-mi="credit"]'); if (it) it.click(); return !!it; }""")
+                  const it = c && c.querySelector('[data-card-chip]'); if (it) it.click(); return !!it; }""")
                 if not ok:
-                    raise AssertionError("★★ Egan 那张卡的 ⋯ 里没有「使用重置卡」")
+                    raise AssertionError("★★ Egan 那张卡没有重置卡 chip")
         b = _Entry
-        dlg = "[data-use-credit-dialog]"
+        dlg = "[data-use-credit-dialog][data-open]"
+        rowsel = dlg + " [data-use-credit-row]"
         b.click(); pg.wait_for_timeout(300)
         out["opened"] = pg.locator(dlg).count()
         out["sent_on_open"] = pg.evaluate(R + ".length")
-        out["target"] = pg.locator("[data-use-credit-target]").inner_text()
-        out["cancel_focused"] = pg.evaluate("document.activeElement && document.activeElement.hasAttribute('data-use-credit-cancel')")
+        out["title"] = pg.locator(dlg + " b").first.inner_text()
         pg.keyboard.press("Enter"); pg.wait_for_timeout(200)
         out["enter_confirms"] = pg.evaluate(R + ".length")
-        out["still_open_after_enter"] = pg.locator(dlg).count()
+        if pg.locator(dlg).count() == 0:
+            b.click(); pg.wait_for_timeout(200)
         pg.keyboard.press("Escape"); pg.wait_for_timeout(200)
         out["esc_closes"] = pg.locator(dlg).count() == 0
         b.click(); pg.wait_for_timeout(200)
-        pg.mouse.click(5, 5); pg.wait_for_timeout(200)           # 点遮罩
+        pg.mouse.click(5, 5); pg.wait_for_timeout(200)           # 点外面
         out["overlay_closes"] = pg.locator(dlg).count() == 0
         b.click(); pg.wait_for_timeout(200)
-        pg.locator("[data-use-credit-cancel]").click(); pg.wait_for_timeout(200)
+        pg.locator(dlg + " [data-use-credit-cancel]").click(); pg.wait_for_timeout(200)
         out["cancel_closes"] = pg.locator(dlg).count() == 0
         out["sent_before_confirm"] = pg.evaluate(R + ".length")
-        # 列出每一张、默认选最近、可改选
+        # 列出每一张、默认选最先过期、可改选
         b.click(); pg.wait_for_timeout(200)
-        rows = pg.evaluate("""() => [...document.querySelectorAll('[data-use-credit-row]')].map(r => ({id: r.getAttribute('data-use-credit-row'), sel: r.hasAttribute('data-selected'), text: r.innerText}))""")
+        rows = pg.evaluate("""(s) => [...document.querySelectorAll(s)].map(r => ({id: r.getAttribute('data-use-credit-row'), sel: r.hasAttribute('data-selected'), text: r.innerText}))""", rowsel)
         out["rows"] = rows
-        out["confirm_label_default"] = pg.locator("[data-use-credit-confirm]").inner_text()
         if len(rows) >= 2:
             pg.keyboard.press("ArrowDown"); pg.wait_for_timeout(150)
-            out["arrow_moves"] = pg.evaluate("[...document.querySelectorAll('[data-use-credit-row]')].findIndex(r => r.hasAttribute('data-selected'))")
-            pg.locator(f"[data-use-credit-row='{rows[0]['id']}']").click(); pg.wait_for_timeout(100)
-            pg.locator(f"[data-use-credit-row='{rows[1]['id']}']").click(); pg.wait_for_timeout(100)
-            out["click_selects_second"] = pg.evaluate("[...document.querySelectorAll('[data-use-credit-row]')].findIndex(r => r.hasAttribute('data-selected'))")
-        pg.locator("[data-use-credit-confirm]").click(); pg.wait_for_timeout(600)
+            out["arrow_moves"] = pg.evaluate("(s) => [...document.querySelectorAll(s)].findIndex(r => r.hasAttribute('data-selected'))", rowsel)
+            pg.locator(f"{dlg} [data-use-credit-row='{rows[0]['id']}']").click(); pg.wait_for_timeout(100)
+            pg.locator(f"{dlg} [data-use-credit-row='{rows[1]['id']}']").click(); pg.wait_for_timeout(100)
+            out["click_selects_second"] = pg.evaluate("(s) => [...document.querySelectorAll(s)].findIndex(r => r.hasAttribute('data-selected'))", rowsel)
+        pg.locator(dlg + " [data-use-credit-confirm]").click(); pg.wait_for_timeout(600)
         out["sent_after_confirm"] = pg.evaluate(R)
         out["closed_after_confirm"] = pg.locator(dlg).count() == 0
-        # 数据里的顺序被打乱（明细接口不保证按到期排）⇒ 弹窗仍必须按到期先后排，最近的在最前
+        # 数据里的顺序被打乱（明细接口不保证按到期排）⇒ 弹层仍必须按到期先后排，最先过期的在最前
         pg.evaluate("""() => { for (const sl of Object.values(window.__HSTATE.slots)) if (sl.label === 'Egan') sl.credits_detail.credits.reverse(); }""")
         pg.get_by_text("刷新全池").first.click(); pg.wait_for_timeout(2500)
         b.click(); pg.wait_for_timeout(300)
-        out["rows_shuffled"] = pg.evaluate("[...document.querySelectorAll('[data-use-credit-row]')].map(r => r.innerText.match(/\\d{4}-\\d\\d-\\d\\d/)[0])")
+        out["rows_shuffled"] = pg.evaluate("(s) => [...document.querySelectorAll(s)].map(r => r.innerText.match(/\\d\\d-\\d\\d/)[0])", rowsel)
         pg.keyboard.press("Escape"); pg.wait_for_timeout(200)
-        # 不改选直接确认 ⇒ 发最近那张
+        # 不改选直接确认 ⇒ 发最先过期那张
         b.click(); pg.wait_for_timeout(200)
-        pg.locator("[data-use-credit-confirm]").click(); pg.wait_for_timeout(500)
+        pg.locator(dlg + " [data-use-credit-confirm]").click(); pg.wait_for_timeout(500)
         out["sent_default"] = pg.evaluate(R)[-1]
         br.close()
     return out
@@ -358,23 +372,23 @@ class TheConfirmDialog(unittest.TestCase):
         r = _dialog_probe()
         if r is None:
             self.skipTest("没有 playwright 或 harness 静态服务（3304）没在跑")
-        self.assertGreaterEqual(r["n_badges"], 2, "★★ 页脚角标没有可点的 —— 闸此刻没有判别力")
+        self.assertGreaterEqual(r["n_badges"], 2, "★★ 底栏没有可点的重置卡 chip —— 闸此刻没有判别力")
         self.assertFalse(r["bar_has_use"], "★★ 动作条里还有「用卡」按钮（用户要求取消，因为容易误触）")
-        self.assertEqual(r["opened"], 1, "★★ 点「使用重置卡」没有弹出确认弹窗")
-        self.assertEqual(r["sent_on_open"], 0, "★★★ 弹窗一出来就已经发了 use-credit")
-        self.assertRegex(r["target"], r"共 \d+ 张，用掉所选的这一张后剩 \d+ 张", "★★ 弹窗没说清用后剩几张")
-        self.assertTrue(r["cancel_focused"], "★★ 默认焦点不在「取消」上")
+        self.assertEqual(r["opened"], 1, "★★ 点 chip 没有弹出确认弹层")
+        self.assertEqual(r["sent_on_open"], 0, "★★★ 弹层一出来就已经发了 use-credit")
+        # ✗「共 N 张，用掉后剩 M 张」与「默认焦点在取消」随旧弹窗一起被 P5 取代：弹层标题点名是哪个号，
+        #   副标题写「用掉不能撤回」；张数在 chip 上（×N），选中的是哪一张由单选行写明。
+        self.assertEqual(r["title"], "给 Egan 用一张重置卡？", "★★ 弹层没点名是哪个号")
         self.assertEqual(r["enter_confirms"], 0, "★★★ 回车就确认了 —— 连按回车会花掉一张卡")
-        self.assertEqual(r["still_open_after_enter"], 1)
         self.assertTrue(r["esc_closes"] and r["overlay_closes"] and r["cancel_closes"], f"★★ 取消路径没都关掉弹窗: {r}")
         self.assertEqual(r["sent_before_confirm"], 0, "★★★ 没点确认就发出了 use-credit")
         rows = r["rows"]
         self.assertGreaterEqual(len(rows), 3, f"★★ 这个号有 3 张卡，弹窗只列了 {len(rows)} 张")
-        dates = [re.search(r"\d{4}-\d\d-\d\d", x["text"]).group() for x in rows]
+        dates = [re.search(r"\d\d-\d\d", x["text"]).group() for x in rows]
         self.assertEqual(dates, sorted(dates), "★★ 卡没有按到期先后排")
         self.assertEqual(len(set(dates)), len(dates), "夹具里三张的到期日应各不相同，否则这条闸判别不了排序")
         self.assertEqual([x["sel"] for x in rows], [True] + [False] * (len(rows) - 1), "★★★ 默认没选中最近到期的那张")
-        self.assertIn("最近", rows[0]["text"])
+        self.assertIn("最先过期", rows[0]["text"])
         self.assertEqual(r["arrow_moves"], 1, "★ 下方向键没有把选中移到下一张")
         self.assertEqual(r["click_selects_second"], 1, "★★ 点第二行没选中它")
         self.assertEqual(r["sent_after_confirm"][0][:3], ["use-credit", "Egan", "--card"], "★★ 没带 --card")

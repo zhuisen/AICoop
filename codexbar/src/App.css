@@ -16,6 +16,10 @@
 body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
 @keyframes cbSpin { to { transform: rotate(360deg); } }
 @keyframes cbToast { from { opacity:0; transform:translate(-50%,12px) scale(.96); } to { opacity:1; transform:translate(-50%,0) scale(1); } }
+/* 主窗 Toast 堆（ToastStack.tsx，交接包 P5 §7）：入场只给 from，to 落到元素自己的堆叠位姿。 */
+@keyframes cbTIn { from { opacity:0; transform:translateY(14px) scale(.96); } }
+.cb-toast { animation: cbTIn .4s cubic-bezier(.34,1.3,.64,1); }
+@media (prefers-reduced-motion: reduce) { .cb-toast { animation: none; transition: opacity .2s !important; } }
 @keyframes cbShimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
 /* Expiring reset-card badge — verbatim from the design handoff §6. (The previous cbPulse was an
    opacity blink and had no callers; this is the amber halo the handoff specifies.) */

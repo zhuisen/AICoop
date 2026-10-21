@@ -607,17 +607,19 @@ class TheGoogleTabShowsThePoolNotAReadOnlyCard(unittest.TestCase):
         判据跟着真源走：仍然是「一号一卡」，只是数组名换了。"""
         # 2026-10-19：主网格画 `agyShownList`（= 排序后的 `gMain`），停用的号画在「已停用」条里（`gOff`）。
         #   两份合起来仍是 `p.agyPool.accounts` 一号一卡。
-        self.assertIn("agyShownList.map((a, i) => agyCard(", self.OV,
+        # ★ P5（2026-10-21）：停轮换的号回到主网格（标签「不轮换」），`gOff` 随「已停用」条一起删除；
+        #   主网格分「置顶 / 其余」两区，两区都切自排序后的 `agyShownList`（= `gMain`）。
+        self.assertIn("sections(agyPinned, agyRest, (a, i) => agyCard(a, i, true))", self.OV,
                       "★★ Google 档还是只画一张卡 —— 池里有几个号就该有几张")
-        self.assertIn("gOff.map((a, i) => agyCard(", self.OV, "★★ 停用的号没卡了")
-        self.assertIn("const gMain = p.agyPool.accounts.filter(", self.OV,
-                      "★ 主网格必须仍然源自 agyPool.accounts，不能是另一份清单")
-        self.assertIn("const gOff = p.agyPool.accounts.filter(", self.OV)
+        self.assertIn("const agyPinned = agyShownList.filter(", self.OV)
+        self.assertIn("const agyRest = agyShownList.filter(", self.OV)
+        self.assertIn("const gMain = p.agyPool.accounts.filter((a) => !hidden.has(`agy:${a.sub}`))", self.OV,
+                      "★ 主网格必须仍然源自 agyPool.accounts，且只筛掉撤销窗口里的号")
 
     def test_it_falls_back_to_the_read_only_card_when_there_is_no_pool(self):
         """★ 池空时退回原来那张只读卡 —— 那条路 2026-09-13 之前一直成立，
         而「还没建池」与「池里有号」是两个不同的事实，不能用同一张卡讲。"""
-        i = self.OV.index("gMain.length > 0 || gOff.length > 0")   # 见上：2026-10-19 改名，语义不变
+        i = self.OV.index("grid = grid0(p.agyPool.accounts.length > 0")   # P5：看池本身，不看筛过的 gMain
         self.assertIn('state="readonly"', self.OV[i:i + 400], "★ 池空时没有退回只读卡")
 
     def test_the_read_only_badge_is_conditional(self):
@@ -629,7 +631,9 @@ class TheGoogleTabShowsThePoolNotAReadOnlyCard(unittest.TestCase):
         #   合并任意两支都会回到用户问的那个问题：「不是解决了吗」。
         # 2026-10-19：徽章是 `state` 的一条链（在用 / 下一个 / … / 只读），「只读」只在 `state === "readonly"`
         #   那一支 —— 而 Overview 只在**池空**时传 `state="readonly"`（上一条闸）。
-        i = self.CARD.index('const tag = state === "inuse" ? { text: "在用"')
+        # P5（2026-10-21）：链头多了「不轮换」一支（停轮换覆盖原标签，§2.3），其余不变。
+        i = self.CARD.index('const tag = off ? { text: "不轮换", kind: "off" as const }')
+        self.assertIn(': state === "inuse" ? { text: "在用"', self.CARD[i:i + 200], "★ 链里没有「在用」那一支")
         j = self.CARD.index('{ text: "只读", kind: "readonly" as const }')
         self.assertLess(i, j, "★★★ 「只读」不在那条状态链里 —— 它是写死的")
         self.assertIn(': state === "readonly" ? { text: "只读"', self.CARD[i:j + 40], "★ 「只读」没挂在 readonly 那一支")
@@ -980,8 +984,9 @@ class TheCurrentAccountIsProbedNotRemembered(unittest.TestCase):
         抹平它 = 界面继续说一个它无法兑现的事实。"""
         app = (ROOT / "codexbar" / "src" / "components" / "ov" / "Overview.tsx").read_text(encoding="utf-8")
         app = re.sub(r"\{/\*[\s\S]*?\*/\}", "", app)
-        self.assertIn("p.agyPool.drifted && (", app, "★★★ 漂移没有任何披露")
-        i = app.index("p.agyPool.drifted && (")
+        # P5：披露挪到网格下方的 `below` 槽（`p.agyPool.drifted ? (…) : null`），文案原样。
+        self.assertIn("below = p.agyPool.drifted ? (", app, "★★★ 漂移没有任何披露")
+        i = app.index("below = p.agyPool.drifted ? (")
         seg = app[i:i + 700]
         self.assertIn("仍在跑", seg, "★ 披露没说清原因（是别的 agy 进程写回去的）")
         self.assertIn("退出", seg, "★ 披露没给出可执行的下一步，只说了「坏了」")

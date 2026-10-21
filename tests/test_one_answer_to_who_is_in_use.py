@@ -114,7 +114,9 @@ class TheCodexTabHasExactlyOneAnswer(unittest.TestCase):
         src = (SRC / "components" / "AccountCard.tsx").read_text(encoding="utf-8")
         code = re.sub(r"\{/\*[\s\S]*?\*/\}|/\*[\s\S]*?\*/", "", src)
         # 2026-10-19：动作条没了，「✓ 直连」进了 ⋯ 菜单那一行说明 —— 仍与页脚同一个词。
-        self.assertIn('label: "✓ 直连号（auth.json 里是它）"', code, "★★ codex 卡 ⋯ 里没用「✓ 直连」")
+        # P5（2026-10-21）：⋯ 菜单只剩「详情 / 删除」（窄卡多一个探针）；直连号在底栏「切换」那个位置写「直连」
+        #   （与「在用」同形的不可点钮），与页脚「· 直连」同一个词。
+        self.assertIn('>直连</Ab>', code, "★★ codex 卡底栏没用「直连」")
         self.assertNotIn("✓ 当前", code, "★★ codex 卡还在写「✓ 当前」，与「直连」两个名字")
 
     def test_the_agy_tab_now_follows_the_same_rule(self):

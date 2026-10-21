@@ -156,7 +156,7 @@ _HOVER_JS = """async () => {
   const card = document.querySelectorAll('[data-cards-grid] > [data-aid]')[1];
   const fact = card && card.querySelector('[data-ov-actions]');
   if (!fact) return null;
-  const read = () => { const cs = getComputedStyle(fact); return { op: +cs.opacity, pe: cs.pointerEvents }; };
+  const read = () => { const cs = getComputedStyle(fact); return { op: cs.display === 'none' ? 0 : +cs.opacity, pe: cs.display === 'none' ? 'none' : cs.pointerEvents }; };
   return read();
 }"""
 _LEAVE_JS = """async () => {
@@ -166,7 +166,9 @@ _LEAVE_JS = """async () => {
   const t0 = performance.now();
   while (performance.now() - t0 < 700) {
     const cs = getComputedStyle(fact);
-    out.push({ t: Math.round(performance.now() - t0), op: +cs.opacity, pe: cs.pointerEvents });
+    // ★ P5：没显示的那组是 display:none（opacity 仍是 1）⇒ 按 display 判
+    const hid = cs.display === 'none';
+    out.push({ t: Math.round(performance.now() - t0), op: hid ? 0 : +cs.opacity, pe: hid ? 'none' : cs.pointerEvents });
     await new Promise(r => setTimeout(r, 16));
   }
   return out;
@@ -218,9 +220,9 @@ class TheHoverActionsLeaveTheWayTheyCame(unittest.TestCase):
         self.assertGreater(self.shown["op"], .95, "★★ 真鼠标悬停了，操作没换出来")
         self.assertNotEqual("none", self.shown["pe"], "★★ 换出来了却点不中")
 
-    def test_leaving_is_animated_not_one_frame(self):
-        mids = [x for x in self.trail if .05 < x["op"] < .95]
-        self.assertTrue(mids, "★★★ 鼠标离开后一帧就没了 —— 没有退场过渡：%s" % self.trail[:6])
+    def test_leaving_puts_the_footer_back(self):
+        """✗「收回不许一帧就没了」已被 AICoop P5（2026-10-21）取代：交接包 §3.3 写明默认底栏与操作组
+        **互换，不是交叉淡化**（只有入场 `inUp .16s`）。这里只守仍成立的那半：离开后操作收起、不残留。"""
         self.assertLess(self.trail[-1]["op"], .05, "★★ 700 ms 后操作还挂着")
 
     def test_it_cannot_be_clicked_while_leaving(self):

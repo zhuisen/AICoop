@@ -49,7 +49,8 @@ class TheWordingIsFloorNotCeil(unittest.TestCase):
 
 class EverySiteUsesTheOneImplementation(unittest.TestCase):
     # 2026-10-19：卡上的「重置卡 ×N · 剩 X」从 CardBadge 组件搬进 AccountCard 的页脚（交接包 page5）。
-    SITES = ["components/AccountCard.tsx", "components/UseCreditDialog.tsx", "MenuBar.tsx"]
+    # P5（2026-10-21）：卡上的 chip 与「用一张重置卡？」弹层合进同一个组件 `ov/CreditChip.tsx`（旧弹窗删除）。
+    SITES = ["components/ov/CreditChip.tsx", "MenuBar.tsx"]
 
     def test_each_site_calls_it(self):
         for p in self.SITES:
@@ -86,22 +87,17 @@ def _render_pairs():
         br = p.chromium.launch(executable_path=CHROME, headless=True)
         pg = br.new_page(viewport={"width": 1300, "height": 900})
         pg.goto(BASE, timeout=30000); pg.wait_for_timeout(3000)
-        # 2026-10-19：角标只显示；弹窗从同一张卡的 ⋯「使用重置卡」打开（悬停时底栏整条换成操作，角标够不着）。
+        # P5（2026-10-21）：chip 本身就是入口（悬停也不让位），点开卡内弹层；弹层每行把 `cardLeftText` 写在 `data-left`。
         n = pg.locator("[data-card-badge]").count()
         for i in range(n):
             b = pg.locator("[data-card-badge]").nth(i)
-            # 2026-10-21 短写（用户选「短重置卡」）：`重置卡 3 · 1天`，没有「剩」字
-            m = re.search(r"·\s*(\d+)\s*(天|小时)", b.inner_text())
+            # P5 稿：`重置卡 ×1 · 剩 1天`
+            m = re.search(r"·\s*剩\s*(\d+)\s*(天|小时)", b.inner_text())
             if not m:
-                continue                       # 没到「快到期」档的角标不带「· N 天」
-            if not pg.evaluate("""(i) => { const c = document.querySelectorAll('[data-card-badge]')[i].closest('[data-ov-card]');
-                  const it = c && c.querySelector('[data-ov-mi="credit"]'); if (it) it.click(); return !!it; }""", i):
-                pairs.append((m.group(1) + m.group(2), "（这张卡没有「使用重置卡」入口）"))
-                continue
-            pg.wait_for_timeout(250)
-            row = pg.locator("[data-use-credit-row]").first.inner_text()
-            d = re.search(r"还剩 (\d+)(天|小时)", row)
-            pairs.append((m.group(1) + m.group(2), d.group(1) + d.group(2) if d else None))
+                continue                       # 没到「快到期」档的 chip 不带「· 剩 N 天」
+            b.click(); pg.wait_for_timeout(250)
+            row = pg.locator("[data-use-credit-dialog][data-open] [data-use-credit-row]").first
+            pairs.append((m.group(1) + m.group(2), row.get_attribute("data-left") if row.count() else None))
             pg.keyboard.press("Escape"); pg.wait_for_timeout(150)
         br.close()
     return pairs
@@ -114,7 +110,7 @@ class BadgeAndDialogAgree(unittest.TestCase):
             self.skipTest("没有 playwright 或 harness 静态服务（3304）没在跑")
         self.assertTrue(pairs, "★★ 没有一张带「剩 N 天」的角标 —— 夹具里应有快到期的卡，闸此刻没有判别力")
         for badge, dialog in pairs:
-            self.assertEqual(badge, dialog, f"★★★ 角标写「剩{badge}」，弹窗却是「还剩 {dialog}」—— 口径又分叉了")
+            self.assertEqual(badge, dialog, f"★★★ chip 写「剩{badge}」，弹层最先过期那张却是「还剩 {dialog}」—— 口径又分叉了")
 
 
 if __name__ == "__main__":

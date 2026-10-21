@@ -36,6 +36,13 @@ SRC = ROOT / "codexbar" / "src"
 APP = SRC / "App.tsx"
 CARD = SRC / "components" / "AgyCard.tsx"
 OVERVIEW = SRC / "components" / "ov" / "Overview.tsx"
+
+
+def _member(src, head):
+    """`cx` / `gx` 里一个成员的定义：从 `head` 到下一个成员（或注释 / 对象结尾）。P5 评审修复 2026-10-22。"""
+    i = src.index(head)
+    m = re.compile(r"\n    (?:[A-Za-z]+: |//)|\n  };").search(src, i + len(head))
+    return src[i:m.start()]
 HOOK = SRC / "hooks" / "useAgyPool.ts"
 RS = ROOT / "codexbar" / "src-tauri" / "src" / "lib.rs"
 
@@ -180,7 +187,10 @@ class TheUiWiresAllThree(unittest.TestCase):
     def test_the_gemini_tab_has_all_three(self):
         seg = self._gemini_head()
         self.assertIn("agyPool.health()", seg, "★★ 没有「检查 token」")
-        self.assertIn("agyPool.probe()", seg, "★★ 没有「探针 全池」")
+        # P5 评审修复 2026-10-22：头部按钮经计费在途锁 `gx.probeAll()`，真发命令的是它的定义
+        self.assertIn("gx.probeAll()", seg, "★★ 没有「探针 全池」")
+        self.assertIn("p.agyPool.probe()", _member(code(OVERVIEW), 'probeAll: () => withBilled("agy:*"'),
+                      "★★ gx.probeAll 没有走 agyPool.probe()")
         self.assertIn("agyPool.setAuto(", seg, "★★ 没有自动切号开关")
 
     def test_the_probe_button_is_the_billed_one(self):
@@ -198,7 +208,14 @@ class TheUiWiresAllThree(unittest.TestCase):
         # ★ 2026-10-21 用户「探针的功能 修改点击即可」：按住换成单击（`ProbeHead` / `ProbeAb`，同一个连点判据）。
         #   守的仍是：花钱的控件长得和免费按钮不一样（琥珀 + ⚡），且连点不会发两次。
         self.assertIn("<ProbeHead", seg, "★★★ 头部探针不是那颗计费按钮 ⇒ 与免费按钮混在一起")
-        self.assertIn("<ProbeAb", code(CARD), "★★★ 卡上的探针不是那颗计费按钮 ProbeAb")
+        # P5（2026-10-21）：卡上的探针是底栏的 ⚡ 图标钮 `ProbeIb`（琥珀 `warn` 色、提示「探针 · 计费」，同一个连点判据）。
+        self.assertIn("<ProbeIb ", code(CARD), "★★★ 卡上的探针不是那颗计费按钮 ProbeIb")
+        ovc = code(SRC / "components" / "ov" / "OvCard.tsx")
+        i = ovc.index("export function ProbeIb(")
+        seg = ovc[i:i + 500]
+        self.assertIn('tip="探针 · 计费"', seg, "★★★ 计费探针的提示没说「计费」")
+        self.assertIn('tone={loading ? "warnOn" : "warn"}', seg, "★★★ 计费探针不是琥珀色 —— 与免费按钮长得一样")
+        self.assertIn("const fire = useProbeFire(onFire, loading);", seg, "★★★ 连点判据没接上 —— 会发两次")
         self.assertNotIn("<Ab title=\"探针", code(CARD), "★★★ 卡上又出现了一碰就发的探针")
 
     def test_a_failed_read_does_not_report_the_switch_as_off(self):

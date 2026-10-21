@@ -255,7 +255,11 @@ class TheUiCarriesIt(unittest.TestCase):
     def test_the_gui_probe_asks_for_json_and_shows_the_toast(self):
         self.assertIn('["probe", label, "--json"]', ts_code("hooks/useAgyPool.ts"))
         # 头部「探针 全池」+ 卡上「探针」两处；2026-10-19 起都在总览组件里（App.tsx 只挂 <Overview>）。
-        self.assertEqual(ts_code("components/ov/Overview.tsx").count("showToast(agyProbeToast(r), 8000)"), 2)
+        # P5（2026-10-21）：卡上那一处先出「探针已发出 · X · 计费」，结果回来**替换**同一条 toast（`replace: id`）。
+        ov = ts_code("components/ov/Overview.tsx")
+        self.assertEqual(ov.count("showToast(agyProbeToast(r), 8000)"), 1, "★ 头部「探针 全池」没出结果 toast")
+        self.assertIn("p.showToast(r ? agyProbeToast(r) : `✗ 探针没回来：${a.label}`, 8000, { replace: id })", ov,
+                      "★ 卡上探针的结果没替换「已发出」那条 toast，或读不到时没说")
 
 
 if __name__ == "__main__":

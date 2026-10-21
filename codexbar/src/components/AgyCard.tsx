@@ -12,7 +12,8 @@ import { fmtTokens, fmtTps } from "../live";
 import type { DragWiring } from "./DragHandle";
 import StaleMark from "./StaleMark";
 import AgyActionLink from "./AgyActionLink";
-import { Ab, DynText, ProbeAb, IcRefresh, IcSwap, OvCard, OvMenu, OvTag, type OvWin } from "./ov/OvCard";
+import { ActGroup, Ab, CardMenu, DynText, IcBolt, IcInfo, IcRefresh, IcTrash, OvCard, OvTag, PinMark, ProbeIb, RotIb, RotMark,
+         useProbeFire, type OvWin } from "./ov/OvCard";
 import type { LiveLine } from "./AccountCard";
 
 /**
@@ -23,11 +24,14 @@ import type { LiveLine } from "./AccountCard";
  *   · 「冷却」= 额度见底（agy 没有 429 冷却这回事）；
  *   · 页脚左格是**最紧那个窗口的重置日**，不是「到期」—— agy 不提供订阅到期日（2026-09-16 三个探针一致）。
  * ★ 池里没有号时退回那张**只读卡**（`agy-rotate login --current` 之前的形态）：只有「刷新」。
- * ★ 旧卡上的每个操作都还在（CLAUDE.md §6）：切换 · 探针 · 刷新在底栏；置顶 · 轮换 · 改名 · 查看用量 · 移除在 ⋯。
+ * ★ 旧卡上的每个操作都还在（CLAUDE.md §6），位置同 Codex 卡（P5）：切换 · ⚡ · ⊘ 在悬停底栏；置顶 = 名称行图钉；
+ *   改名 · 查看用量 在 ···「详情」的 Sheet 里；移除 = ···「删除」+ 确认框。刷新 = 头部「刷新全池」（这里的刷新本来就是刷全池）。
+ * ⚠️ 与稿的一处偏离：稿里 Gemini 没有置顶（`CAP.gemini.pin = false`），而 `agy-rotate pin` 是真有的后端能力 ——
+ *   实测事实优先，图钉照 Codex 画（ui.md「1:1 指文档，与实测冲突时事实优先」）。
  */
 export default function AgyCard({ t, color, snap, busy, err, disabled, state, hov, drag, aid, action, plan, label, email,
   bestPct, privacy, live, lastUse, rotLoaded, coolMin, pinRank = null, rotates,
-  onSwitch, switching, onProbe, probing, onRefresh, onTogglePin, onToggleRotate, onRename, onRemove, onOpen }: {
+  onSwitch, switching, onProbe, probing, onRefresh, onTogglePin, onToggleRotate, onRemove, onShowDetail }: {
   t: Theme;
   /** 平台识别色（App 用 `colorOf(traffic, "agy")` 算好传下来）。 */
   color: string;
@@ -59,12 +63,11 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
   onRefresh?: () => void;
   onTogglePin?: () => void;
   onToggleRotate?: (on: boolean) => void;
-  onRename?: (next: string) => void;
   onRemove?: () => void;
-  onOpen?: () => void;
+  onShowDetail?: () => void;
 }) {
-  const [editing, setEditing] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const fire = useProbeFire(onProbe ?? (() => {}), !!probing);
   if (!agyQuotaVisible(snap, { disabled })) return null;
 
   const shown = agyShown(snap);
@@ -90,46 +93,34 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
                : `${row.group ?? "?"} · 剩 ${row.remaining.toFixed(1)}%${rt.title ? `\n${rt.title}` : ""}` };
   };
 
-  const tag = state === "inuse" ? { text: "在用", kind: "inuse" as const }
+  const off = rotates === false && !readOnly;
+  // ★ 停轮换覆盖原状态标签（P5 §2.3）；边框 / 环仍按原状态。
+  const tag = off ? { text: "不轮换", kind: "off" as const }
+    : state === "inuse" ? { text: "在用", kind: "inuse" as const }
     : state === "next" ? { text: "下一个", kind: "next" as const }
     : state === "cool" ? { text: "冷却中", kind: "cool" as const }
     : state === "unprobed" ? { text: "未探测", kind: "unprobed" as const }
     : state === "low" ? { text: "额度低", kind: "low" as const }
-    : state === "off" ? { text: "已停用", kind: "off" as const }
     : state === "readonly" ? { text: "只读", kind: "readonly" as const }
     : null;
   const delta = state === "ok" || state === "next" || state === "low" ? deltaText(rem, bestPct ?? null) : "";
 
   const head = (
     <>
-      {editing !== null ? (
-        <input autoFocus value={editing} data-ov-rename=""
-               onClick={(e) => e.stopPropagation()}
-               onChange={(e) => setEditing(e.target.value)}
-               onKeyDown={(e) => {
-                 e.stopPropagation();
-                 if (e.key === "Enter" && editing.trim()) { onRename?.(editing.trim()); setEditing(null); }
-                 if (e.key === "Escape") setEditing(null);
-               }}
-               onBlur={() => setEditing(null)}
-               style={{ fontSize: 14, fontWeight: 700, color: "var(--tx)", minWidth: 0, width: 110, background: "transparent",
-                        border: "1px solid var(--accLine)", borderRadius: 5, padding: "0 4px", fontFamily: "inherit", height: 20 }} />
-      ) : (
-        <b data-card-name="" data-hero-acct={state === "inuse" ? "" : undefined}
-           style={{ fontSize: 15, minWidth: 24, overflow: "hidden", textOverflow: "ellipsis" }}>{label ?? "agy"}</b>
-      )}
-      {pinRank !== null && (
-        <span data-pin-badge="" title={`已置顶（第 ${pinRank + 1} 位）—— 下次启动 agy 优先用它`}
-              style={{ fontSize: 10.5, fontWeight: 700, color: "var(--acc)", flexShrink: 0 }}>▲{pinRank + 1}</span>
-      )}
-      {tag && <OvTag tag={tag} title={state === "next" ? "下次启动 agy 会装进这个号（与顶部续航条同一个真源：agy-rotate next）"
+      <b data-card-name="" data-hero-acct={state === "inuse" ? "" : undefined}
+         style={{ fontSize: 15, minWidth: 24, overflow: "hidden", textOverflow: "ellipsis" }}>{label ?? "agy"}</b>
+      {tag && <OvTag tag={tag} title={state === "next" && !off ? "下次启动 agy 会装进这个号（与顶部续航条同一个真源：agy-rotate next）"
                                      : state === "readonly" ? "Antigravity 还没建账号池 —— `agy-rotate login --current` 收编当前号"
-                                     : state === "off" ? "已停用自动轮换 —— 启动 agy 时不会挑它（池子空且开着借用时除外）" : undefined} />}
-      {/* 在用但停了轮换（被借用 / 被别的 agy 写回）：「在用」压过了「已停用」，这枚补上另一半事实。 */}
-      {rotates === false && state === "inuse" && <OvTag tag={{ text: "已停用", kind: "off" }} title="这个号停了自动轮换，此刻钥匙串里是它" />}
+                                     : off ? "不轮换 —— 仍在池里，启动 agy 时自动换号不挑它；手动可切（池子空且开着借用时除外）" : undefined} />}
       {agyBadgePlan(plan) === "ultra" && <OvTag tag={{ text: "ULTRA", kind: "ultra" }} title="Google AI Ultra" />}
       {degraded && snap && <StaleMark t={t} note={action ? action.note : agyReasonNote(snap)} tone={tone} size={11} />}
       {!!err && <StaleMark t={t} note={`读不到本机的额度快照：${err}`} tone="red" size={11} />}
+    </>
+  );
+  const marks = readOnly ? null : (
+    <>
+      {off && onToggleRotate && <RotMark onRestore={() => onToggleRotate(true)} />}
+      {onTogglePin && <PinMark rank={pinRank} onToggle={onTogglePin} hint="下次启动 agy 优先用它" />}
     </>
   );
   const right = delta === "最优" ? <OvTag tag={{ text: "最优", kind: "best" }} title="全池可用号里余量最多的" />
@@ -155,54 +146,45 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
     <DynText tone="bad">额度低 · 最紧一格剩 {Math.round(rem ?? 0)}%</DynText>
   ) : state === "readonly" ? (
     <DynText tone="muted">本机 agy 正在用的号 · 未建池</DynText>
-  ) : state === "off" ? (
-    <DynText tone="muted">已停用轮换 · {lastLine}</DynText>
   ) : (
     <DynText tone="muted">{lastLine}</DynText>
   );
 
+  // 底栏左：套餐名（P5 §3.1：Gemini 写「Google AI Ultra / Pro」）；读数是旧的就先说是几时的；不知道套餐退回最紧那格的重置日。
+  const planName = plan === "ultra" ? "Google AI Ultra" : plan === "pro" ? "Google AI Pro" : null;
   const footLeft = (
     <span data-agy-footer="" title={(tight?.group
       ? `${tight.group} 是 4 个桶里最紧的，它在 ${fmtResetDate(tight.b.reset_at)} 重置。⚠️ 这不是订阅到期日 —— agy 不提供订阅期。`
       : "还没读到任何窗口的重置时刻") + `\n${readOnly ? "Google 订阅 · 不在轮换池" : "Google 订阅 · 在轮换池"}`}>
       {shown?.stale ? `${fmtAgo(shown.at ?? undefined)}的读数`
-        : tight ? `重置 ${fmtResetDate(tight.b.reset_at)}`
-        : shown ? "重置 —" : "额度暂时读不到"}
+        : planName ?? (tight ? `重置 ${fmtResetDate(tight.b.reset_at)}` : shown ? "重置 —" : "额度暂时读不到")}
     </span>
   );
-  const footRight = plan === "ultra" || plan === "pro" ? (
-    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--tx3)", flexShrink: 0 }}>
-      {plan === "ultra" ? "Google AI Ultra" : "Google AI Pro"}
-    </span>
-  ) : null;
 
   const actions = readOnly ? (
     <Ab onClick={onRefresh} disabled={busy} data="refresh" title="重新取一次额度（本机 / 云端读数，零消耗）">
       <IcRefresh spin={busy} />刷新
     </Ab>
   ) : (
-    <>
-      {state !== "inuse" && onSwitch && (
-        <Ab primary onClick={onSwitch} disabled={switching} data="switch"
-            title={`${state === "off" ? "借用" : "切到"} ${label} —— ★ 只对**下一次启动的** agy 生效，已开着的会话不受影响`}>
-          <IcSwap />{switching ? "切换中…" : state === "off" ? "借用" : "切换"}
+    <ActGroup>
+      {state === "dead" ? null : state === "inuse" ? (
+        <Ab current data="inuse" title="当前正在用这个号（钥匙串里是它）">在用</Ab>
+      ) : onSwitch && (
+        <Ab primary onClick={onSwitch} disabled={switching} data="switch" title="换号 · 下一次启动 agy 生效（已开着的会话不受影响）">
+          {switching ? "切换中…" : "切换"}
         </Ab>
       )}
-      {onProbe && state !== "off" && (
-        <ProbeAb loading={!!probing} onFire={onProbe}
-                hint={`起一次 agy 让 ${label} 真跑一句，验它是否真能干活。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token、约 30s）`} />
+      {onProbe && state !== "dead" && (
+        <ProbeIb loading={!!probing} onFire={onProbe}
+                 hint={`起一次 agy 让 ${label} 真跑一句，验它是否真能干活。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token、约 30s）`} />
       )}
-      <Ab onClick={onRefresh} disabled={busy} data="refresh" title="重新取一次这一池的额度（云端按账号读，零消耗）">
-        <IcRefresh spin={busy} />刷新
-      </Ab>
-      <OvMenu onOpenChange={setMenuOpen} items={[
-        { key: "pin", label: pinRank !== null ? `取消置顶（第 ${pinRank + 1} 位）` : "置顶 —— 下次启动优先用它", onClick: onTogglePin, hidden: !onTogglePin },
-        { key: "rotate", label: rotates ? "停用自动轮换" : "恢复自动轮换", onClick: () => onToggleRotate?.(!rotates), hidden: !onToggleRotate },
-        { key: "rename", label: "重命名", onClick: () => setEditing(label ?? ""), hidden: !onRename },
-        { key: "usage", label: "查看用量 →", onClick: onOpen, hidden: !onOpen },
-        { key: "remove", label: "从池里移除", bad: true, confirm: "再点一次确认移除", onClick: onRemove, hidden: !onRemove },
+      {state !== "dead" && <RotIb off={off} onToggle={onToggleRotate ? (wasOff) => onToggleRotate(wasOff) : undefined} unsupported={!onToggleRotate} />}
+      <CardMenu onOpenChange={setMenuOpen} items={[
+        ...(onProbe && state !== "dead" ? [{ key: "probe", label: "探针 · 计费", icon: <IcBolt />, warn: true, narrow: true, onClick: fire }] : []),
+        ...(onShowDetail ? [{ key: "detail", label: "详情", icon: <IcInfo />, onClick: onShowDetail }] : []),
+        ...(onRemove ? [{ key: "remove", label: "删除", icon: <IcTrash />, bad: true, onClick: onRemove }] : []),
       ]} />
-    </>
+    </ActGroup>
   );
 
   return (
@@ -210,6 +192,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
             email={email ? maskId(email, privacy) : (busy ? "正在取额度…" : "—")}
             emailTitle={tight?.group ? `环上的数来自 ${tight.group} —— 4 个桶里最紧的那个。任何一个见底 agy 就用不了，所以取最小值。` : undefined}
             dyn={dyn} w5={toWin("5h", "5h")} ww={toWin("周", "w")}
-            footLeft={footLeft} footRight={footRight} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
+            marks={marks} off={off} pinned={pinRank !== null}
+            footLeft={footLeft} actions={actions} hov={hov} menuOpen={menuOpen} drag={drag} />
   );
 }
