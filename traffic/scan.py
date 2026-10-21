@@ -645,7 +645,7 @@ DSH_ROOT = Path(os.environ.get("DSH_HOME") or (HOME / ".dsh")) / "sessions"
 # 宿主内**路由出来**的平台。OpenClaw 自己不是平台(用户 2026-08-12 定稿:「openclaw 不算平台,
 # 但是涉及的对应 ai 平台也要纳入计算」)—— 它是宿主,里面跑的 AI 各归各家。
 ROUTED = {
-    "deepseek": {"name": "DeepSeek", "color": "#4d6bfe"},
+    "deepseek": {"name": "DeepSeek", "color": "#6B7CFF"},  # AICoop 稿 §7（原 #4d6bfe）
     "mimo":     {"name": "MiMo",     "color": "#ff6a00"},
 }
 
@@ -1518,7 +1518,7 @@ SOURCES = (
      "glob": "**/rollout-*.jsonl*", "parse": _scan_codex_file,  "dedup": False, "keep": _codex_keep},
     {"key": "grok",   "name": "Grok",   "root": GROK_ROOT,   "color": "#8b7cf6",
      "glob": "*/*/updates.jsonl",  "parse": _scan_grok_file,   "dedup": False},
-    {"key": "kimi",   "name": "Kimi",   "root": KIMI_ROOT,   "color": "#f472b6",
+    {"key": "kimi",   "name": "Kimi",   "root": KIMI_ROOT,   "color": "#EC6AAE",
      "glob": "**/wire.jsonl",      "parse": _scan_kimi_file,   "dedup": False},
     # ★ OpenClaw 是**宿主**,不是平台:它 parse 出来的每条 row 末尾自带平台键,聚合层据此路由。
     #   `key` 只用于 enabled/registered 列表,不会作为平台出现在输出里。

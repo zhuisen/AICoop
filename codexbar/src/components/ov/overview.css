@@ -223,6 +223,7 @@
 .ov-chip-none:hover { box-shadow: none; }
 .ov-chip .ov-chip-short { display: none; }
 @container (width < 226px) { .ov-chip-warn .ov-chip-word, .ov-chip-open .ov-chip-word { display: none; } }
+@container (width < 250px) { .ov-chip-hrs .ov-chip-word { display: none; } }
 .ov-card:hover .ov-chip .ov-chip-long, .ov-card.ov-hov .ov-chip .ov-chip-long, .ov-card:focus-within .ov-chip .ov-chip-long,
 .ov-card.ov-menu-open .ov-chip .ov-chip-long { display: none; }
 .ov-card:hover .ov-chip .ov-chip-short, .ov-card.ov-hov .ov-chip .ov-chip-short, .ov-card:focus-within .ov-chip .ov-chip-short,

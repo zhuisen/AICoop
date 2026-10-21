@@ -1,4 +1,4 @@
-import { costOf, cacheSavingOf } from "./rates";
+import { costOf, cacheSavingOf, noCacheCostOf } from "./rates";
 import { platformColor } from "./theme";
 import type { SourceStatus } from "./scanHealth";
 
@@ -670,6 +670,26 @@ export function prevTotals(data: TrafficData, st: RangeState, today: string, onl
   return { tok, cost };
 }
 
+/**
+ * 上一等长周期的**合并桶**（含四类 token 与模型），给缓存命中「较上期 ± pt」用。
+ * 判据与 `prevTotals` 完全一致（关开关 / < 7 天 / 窗口没覆盖 ⇒ `null`，显示「—」）。
+ * ★ 调用方要传 `raw`（未按缓存口径重塑）—— 命中率要的正是被重塑清零的缓存读。
+ */
+export function prevSum(data: TrafficData, st: RangeState, today: string, only?: string): Bucket | null {
+  const r = resolveRange(st, today);
+  if (!st.compare || diffDays(r.s, r.e) < MIN_COMPARE_DAYS) return null;
+  const pr = prevRange(r);
+  const { min } = dayBounds(data);
+  if (!min || pr.s < min) return null;
+  const bs: Bucket[] = [];
+  for (const k of (only ? [only] : Object.keys(data.platforms))) {
+    const p = data.platforms[k];
+    if (!p) continue;
+    for (const day of Object.keys(p.days)) if (day >= pr.s && day <= pr.e) bs.push(p.days[day]);
+  }
+  return sumBuckets(bs);
+}
+
 /** 环比的说明文字：`vs 07-15 → 08-13`，一天时是 `vs 昨日`（交接稿 §1/§5）。 */
 export function prevNote(st: RangeState, today: string): string {
   const r = resolveRange(st, today);
@@ -720,6 +740,13 @@ export function costOfBucket(b: Bucket, platform: string): number {
 }
 
 /** 缓存相对"全按输入价"省下的金额,用于在 KPI 上显式化「费用已按缓存折价」。 */
+/** 一个桶的「无缓存」费用基线（逐模型 `noCacheCostOf` 求和）。 */
+export function noCacheCostOfBucket(b: Bucket, platform: string): number {
+  let usd = 0;
+  for (const [m, mv] of Object.entries(b.models ?? {})) usd += noCacheCostOf(mv, m, platform);
+  return usd;
+}
+
 export function savingOfBucket(b: Bucket, platform: string): number {
   let usd = 0;
   for (const [m, mv] of Object.entries(b.models ?? {})) usd += cacheSavingOf(mv, m, platform);

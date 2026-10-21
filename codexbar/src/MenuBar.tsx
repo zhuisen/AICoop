@@ -480,7 +480,7 @@ export default function MenuBar() {
     ...(plat === "grok" ? [{ id: "open-grok", label: "打开 Grok 用量详情", loadingLabel: "",
         hint: "grok 是单号只读：没有池可切、也没有可探的号,只有用量与周额度可看",
         action: () => void openMain("navigate-platform", "grok") }] : []),
-    { id: "open-traffic", label: "打开 AI用量信息", loadingLabel: "",
+    { id: "open-traffic", label: "打开 Token 消耗", loadingLabel: "",
       hint: "在主窗口看分平台/分模型明细、切时间段、看费率卡",
       action: () => void openMain("navigate-traffic") },
   ];
@@ -696,7 +696,7 @@ export default function MenuBar() {
           {!codexActions && (
             <span className="mb-foot-btn" data-mb-workbench=""
                   onClick={() => tab === "today" ? void openMain("navigate-traffic") : openOverview(LOGO_OF[plat])}
-                  title={tab === "today" ? "打开工作台 · AI用量信息" : `打开工作台 · 总览的 ${MB_PLAT_LABEL[plat]} 档`}
+                  title={tab === "today" ? "打开工作台 · Token 消耗" : `打开工作台 · 总览的 ${MB_PLAT_LABEL[plat]} 档`}
                   style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
                            gap: 6, borderRadius: 9, border: "1px solid var(--line2)", color: "var(--tx)", fontSize: 13,
                            fontWeight: 500 }}>

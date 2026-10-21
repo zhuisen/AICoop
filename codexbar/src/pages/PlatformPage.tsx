@@ -1,23 +1,22 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { type Theme, modelColor, TABLE_TYPE as TZ } from "../theme";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { type Theme, modelColor } from "../theme";
 import { costOf, fmtUSD, priceOf, isPriced } from "../rates";
-import StackedArea, { type Layer, CHART_CHROME_H } from "../components/StackedArea";
-import { useFillHeight } from "../hooks/useFillHeight";
-import type { TrafficData, RangeState, CacheMode, Bucket, Platform } from "../traffic";
+import type { TrafficData, RangeState, CacheMode, Bucket, Platform, PlatformPrefs } from "../traffic";
 import Seg from "../components/Seg";
-import RangeBar from "../components/RangeBar";
 import Toast from "../components/Toast";
-import { todayOf, resolveRange, diffDays, prevTotals, prevNote, effGran, granLabel, md } from "../traffic";
+import { todayOf, resolveRange, diffDays, effGran, granLabel, md, prevSum, tickTitle, orderedKeys, noCacheCostOfBucket } from "../traffic";
 import { rangeLabel, bucketsFor, sumBuckets, costOfBucket, savingOfBucket, fmtTok,
-         countsCacheRead, countsCacheWrite, countedClasses, mixParts, colorOf } from "../traffic";
-import KpiStrip, { type Kpi, UP, DOWN } from "../components/KpiStrip";
-import { useIntro, introEnabled } from "../hooks/useIntro";
+         countsCacheRead, countedClasses, mixParts } from "../traffic";
 import CacheChip from "../components/CacheChip";
-import PageSub from "../components/PageSub";
+import { type Density, blendWritePrice, breakevenReads, fmtIntL, fmtPt, fmtTokL, fmtUsdL, hitRate, lowHit, modelLabel,
+         nonNullRuns, titleSize } from "../tokenView";
+import TkArea, { type TkLayer } from "../components/tk/TkArea";
+import { InfoI, KpiGrid, PLogo, PlatChips, RangeSeg, RefreshAgo } from "../components/tk/TkParts";
+import { buildKpis, platRows, rangeText } from "../components/tk/tkModel";
+import { MONO, SPR9, tkPal } from "../components/tk/tkPal";
+import { useDirAnim, useWidth, useWinDensity } from "./TrafficPage";
+import "../components/tk/tk.css";
 
-/** 等宽字族。★ 数字右对齐成列靠它保证等宽（全局 `ui-design.md`）。 */
-const MONO = "'JetBrains Mono', monospace";
-const AMBER = "#E0A21C";
 const SRC: Record<string, string> = {
   claude: "~/.claude/projects/**/*.jsonl",
   codex: "~/.codex/sessions/**/rollout-*.jsonl",
@@ -68,33 +67,6 @@ const TOTAL_CLASSES = [
 function money(x: number): string {
   return x >= 1 ? x.toFixed(2) : x.toFixed(3);
 }
-
-/**
- * D1 表格的列。**表头与数据行必须用同一个常量** —— 两处各写一份 `gridTemplateColumns`，
- * 是「改了一处忘另一处」的经典位置，而症状是表头和数据错位一列，看着像数据错了。
- * 中间那 26px 是分区竖线所在的空列。
- */
-const GAP = TZ.gap;
-/** 图区高度下限 = 改成撑满之前的固定值。 */
-const CHART_MIN = 190;
-/** 模型表的框至少露出表头 + 两行，再矮整页滚。 */
-const TABLE_BOX_MIN = 100;
-/** ★ 表格内容的最小宽。**光给容器加 `overflowX:auto` 不够** —— `ROW` 模板里有一列 `1fr`,
- *  它会把行撑到"可用宽"而不是"自然宽",于是行仍被约束成 684、内部继续溢出,滚动条永远不出现。
- *  钉一个 minWidth,滚动才真的发生。
- *  ★★ **由列宽算出来,不再写死一个实测值**(旧版是 `700`,注释写着"900px 实测自然宽 698")。
- *  2026-08-26 放大字号时列宽全变了,那个 700 当场失真 —— 写死的实测值**不会报错,
- *  只会让表在某个宽度悄悄被裁掉最右边那一列**(而裁掉的正是「费用/百万」)。
- *  56 是条形列的最小可读宽度,与旧版给它的余量一致。 */
-const TABLE_MIN = TZ.dot + TZ.name + 56 + TZ.tok + TZ.share + TZ.rounds + TZ.cost
-                 + TZ.gap + TZ.rateIn + TZ.rateOut + TZ.ratePerM;
-const RATE_W = TZ.rateIn + TZ.rateOut + TZ.ratePerM + 16;   // 输入 + 输出 + 费用/百万 + 间隙
-const ROW: React.CSSProperties = {
-  display: "grid", alignItems: "center",
-  gridTemplateColumns: `${TZ.dot}px ${TZ.name}px 1fr ${TZ.tok}px ${TZ.share}px ${TZ.rounds}px ${TZ.cost}px ${GAP}px ${TZ.rateIn}px ${TZ.rateOut}px ${TZ.ratePerM}px`,
-};
-/** 数字列一律右对齐 + 等宽数位（`tabular-nums`），否则每次刷新数字会左右跳。 */
-const R: React.CSSProperties = { textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
 /** 平台色的明暗阶。三类是**同一个量的三部分**,用顺序色阶(便宜→贵)比三个无关色相更好读。 */
 function mixHex(hex: string, to: string, amt: number): string {
@@ -260,391 +232,376 @@ function RouteSplit({ t, p, labels, rangeTxt }: {
   );
 }
 
-export default function PlatformPage({ t, data, raw, cacheMode, pk, st, setSt, onBack, busy }: {
+
+/**
+ * 模型表列（R2 §6）：1000 去掉输入 / 输出牌价，860 再去掉占比条。表头与数据行共用。
+ * ★ 口径不计缓存读时「缓存命中」整列删除（同 KPI / 缓存四格，08-11 定稿「不同口径 = 不同页面」）。
+ */
+function modelCols(L: Density, hit: boolean): string {
+  const tail = hit ? " 64px" : "";
+  if (L === 0) return `10px minmax(120px,180px) minmax(0,1fr) 80px 56px 70px 88px 72px 72px 76px${tail}`;
+  if (L === 1) return `10px minmax(120px,180px) minmax(0,1fr) 80px 56px 70px 88px 76px${tail}`;
+  return `10px minmax(0,1fr) 80px 56px 70px 88px 76px${tail}`;
+}
+
+/**
+ * 迷你趋势（缓存四格）。`null` = 这个桶没有分母 ⇒ **断开**，线和填充都不跨过缺测段（阶段 4 评审）。
+ * 只有一个桶 ⇒ 画满宽水平线（单点没有线段可画）。
+ */
+function Mini({ vals, color, refV, refColor }: { vals: (number | null)[]; color: string; refV?: number | null; refColor: string }) {
+  const runs = nonNullRuns(vals);
+  if (!runs.length) return <svg viewBox="0 0 200 34" style={{ width: "100%", height: 34, marginTop: 4 }} />;
+  const all = runs.flat().map((x) => x[1]);
+  if (refV != null) all.push(refV);
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const n = Math.max(1, vals.length - 1);
+  const X = (i: number) => (i / n) * 200, Y = (v: number) => 31 - ((v - lo) / (hi - lo)) * 27;
+  const seg = (r: [number, number][]) => (vals.length <= 1 || r.length === 1
+    ? (vals.length <= 1 ? [[0, r[0][1]], [200, r[0][1]]] as [number, number][] : [[X(r[0][0]) - 2, r[0][1]], [X(r[0][0]) + 2, r[0][1]]] as [number, number][])
+    : r.map(([i, v]) => [X(i), v] as [number, number]));
+  return (
+    <svg viewBox="0 0 200 34" preserveAspectRatio="none" style={{ width: "100%", height: 34, marginTop: 4, display: "block" }}>
+      {refV != null && <line x1="0" x2="200" y1={Y(refV)} y2={Y(refV)} stroke={refColor} strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
+      {runs.map((r, k) => {
+        const pts = seg(r);
+        const line = pts.map(([x, v], j) => `${j ? "L" : "M"}${x.toFixed(1)} ${Y(v).toFixed(1)}`).join(" ");
+        return (
+          <g key={k}>
+            <path d={`${line} L${pts[pts.length - 1][0].toFixed(1)} 34 L${pts[0][0].toFixed(1)} 34 Z`} fill={color} fillOpacity={0.14} />
+            <path d={line} fill="none" stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/**
+ * 单个 AI 的消耗页（AICoop R2_Detail / 1000 / 860，1:1）。
+ * 顶栏（← Token 消耗 · logo · 「X 消耗」· 刷新 · 时间范围）→ 平台胶囊 → 7 个指标 → 按模型堆叠面积图 → 缓存命中 → 模型表 → 费用口径。
+ * ★ 保留（设计里没有、但已有且不能删，偏离 R2-*）：分模型 / 总量切换、模型行点击隔离、路由分账角标、缓存口径牌、
+ *   数据源路径（并进来源小字的悬停提示）、估算价 `*`、加载态。
+ */
+export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, setSt, onBack, busy, onSwitch, onRefresh }: {
   t: Theme;
   /** 已按缓存口径重塑 —— 合计/图表/费用都用它 */
   data: TrafficData | null;
-  /** 未重塑。**只给费率卡的「构成」行用**(它描述数据本身由什么组成),别拿它算展示合计 */
+  /** 未重塑。缓存命中、本期构成用它。 */
   raw: TrafficData | null;
   cacheMode: CacheMode;
+  /** 平台偏好：胶囊顺序与总览同一套（用户排过就照用户的）。 */
+  prefs?: PlatformPrefs;
   pk: string;
-  /** 时间范围。★ 与总览页**同一个控件、同一份状态**（§5c：同一类页面必须长得一样）。 */
+  /** 时间范围。★ 与总览页**同一份状态**（两页之间保持）。 */
   st: RangeState; setSt: (s: RangeState) => void;
   onBack: () => void; busy: boolean;
+  /** 胶囊直接切平台（带形变，不回总览）。 */
+  onSwitch?: (pk: string) => void;
+  onRefresh?: () => void;
 }): React.ReactElement {
+  const p = tkPal(t);
+  const { L, W } = useWinDensity();
   const [mode, setMode] = useState<"models" | "total">("models");
-  const [iso, setIso] = useState<Set<string>>(new Set());   // §7 被隔离的模型
-  /**
-   * 「总量」档里被隔离的 token 类。**这一档的老问题**:缓存读占 95~99%(Claude 实测 97.24%),
-   * 另两类各自只有 ~2% 和 ~0.3%,在 190px 高的图里是顶边上的一条线,构成根本读不出来。
-   * 用户 2026-08-15 在三个画法里选了「绝对量堆叠」(要真实量级),代价就是这个。
-   *
-   * 点图例摘掉缓存读 ⇒ 剩下两类按自己的量级重新铺满,构成立刻可读 —— **而且不动任何口径、
-   * 不改费用、不改总量**,只是这张图少画一层。与下面模型行的点击隔离是同一个交互,不是新发明。
-   */
+  const [iso, setIso] = useState<Set<string>>(new Set());
+  /** 「总量」档里被隔离的 token 类（点图例摘掉缓存读，剩下两类按自己的量级铺满）。 */
   const [isoCls, setIsoCls] = useState<Set<string>>(new Set());
-  // ★ 走 `colorOf` 而不是 `platformColor` —— 后者只查 theme.ts 的静态兜底表，**绕过了
-  //   scan.py 下发的注册色和用户在设置页改的色**。MiMo/DeepSeek 不在静态表里，会拿到兜底灰
-  //   `#5b6472`，而「总量」档整张图就是这个色 ⇒ 一整块灰色数据，违反设计规范「数据不用灰色」
-  //   （实测：MiMo 的 90d 总量图整片是灰的）。分模型档因为用 modelColor 散列，一直没暴露。
-  const c = colorOf(data, pk);
-
+  const [hm, setHm] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [chartHost, chartH] = useFillHeight<HTMLDivElement>();
+  const [host, cw] = useWidth<HTMLDivElement>();
   const today = useMemo(() => todayOf(data), [data]);
   const range = useMemo(() => resolveRange(st, today), [st, today]);
   const rangeDays = diffDays(range.s, range.e);
+  const isToday = st.preset === "today";
+  const anim = useDirAnim(st.preset === "custom" ? `custom:${range.s}:${range.e}` : st.preset);
+  const toastT = useRef(0);
+  const showToast = useCallback((m: string) => {
+    setToast(m);
+    window.clearTimeout(toastT.current);
+    toastT.current = window.setTimeout(() => setToast(null), 1800);
+  }, []);
+  const [lastPk, setLastPk] = useState(pk);
+  if (lastPk !== pk) { setLastPk(pk); setHm(null); setIso(new Set()); }
 
+  const rows = useMemo(() => (data ? platRows(t, data, st, today) : []), [t, data, st, today]);
+  const me = rows.find((r) => r.key === pk) ?? null;
+  const chipRows = useMemo(() => {
+    if (!prefs) return rows;
+    const by = new Map(rows.map((r) => [r.key, r]));
+    return orderedKeys(rows.map((r) => r.key), prefs, (k) => by.get(k)?.total ?? 0).map((k) => by.get(k)!).filter(Boolean);
+  }, [rows, prefs]);
+  const c = me?.color ?? "#5b6472";
   const v = useMemo(() => {
     if (!data?.platforms[pk]) return null;
     const { labels, buckets } = bucketsFor(data, pk, st, today);
     const agg = sumBuckets(buckets);
+    const rb = raw?.platforms[pk] ? bucketsFor(raw, pk, st, today).buckets : buckets;
+    const ragg = sumBuckets(rb);
     const models = Object.entries(agg.models)
-      .map(([m, mv]) => ({ m, ...mv, cost: costOf(mv, m, pk) }))
+      .map(([m, mv]) => {
+        const r = ragg.models[m];
+        return { m, ...mv, cost: costOf(mv, m, pk), hit: r ? hitRate(r.cache_read, r.uncached_in, r.cache_write) : null };
+      })
       .sort((a, b) => b.total - a.total);
-    // 全池占比
-    let grand = 0;
-    for (const k of Object.keys(data.platforms)) grand += sumBuckets(bucketsFor(data, k, st, today).buckets).total;
-    return { labels, buckets, agg, models, cost: costOfBucket(agg, pk),
-             saving: savingOfBucket(agg, pk), grand };
-  }, [data, pk, st, today]);
+    return { labels, buckets, rb, agg, ragg, models, cost: costOfBucket(agg, pk), saving: savingOfBucket(agg, pk) };
+  }, [data, raw, pk, st, today]);
+  const kpis = data && me ? buildKpis({ t, data, raw, rows, sel: [pk], st, today, L, cacheMode, single: true }) : [];
 
-  /**
-   * ★ 「总量」的三类**必须过缓存口径门**。不过门的话，切到「不含缓存」时图例会显示
-   * 「缓存读 0 · 0.00%」+ 一条零高的带 —— 而项目定稿是「**不计入的类，其指标要从页面上整个删掉**，
-   * 不是显示 0%、也不是改说『已排除 X』」（用户 2026-08-11）。显示 0% 会被读成「没用到缓存」，
-   * 与事实相反。2026-08-16 实测截到过这个形态，是本批引入的。
-   */
   const totalClasses = TOTAL_CLASSES.filter(
     (cl) => (cl.key !== "cache_read" || countsCacheRead(cacheMode)) && !isoCls.has(cl.key));
-
   const shown = (v?.models ?? []).filter((m) => !iso.has(m.m));
-  // 与总览一致:图层自下而上 = 占比**降序**(大的贴基线,小的压在上面)。`shown` 已是降序。
-  const layers: Layer[] = mode === "models"
-    ? shown.map((m) => ({
-        key: m.m, name: m.m, color: modelColor(m.m),
-        values: (v?.buckets ?? []).map((b) => b.models?.[m.m]?.total ?? 0),
-      }))
-    : totalClasses.map((cl) => ({
-        key: cl.key, name: cl.name, color: cl.shade(c),
-        // ★ `cache_write` 并进「未命中的输入」:它是**首次发送、同时写进缓存的新内容**,
-        //   本质就是没命中缓存的输入(没有缓存机制这些 token 照样要发)。用户 2026-08-15 定的三类。
-        //   Codex/Grok/Kimi 该字段恒 0,但 Claude 有 2.75% —— 单列会多一条看不见的带,并进去零丢失。
-        values: (v?.buckets ?? []).map((b) => cl.pick(b)),
-      }));
+  const layers: TkLayer[] = mode === "models"
+    ? shown.map((m) => ({ key: m.m, name: modelLabel(m.m), color: modelColor(m.m),
+                          values: (v?.buckets ?? []).map((b) => b.models?.[m.m]?.total ?? 0) }))
+    : totalClasses.map((cl) => ({ key: cl.key, name: cl.name, color: cl.shade(c),
+                                   values: (v?.buckets ?? []).map((b) => cl.pick(b)) }));
+  const labels = v?.labels ?? [];
+  const tipTitle = (i: number) => {
+    const l = labels[i] ?? "";
+    const w = mode === "models" ? "" : " · 总量";
+    if (l.length > 10) return `${l.slice(5, 10)} ${l.slice(11)}:00${w}`;
+    return `${l.length === 7 ? tickTitle(l) : l}${w}`;
+  };
+  const CH = L === 0 ? 236 : L === 1 ? 222 : 210;
+  const gran = isToday ? null : effGran(st, rangeDays);
+  const rangeTxt = st.preset === "custom" ? `${md(range.s)}→${md(range.e)}` : rangeLabel(st.preset);
 
-  const isToday = st.preset === "today";
-  // 浮层标题原本写死「分模型」,总量档下会说错
-  const modeWord = mode === "models" ? "分模型" : "总量";
+  // —— 缓存命中四格（R2 §6 · 视图 G）——
+  const cache = useMemo(() => {
+    if (!v) return null;
+    const a = v.ragg;
+    const hit = hitRate(a.cache_read, a.uncached_in, a.cache_write);
+    const pb = raw ? prevSum(raw, st, today, pk) : null;
+    const ph = pb ? hitRate(pb.cache_read, pb.uncached_in, pb.cache_write) : null;
+    const top = v.models[0];
+    const q = top ? priceOf(top.m, pk) : null;
+    // 写价按本期 1h / 5m 两档的实际占比加权（只有 Claude 有 1h 档）。
+    const h1 = a.cache_write > 0 ? Math.min(a.cache_write_1h ?? 0, a.cache_write) / a.cache_write : 0;
+    const be = q ? breakevenReads(q.in, q.cacheRead, blendWritePrice(q.in, q.cacheWrite, h1)) : null;
+    const ratio = a.cache_write > 0 ? a.cache_read / a.cache_write : null;
+    const perReq = v.agg.rounds > 0 ? v.cost / v.agg.rounds : null;
+    const noCache = v.agg.rounds > 0 ? noCacheCostOfBucket(v.agg, pk) / v.agg.rounds : null;
+    return {
+      hit, dpt: hit != null && ph != null ? hit - ph : null, be, ratio, perReq, noCache,
+      hitS: v.rb.map((b) => hitRate(b.cache_read, b.uncached_in, b.cache_write)),
+      ratioS: v.rb.map((b) => (b.cache_write > 0 ? b.cache_read / b.cache_write : null)),
+      saveS: v.buckets.map((b) => savingOfBucket(b, pk)),
+      reqS: v.buckets.map((day) => (day.rounds > 0 ? costOfBucket(day, pk) / day.rounds : null)),
+    };
+  }, [v, raw, st, today, pk]);
+  const avgHit = cache?.hit ?? null;
 
-  // 身份含平台与档位:换平台、换时间档、换分模型/总量都该重播;**自动刷新不该**。
-  // ★ 依赖是**数据集身份**：自定义档下只改日期时档位字符串不变，不带区间会让动效不重播、
-  //   浮层继续描述上一段数据（同 `key` 那条规则）。
-  const intro = useIntro(`${pk}:${st.preset}:${mode}:${range.s}:${range.e}:${st.gran}`);
-  const showToast = useCallback((m: string) => {
-    setToast(m);
-    window.clearTimeout((showToast as unknown as { _t?: number })._t);
-    (showToast as unknown as { _t?: number })._t = window.setTimeout(() => setToast(null), 1800);
-  }, []);
-
-  /**
-   * 费率卡脚注里的「缓存读 = 输入价 X%」。**必须实算**：新费率表下这个比值按平台差一个数量级
-   * —— Claude/Codex/Kimi 是 10%，Grok 15~25%，DeepSeek 3.3%，MiMo **0.8%**。
-   * 原来写死的「10%(Grok 为 85 折上下)」现在对三家是错的。
-   */
-  const cacheRatioText = useMemo(() => {
-    const rs = (v?.models ?? []).map((m) => { const q = priceOf(m.m, pk); return q.in > 0 ? q.cacheRead / q.in : null; })
-      .filter((x): x is number => x != null);
-    if (!rs.length) return "—";
-    const f = (x: number) => `${(x * 100).toFixed(x < 0.02 ? 1 : 0)}%`;
-    // ★ 比**格式化后的字符串**,不比浮点:0.02/0.2 = 0.09999999999999999，直接比会输出「10%~10%」。
-    const lo = f(Math.min(...rs)), hi = f(Math.max(...rs));
-    return lo === hi ? lo : `${lo}~${hi}`;
-  }, [v, pk]);
-  const days = Math.max(1, v?.labels.length ?? 1);
-  /**
-   * 环比基准 = **本平台**在上一等长周期的量与费用。与总览同一套口径（`prevTotals`），
-   * 只是把范围收到单个平台 —— 各家单价不同，混起来乘一个平均价就是编数。
-   * 今日档比昨日整天。取不到上一周期一律 `null` → 显示「—」，不拿不完整的一段冒充。
-   */
-  const prev = useMemo(() => {
-    if (!data) return null;
-    if (!isToday) return prevTotals(data, st, today, pk);
-    const p = data.platforms[pk];
-    if (!p) return null;
-    const dayKeys = Object.keys(p.days).sort();
-    const yd = dayKeys[dayKeys.length - 2];
-    if (!yd || !p.days[yd]) return null;
-    return { tok: p.days[yd].total, cost: costOfBucket(p.days[yd], pk) };
-  }, [data, pk, st, today, isToday]);
-
-  const delta = (now: number, base: number) =>
-    base > 0 ? { up: now >= base, txt: `${now >= base ? "↑" : "↓"}${(Math.abs(now - base) / base * 100).toFixed(1)}%` } : null;
-  const dTok = prev ? delta(v?.agg.total ?? 0, prev.tok) : null;
-  const dCost = prev ? delta(v?.cost ?? 0, prev.cost) : null;
-
-  const capt = isToday
-    ? `今日 · ${v?.labels.length ?? 0} 格 · 每小时`
-    : `${md(range.s)} → ${md(range.e)} · ${v?.labels.length ?? 0} 格 · ${granLabel(effGran(st, rangeDays))}`;
-  const kpis: Kpi[] = [
-    { k: "总 token", v: fmtTok(v?.agg.total ?? 0), n: v?.agg.total ?? 0, fmt: fmtTok,
-      sub: dTok ? `环比 ${dTok.txt}` : "环比 —",
-      subC: dTok ? (dTok.up ? UP : DOWN) : t.muted },
-    { k: "请求轮数", v: (v?.agg.rounds ?? 0).toLocaleString(),
-      n: v?.agg.rounds ?? 0, fmt: (x) => Math.round(x).toLocaleString() },
-    // ★ 交接稿 §1：日均列下方注明**比较区间** —— 环比只给百分比，
-    //   读者无从知道在跟哪一段比，而那正是判断它可不可信的依据。
-    { k: isToday ? "小时均" : "日均", v: fmtTok((v?.agg.total ?? 0) / days),
-      // ★★ 判据是 `dTok` 不是 `prev`：上一周期**取到了但合计为 0** 时，
-      //   比值算不出来（`delta` 对 base=0 返回 null），页面会显示「环比 —」。
-      //   此时仍印着 `vs 04-20 → 12-31` 就是自相矛盾 —— 一边说没比成，一边说跟这段比的。
-      //   （2026-09-13 用户截图里就是这个形态。）
-      sub: dTok && !isToday ? prevNote(st, today) : undefined, subC: t.muted,
-      n: (v?.agg.total ?? 0) / days, fmt: fmtTok },
-    // 与总览同名。「等效 API」这个限定词不放在标签里 —— 页面底部费率卡最后一行有完整说明
-    // (「费用 = 四类 token 分别乘单价求和,是等效 API 成本;订阅制下并非实付」),标签只留短名。
-    { k: "总费用", v: fmtUSD(v?.cost ?? 0), n: v?.cost ?? 0, fmt: fmtUSD, c: AMBER,
-      sub: v?.saving ? `缓存已省 ${fmtUSD(v.saving)}` : undefined },
-    { k: isToday ? "小时均费用" : "日均费用", v: fmtUSD((v?.cost ?? 0) / days),
-      n: (v?.cost ?? 0) / days, fmt: fmtUSD, c: AMBER,
-      sub: dCost ? `环比 ${dCost.txt}` : undefined,
-      subC: dCost ? (dCost.up ? UP : DOWN) : undefined },
-    { k: "占全池", v: v?.grand ? `${((v.agg.total / v.grand) * 100).toFixed(1)}%` : "—", c },
-  ];
-
-  // 费率卡的折算说明:该平台各类 token 的**真实**构成。
-  //
-  // ★ 走 `raw`:它的职责是说明"这份数据由什么组成",而 `data` 已按口径把缓存清零,拿它算会输出
-  //   「缓存读 0.0%」—— 那是在描述筛掉之后的残骸,不是数据的构成。
-  // ★ 但**只列当前口径计入的类**(用户 2026-08-11 定稿),而且**分母也要换成这几类之和** ——
-  //   否则百分比加起来不到 100(不含缓存时只有 4%),比不显示更糟。
   const mix = useMemo(() => {
     if (!raw?.platforms[pk]) return null;
     const parts = mixParts(sumBuckets(bucketsFor(raw, pk, st, today).buckets), cacheMode);
-    return parts.length ? parts.map((p) => `${p.name} ${p.pct.toFixed(1)}%`).join(" · ") : null;
+    return parts.length ? parts.map((x) => `${x.name} ${x.pct.toFixed(1)}%`).join(" · ") : null;
   }, [raw, pk, st, today, cacheMode]);
-
+  const anyEst = (v?.models ?? []).some((m) => !isPriced(m.m));
+  const hitCol = countsCacheRead(cacheMode);
+  const cols = modelCols(L, hitCol);
+  const dpt = fmtPt(cache?.dpt ?? null);
+  const gridCell: React.CSSProperties = { borderRadius: 10, background: p.panel2, border: `1px solid ${p.hair}`,
+    padding: "10px 12px 8px", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 };
+  const R: React.CSSProperties = { textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums" };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", overflow: "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 11 }}>
-        <span onClick={onBack} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 8, cursor: "pointer",
-                                        border: `1px solid ${t.ghostBorder}`, color: t.text2, whiteSpace: "nowrap" }}>
-          ← 总览
-        </span>
-        <span style={{ width: 10, height: 10, borderRadius: "50%", background: c, flexShrink: 0 }} />
-        <span style={{ fontSize: 22, fontWeight: 700, whiteSpace: "nowrap" }}>
-          {data?.platforms[pk]?.name ?? pk} 消耗
-        </span>
-        {/* ★ 交接稿 §5 的数据源副标 —— 与总览那行同一个组件，避免两页各写一份再漂。 */}
-        <PageSub text="读本地 transcript · 不消耗额度" t={t} />
+    <div data-token-detail style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 12,
+                                    padding: `0 ${L < 2 ? 6 : 0}px 0`, whiteSpace: "nowrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, height: 34, flexShrink: 0, minWidth: 0 }}>
+        <button type="button" onClick={onBack} aria-label="返回 Token 消耗" data-back
+                style={{ height: 30, padding: "0 10px 0 6px", borderRadius: 8, border: `1px solid ${t.isDark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.12)"}`,
+                         background: "transparent", color: p.text2, fontSize: 13, display: "inline-flex", alignItems: "center",
+                         gap: 4, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {L < 2 && "Token 消耗"}
+        </button>
+        <PLogo k={pk} color={c} size={24} isDark={t.isDark} />
+        {/* ★ 标题是唯一可收缩的那一格：860 下带路由角标 + 口径牌 + 自定义区间时整行放不下，先省略标题（评审）。 */}
+        <h1 style={{ margin: 0, fontSize: titleSize(W), fontWeight: 700, minWidth: 0, flexShrink: 1, overflow: "hidden",
+                     textOverflow: "ellipsis" }}>{me?.name ?? data?.platforms[pk]?.name ?? pk} 消耗</h1>
+        {/* 来源小字（只有 Gemini 写 agy）；数据源路径并进它的悬停提示（偏离 R2-13）。 */}
+        <span data-src title={`${SRC[pk] ?? ""}${SRC[pk] ? " · " : ""}读本地 transcript · 不消耗额度`}
+              style={{ fontSize: 12, color: p.label, fontFamily: MONO, cursor: "help" }}>{me?.src ?? "ⓘ"}</span>
+        <RouteSplit t={t} p={data?.platforms[pk]} labels={labels} rangeTxt={rangeTxt} />
         <CacheChip mode={cacheMode} />
-        <span style={{ fontSize: 11, color: t.muted, fontFamily: "'JetBrains Mono'", overflow: "hidden",
-                       textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{SRC[pk] ?? ""}</span>
-        {/* ★ 路由分账角标**紧挨源路径**（用户 2026-09-09 指位）：两者是同一类信息 ——
-            "这一页的数字从哪来"。单独占一行会把 KPI 往下推、且看着像一条告警。 */}
-        <RouteSplit t={t} p={data?.platforms[pk]} labels={v?.labels ?? []}
-                    rangeTxt={st.preset === "custom" ? `${md(range.s)}→${md(range.e)}` : rangeLabel(st.preset)} />
-        {/* ★★ `flexShrink: 0` —— 用户 2026-09-16 实报「分模型/总量」折成两行、
-            与旁边的档位条高度对不齐。实测折行阈值是 **≤1200px**，而窗口下限是 860px，
-            也就是**日常宽度下几乎一直是坏的**（1400px 才不折，107px → 被挤到 61px）。
-
-            根因不是 `Seg` 的 `flexWrap`（那是它挤到极限时的兜底，是对的），
-            而是**这一行里被挤的是不该被挤的东西**：同排的源路径 span 自带
-            `overflow:hidden + textOverflow:ellipsis`，**它才是设计来吸收挤压的**；
-            控件组没有 `flexShrink: 0`，于是 flex 从两边一起压。
-            ★ 判据：一行里谁能优雅退让谁就退让 —— 会截断的让给会省略号的。
-
-            ⚠️ 现有的 `wrapped` 探针**结构上看不见这一类**：它判叶子文本节点的渲染高，
-            而 Seg 折行时每个 span 仍是单行、折的是容器。所以这条缺陷只能靠肉眼发现
-            （2026-08-24 已经连报三处）。本轮已补 `segRows` 探针把它变成会红的闸。 */}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexShrink: 0 }}>
-          <Seg opts={["models", "total"] as const} cur={mode} on={setMode}
-               label={(x) => (x === "models" ? "分模型" : "总量")} t={t} />
-          <RangeBar st={st} today={today} onChange={setSt} onToast={showToast} t={t} />
-        </div>
+        <span style={{ flex: 1 }} />
+        <RefreshAgo t={t} generatedAt={data?.generated_at ?? null} L={L} busy={busy} onRefresh={onRefresh} />
+        <RangeSeg t={t} st={st} today={today} L={L} onChange={setSt} onToast={showToast} />
       </div>
-
-      {/* ★★ **这里曾经有两块 agy 专属内容，2026-09-09 用户拍板删掉**：
-          ① 覆盖率横幅（`覆盖 277/303 …`）—— 主源换成 agy 自己的会话库之后覆盖已 ~95%，
-             那条横幅从"必要的免责"退化成了噪音；
-          ② 「额度消耗」条（gemini-5h / gemini-weekly）—— **账号额度不属于用量页**。
-             它是账号的属性，归总览的额度卡；放在这里破坏了平台详情页的统一性
-             （其余 7 个平台都没有这两块）。
-          ⚠️ 不要"顺手"再加回来：平台详情页的统一性规则见项目 `CLAUDE.md` §5c。 */}
-
-
+      <div style={{ display: "flex", alignItems: "center", gap: 4, height: 26, flexShrink: 0, minWidth: 0 }}>
+        <PlatChips t={t} chips={chipRows.map((r) => ({ key: r.key, name: r.name, color: r.color }))} sel={pk}
+                   onPick={(k) => { if (k) (onSwitch ?? (() => {}))(k); }} withAll={false} L={L} aria="切换平台" />
+        <span style={{ flex: 1 }} />
+        {/* 分模型 / 总量（用户 2026-08-15 选的「绝对量堆叠」，保留，偏离 R2-14）。
+            ★ 评审：原来叠在图右上角，盖住顶格线并截走右侧几个桶的悬停 ⇒ 挪到胶囊行。 */}
+        <Seg opts={["models", "total"] as const} cur={mode} on={setMode}
+             label={(x) => (x === "models" ? "分模型" : "总量")} t={t} />
+        <span data-range-label style={{ fontSize: 12, color: p.label, fontFamily: MONO, flexShrink: 0 }}>
+          {rangeText(st, today, labels, gran && gran !== "day" ? granLabel(gran) : null)}
+        </span>
+      </div>
       {toast && <Toast msg={toast} t={t} />}
 
-      <KpiStrip t={t} items={kpis} intro={intro} />
-
-      {busy && !data && <div style={{ fontSize: 12, color: t.muted }}>扫描中…</div>}
-
-      {/* ★★ 一屏仪表盘（同 TrafficPage，用户 2026-10-14）：图表吃剩余高度、下限仍是原来的 190px，
-          模型表在自己的框里滚。 */}
-      <div ref={chartHost} style={{ flex: "1 1 0", minHeight: CHART_MIN + CHART_CHROME_H,
-                                    display: "flex", flexDirection: "column" }}>
-      {!!v?.labels.length && (
-        // ★ key 同时带 `mode`:切「分模型 ↔ 总量」也是换了一整个数据集。不带 `iso` —— 隔离模型只改
-        //    图层不改日期,hover 索引仍然指同一天,重建反而会把用户停着的浮层弄没。
-        <>
-        <div className={introEnabled() ? "cb-wipe" : undefined} key={`w:${st.preset}:${range.s}:${range.e}:${st.gran}:${mode}`}>
-        <StackedArea caption={capt}
-                     key={`${st.preset}:${range.s}:${range.e}:${st.gran}:${mode}:${v.labels[0]}`}
-                     labels={v.labels} layers={layers}
-                     height={Math.max(CHART_MIN, chartH - CHART_CHROME_H)} fmt={fmtTok} t={t}
-                     /* ★ 同 TrafficPage：判据看标签形状（带 `T` 就是小时桶），
-                        不看是不是今天 —— 否则选中昨天会印出原始的 `2026-09-14T09`。 */
-                     tipTitle={(i) => {
-                       const l = v.labels[i];
-                       if (l.length <= 10) return `${l} · ${modeWord}`;
-                       return `${isToday ? "今日" : l.slice(0, 10)} ${l.slice(11)}:00 · ${modeWord}`;
-                     }} />
-        </div>
-        </>
-      )}
-      </div>
-
-      {/* ★ 总量档的图例 —— **必须带占比数字**。这个档位的已知代价就是「缓存读占 ~95%，
-          另两类各自只有 ~10px 和 ~1px，构成看不出来」(用户 2026-08-15 知情选择)。
-          图例里把三个数写出来，读不出来的部分至少有数兜底；没有它，页面就只剩一条纯色带。 */}
-      {mode === "total" && v && (
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8,
-                      fontSize: 10.5, fontFamily: "'JetBrains Mono'", color: t.text2 }}>
-          {TOTAL_CLASSES.filter((cl) => cl.key !== "cache_read" || countsCacheRead(cacheMode)).map((cl) => {
-            const sum = v.buckets.reduce((n, b) => n + cl.pick(b), 0);
-            // 占比恒按**全量**算,不随隔离变 —— 隔离只是"这张图先不画它",不是"它不存在了"
-            const pct = v.agg.total ? (sum / v.agg.total) * 100 : 0;
-            const off = isoCls.has(cl.key);
-            return (
-              <span key={cl.key} title={`${cl.full}\n点击可把它从图里摘掉（只影响这张图，不改口径/费用/总量）`}
-                    onClick={() => setIsoCls((z) => {
-                      const nx = new Set(z);
-                      nx.has(cl.key) ? nx.delete(cl.key) : nx.add(cl.key);
-                      // 全摘光就什么都不剩了,最后一类不许摘
-                      // 口径已经删掉一类时，可隔离的总数也跟着少 —— 否则会允许把仅剩的一类也摘光
-                      const avail = TOTAL_CLASSES.filter((x) => x.key !== "cache_read" || countsCacheRead(cacheMode)).length;
-                      return nx.size >= avail ? z : nx;
-                    })}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
-                             opacity: off ? 0.38 : 1, transition: "opacity .15s",
-                             textDecoration: off ? "line-through" : "none" }}>
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: cl.shade(c),
-                               boxShadow: `0 0 0 1px ${t.cardBorder}`, flexShrink: 0,
-                               opacity: off ? 0.35 : 1 }} />
-                {cl.name}
-                <span style={{ color: t.muted }}>{fmtTok(sum)} · {pct.toFixed(2)}%</span>
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ★ 左右分区（用户 2026-08-15 从 5 张整页 mock 里选的 L1）:模型消耗在左、费率卡在右。
-          比例 1.32:1 —— 左边有「名称+条+token+占比+轮数+费用」六列,右边只有四列。
-          窄窗时(<980px)退回上下堆叠,否则条形图会被压到看不出长短。 */}
-      {/* ★★ D1 · 一张表，中间一条发丝竖线把「模型消耗」和「API 牌价」分成两个工作区
-          （用户 2026-08-15 从三个对齐方案里选的）。
-
-          为什么不是两块卡片：左右两栏列的是**同一批模型**，分成两块后同一个模型不在同一行，
-          眼睛得来回找才能把 `gpt-5.6-sol` 和它的价对上。同一张表里，逐行对齐是天然的。
-          试过「两块卡片 + 行高钉死」也能对齐，但模型名要列两遍；再去掉重复名就只能写
-          「同左第 N 行」——那说明一旦逐行对齐，卡片边界本身就是多余的。
-
-          「费率卡 · API 牌价」这个标题去掉了，改成表头上方的分组名。 */}
-      {/* ★ 这是一张**宽数据表**:11 列的 `gridTemplateColumns` 加起来约 698px,是硬下限,
-          压不动也不该压(数字列压窄会 `###` 或串位)。900px 窄窗实测右侧被切掉,
-          裁掉的正是「费用/百万」那一列 —— **数据表被裁比排版难看严重得多**。
-          所以给它自己的横向滚动:装不下就能滚,一列都不少。
-          (扫描探针会跳过 overflow:auto 的容器 —— 可滚动是取舍,不是缺陷。) */}
-      {!!v?.models.length && (
-        <div data-platform-table style={{ marginTop: 14, overflowX: "auto", overflowY: "auto",
-                      flex: "0 1 auto", minHeight: TABLE_BOX_MIN }}>
-          <div style={{ display: "grid", gridTemplateColumns: `1fr ${GAP}px ${RATE_W}px`,
-                        fontFamily: "'JetBrains Mono'", fontSize: TZ.groupHead, color: t.muted,
-                        letterSpacing: ".06em", marginBottom: 4, minWidth: TABLE_MIN }}>
-            <span style={{ color: t.text2, fontWeight: 700 }}>模型消耗</span>
-            <span />
-            <span style={{ color: t.text2, fontWeight: 700 }}>API 牌价</span>
+      <div ref={host} data-platform-scroll style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", overflowX: "hidden",
+                                                     display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8 }}>
+        {busy && !data && <div style={{ fontSize: 12, color: p.label }}>扫描中…</div>}
+        {data && kpis.length > 0 && <KpiGrid t={t} items={kpis} anim={anim} borderColor={p.border} />}
+        {!!labels.length && cw > 0 && (
+          <div className="tk-dir" style={{ position: "relative", animation: anim?.replace(".22s", ".26s").replace("both", ".03s both") }}>
+            <TkArea t={t} width={cw} height={CH} labels={labels} layers={layers} fmt={(n) => fmtTokL(n, L)} unit="token"
+                    tipTitle={tipTitle} focus={mode === "models" ? hm : null} />
           </div>
-
-          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: TZ.body, minWidth: TABLE_MIN }}>
-            <div style={{ ...ROW, fontSize: TZ.colHead, color: t.muted, letterSpacing: ".07em",
-                          padding: "0 4px 6px", borderBottom: `1px solid ${t.cardBorder}` }}>
-              <span /><span>模型</span><span />
-              <span style={R}>TOKEN</span><span style={R}>占比</span><span style={R}>轮数</span>
-              <span style={R}>折算费用</span>
-              <span style={{ borderLeft: `1px solid ${t.cardBorder}`, justifySelf: "center",
-                             width: 1, alignSelf: "stretch" }} />
-              <span style={R}>输入</span><span style={R}>输出</span><span style={R}>费用/百万</span>
-            </div>
-
-            {v.models.map((m) => {
-              const q = priceOf(m.m, pk);
-              const off = iso.has(m.m);
+        )}
+        {mode === "total" && v && (
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: MONO, color: p.text2, flexShrink: 0 }}>
+            {TOTAL_CLASSES.filter((cl) => cl.key !== "cache_read" || countsCacheRead(cacheMode)).map((cl) => {
+              const sum = v.buckets.reduce((n, b) => n + cl.pick(b), 0);
+              const pct = v.agg.total ? (sum / v.agg.total) * 100 : 0;
+              const off = isoCls.has(cl.key);
               return (
-                <div key={m.m} onClick={() => setIso((z) => {
-                  const nx = new Set(z); nx.has(m.m) ? nx.delete(m.m) : nx.add(m.m); return nx;
-                })}
-                     title={isPriced(m.m) ? undefined : "该型号不在费率表里，按同平台最接近的档位估算"}
-                     style={{ ...ROW, padding: "5px 4px", cursor: "pointer",
-                              opacity: off ? 0.38 : 1, transition: "opacity .15s",
-                              borderBottom: `1px solid ${t.isDark ? "rgba(255,255,255,.035)" : "rgba(0,0,0,.04)"}` }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 2, flexShrink: 0,
-                                 background: modelColor(m.m), opacity: off ? 0.3 : 1 }} />
-                  {/* 宿主源(Reasonix/dsh)按贡献者原样**不归一化**模型名，会带客户端前缀
-                      (`deepseek-pro/deepseek-v4-pro`)，比 `gpt-5.6-terra` 长一倍，列宽放不下。
-                      截断可以接受，**查不到全称不行** —— 所以名字自带 title。 */}
-                  <span title={m.m}
-                        style={{ color: t.text2, overflow: "hidden", textOverflow: "ellipsis",
-                                 whiteSpace: "nowrap" }}>{m.m}</span>
-                  <div style={{ height: 6, borderRadius: 3, background: t.barTrack,
-                                overflow: "hidden", marginRight: 10, minWidth: 40 }}>
-                    <div style={{ width: `${(m.total / Math.max(1, v.models[0].total)) * 100}%`,
-                                  height: "100%", background: modelColor(m.m) }} />
-                  </div>
-                  <span style={{ ...R, fontWeight: 700 }}>{fmtTok(m.total)}</span>
-                  <span style={{ ...R, color: t.muted }}>
-                    {((m.total / Math.max(1, v.agg.total)) * 100).toFixed(1)}%
-                  </span>
-                  <span style={{ ...R, color: t.muted }}>{m.rounds.toLocaleString()}</span>
-                  <span style={{ ...R, color: AMBER, fontWeight: 700 }}>{fmtUSD(m.cost)}</span>
-                  <span style={{ borderLeft: `1px solid ${t.cardBorder}`, justifySelf: "center",
-                                 width: 1, alignSelf: "stretch" }} />
-                  <span style={R}>
-                    ${money(q.in)}{!isPriced(m.m) && <span style={{ color: AMBER }}> *</span>}
-                  </span>
-                  <span style={R}>${money(q.out)}</span>
-                  {/* ★ 第三列不是再抄一遍牌价，是**这个模型的实际单价**（费用÷token）。
-                      同一张表里牌价已经在左边两列了；实际单价才回答「钱花在哪个型号上」——
-                      本机实测 sol $0.840/M vs luna $0.038/M，差 22 倍。 */}
-                  <span style={{ ...R, color: t.muted }} title="折算费用 ÷ 该模型 token 数">
-                    {m.total > 0 ? `$${(m.cost / (m.total / 1e6)).toFixed(3)}` : "—"}
-                  </span>
-                </div>
+                <span key={cl.key} title={`${cl.full}\n点击可把它从图里摘掉（只影响这张图，不改口径/费用/总量）`}
+                      onClick={() => setIsoCls((z) => {
+                        const nx = new Set(z);
+                        if (nx.has(cl.key)) nx.delete(cl.key); else nx.add(cl.key);
+                        const avail = TOTAL_CLASSES.filter((x) => x.key !== "cache_read" || countsCacheRead(cacheMode)).length;
+                        return nx.size >= avail ? z : nx;
+                      })}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
+                               opacity: off ? 0.38 : 1, transition: "opacity .15s", textDecoration: off ? "line-through" : "none" }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: cl.shade(c), flexShrink: 0 }} />
+                  {cl.name}<span style={{ color: p.label }}>{fmtTok(sum)} · {pct.toFixed(2)}%</span>
+                </span>
               );
             })}
           </div>
-          <div style={{ fontSize: TZ.note, color: t.muted, marginTop: 8, lineHeight: 1.6 }}>
-            {/* 脚注只解释当前口径真正用到的价:讲一个没参与计算的折扣率,读者会以为费用里含了它 */}
-            {countsCacheRead(cacheMode)
-              ? `缓存读 = 输入价 ${cacheRatioText} · `
-              : "当前口径不计入缓存读 · "}
-            {countsCacheWrite(cacheMode)
-              ? "Anthropic 缓存写 1.25x · "
-              : "缓存写同样不计入 · "}
-            {/* 构成行原来挂在「费率卡」标题旁，标题删了就挪到这儿 —— 它把 cache_write 单列，
-                与上面三类图例(把 cache_write 并进「新输入」)不重复。 */}
-            {mix && <>本期构成 {mix}</>}
-            <br />
-            <span style={{ color: "#E0901C" }}>⚠️ 标 * 的是估算价</span>
-            ，按同平台最接近的档位推的，不是准数。牌价 2026-08-15 取自各家官网，费率表在 <code>src/rates.ts</code>。
-            <br />
-            费用 = {countedClasses(cacheMode)} 类 token 分别乘单价求和，是<b>等效 API 成本</b>；订阅制下并非实付。
-          </div>
+        )}
+
+        {cache && countsCacheRead(cacheMode) && (
+          <section data-cache-grid style={{ borderRadius: 12, background: p.panel, border: `1px solid ${p.border}`,
+                                            padding: "12px 16px 14px", display: "flex", flexDirection: "column", gap: 10, flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, height: 22 }}>
+              <span title="缓存命中 = 缓存读 ÷（缓存读 + 输入）；输入含缓存写" style={{ display: "inline-flex", alignItems: "center", gap: 6,
+                            fontSize: 14, fontWeight: 600 }}>缓存命中<InfoI color={p.label} /></span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 12, color: p.label, fontFamily: MONO }}>{rangeText(st, today, labels, null)}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
+              <div style={gridCell} title={`按 token 加权${mix ? ` · 本期构成 ${mix}` : ""}`} data-cache-cell="hit">
+                <span style={{ fontSize: 12, color: p.label }}>命中率</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10, height: 30 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: p.accent }}>{cache.hit == null ? "—" : `${cache.hit.toFixed(1)}%`}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: dpt.trend === "up" ? p.up : dpt.trend === "down" ? p.down : p.label }}>
+                    {dpt.text}
+                  </span>
+                </span>
+                <Mini vals={cache.hitS} color={p.accent} refColor={p.axis} />
+                <span style={{ fontSize: 10.5, color: p.label, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis" }}>缓存读 ÷（缓存读 + 输入）</span>
+              </div>
+              <div style={gridCell} data-cache-cell="ratio" title={cache.be != null ? `按 ${v?.models[0]?.m ?? ""} 牌价：写入多付的钱，被读约 ${cache.be.toFixed(2)} 次就省回来` : undefined}>
+                <span style={{ fontSize: 12, color: p.label }}>读写比</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10, height: 30 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700 }}>{cache.ratio == null ? "—" : `${cache.ratio.toFixed(1)}×`}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: p.label }}>
+                    {cache.ratio == null ? "自动缓存" : cache.be == null ? "" : cache.ratio >= cache.be ? "已回本" : "未回本"}
+                  </span>
+                </span>
+                {cache.ratio == null ? <svg viewBox="0 0 200 34" style={{ width: "100%", height: 34, marginTop: 4 }} />
+                  : <Mini vals={cache.ratioS} color={c} refV={cache.be} refColor={p.axis} />}
+                <span style={{ fontSize: 10.5, color: p.label, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {cache.ratio == null ? "该平台缓存写入不额外计费"
+                    : `每写入 1 份缓存被读的次数${cache.be != null ? ` · 虚线 = 回本 ${cache.be.toFixed(2)}×` : ""}`}
+                </span>
+              </div>
+              <div style={gridCell} data-cache-cell="saved">
+                <span style={{ fontSize: 12, color: p.label }}>已省</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10, height: 30 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: p.up }}>{fmtUsdL(v?.saving ?? 0, L)}</span>
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginLeft: "auto", lineHeight: "14px", fontSize: 11, minWidth: 0 }}>
+                    <span style={{ color: p.label }}>费用的</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: p.text }}>{v && v.cost > 0 ? `${(v.saving / v.cost).toFixed(1)} 倍` : "—"}</span>
+                  </span>
+                </span>
+                <Mini vals={cache.saveS} color={p.up} refColor={p.axis} />
+                <span style={{ fontSize: 10.5, color: p.label, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis" }}>若无缓存需多付的部分</span>
+              </div>
+              <div style={gridCell} data-cache-cell="per-req">
+                <span style={{ fontSize: 12, color: p.label }}>每请求成本</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10, height: 30 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: p.amber }}>{cache.perReq == null ? "—" : fmtUsdL(cache.perReq, L)}</span>
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginLeft: "auto", lineHeight: "14px", fontSize: 11, minWidth: 0 }}>
+                    <span style={{ color: p.label }}>无缓存</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: p.text }}>{cache.noCache == null ? "—" : fmtUsdL(cache.noCache, L)}</span>
+                  </span>
+                </span>
+                <Mini vals={cache.reqS} color={p.amber} refColor={p.axis} />
+                <span style={{ fontSize: 10.5, color: p.label, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis" }}>请求数不变而它上升 = 缓存在失效</span>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {!!v?.models.length && (
+          <section data-platform-table style={{ display: "flex", flexDirection: "column", flexShrink: 0, borderTop: `1px solid ${p.line}` }}>
+            <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", columnGap: 12, height: 32,
+                          fontSize: 11.5, color: p.label, padding: "0 6px" }}>
+              <span /><span>模型</span>{L < 2 && <span />}
+              <span style={{ textAlign: "right" }}>Token</span><span style={{ textAlign: "right" }}>占比</span>
+              <span style={{ textAlign: "right" }}>轮数</span><span style={{ textAlign: "right" }}>等效费用</span>
+              {L === 0 && <><span style={{ textAlign: "right" }}>输入 $/M</span><span style={{ textAlign: "right" }}>输出 $/M</span></>}
+              <span style={{ textAlign: "right" }}>费用/百万</span>{hitCol && <span style={{ textAlign: "right" }}>缓存命中</span>}
+            </div>
+            {v.models.map((m) => {
+              const q = priceOf(m.m, pk);
+              // 「总量」档的图不分模型 ⇒ 行点击不隔离、也不变暗（评审：原来行变暗而图不变）。
+              const isoOk = mode === "models";
+              const off = isoOk && iso.has(m.m);
+              const est = !isPriced(m.m);
+              return (
+                <div key={m.m} data-model-row={m.m}
+                     onClick={isoOk ? () => setIso((z) => { const nx = new Set(z); if (nx.has(m.m)) nx.delete(m.m); else nx.add(m.m); return nx; }) : undefined}
+                     onMouseEnter={() => setHm(m.m)} onMouseLeave={() => setHm(null)}
+                     title={`${est ? "该型号不在费率表里，按同平台最接近的档位估算" : ""}${est && isoOk ? " · " : ""}${isoOk ? "点击从图里摘掉 / 放回" : ""}` || undefined}
+                     style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", columnGap: 12, height: 38,
+                              borderTop: `1px solid ${p.hair}`, padding: "0 6px", borderRadius: 6, cursor: isoOk ? "pointer" : "default",
+                              background: hm === m.m ? p.hoverRow : "transparent", opacity: off ? 0.38 : 1,
+                              transition: "background .15s ease-out, opacity .15s" }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: modelColor(m.m) }} />
+                  <span title={m.m} style={{ fontFamily: MONO, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis" }}>{modelLabel(m.m)}</span>
+                  {L < 2 && (
+                    <span style={{ height: 6, borderRadius: 3, background: p.track, overflow: "hidden" }}>
+                      <span style={{ display: "block", height: "100%", background: modelColor(m.m), transition: `width .55s ${SPR9}`,
+                                     width: `${(m.total / Math.max(1, v.models[0].total)) * 100}%` }} />
+                    </span>
+                  )}
+                  <span style={{ ...R, fontSize: 14, fontWeight: 600 }}>{fmtTokL(m.total, L)}</span>
+                  <span style={{ ...R, fontSize: 12.5, color: p.text2 }}>{((m.total / Math.max(1, v.agg.total)) * 100).toFixed(1)}%</span>
+                  <span style={{ ...R, fontSize: 12.5, color: p.text2 }}>{fmtIntL(m.rounds, L)}</span>
+                  <span style={{ ...R, fontSize: 13.5, color: p.amber }}>{fmtUsdL(m.cost, L)}</span>
+                  {L === 0 && <>
+                    <span style={{ ...R, fontSize: 12.5, color: p.text2 }}>${money(q.in)}{est && <span style={{ color: p.amber }}> *</span>}</span>
+                    <span style={{ ...R, fontSize: 12.5, color: p.text2 }}>${money(q.out)}</span>
+                  </>}
+                  <span style={{ ...R, fontSize: 12.5, color: p.label }} title="等效费用 ÷ 该模型 token 数">
+                    {m.total > 0 ? `$${(m.cost / (m.total / 1e6)).toFixed(3)}` : "—"}{L > 0 && est && <span style={{ color: p.amber }}> *</span>}
+                  </span>
+                  {hitCol && (
+                    <span style={{ ...R, fontSize: 12.5, color: lowHit(m.hit, avgHit) ? p.down : p.text2 }}
+                          title={lowHit(m.hit, avgHit) ? "低于平台均值 1.5 pt 以上" : undefined}>
+                      {m.hit == null ? "—" : `${m.hit.toFixed(1)}%`}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+        <div style={{ fontSize: 11.5, color: p.label, flexShrink: 0, display: "flex", gap: 6, alignItems: "center" }}>
+          <span title="费用 = 各类 token 分别乘单价求和；牌价取自各家官网，费率表在 src/rates.ts">
+            费用 = {countedClasses(cacheMode)} 类 token × 牌价（2026-09-29）· 等效 API 成本，订阅制下非实付
+          </span>
+          {anyEst && <span style={{ color: p.amber }}>· 标 * 的是估算价，按同平台最接近的档位推的，不是准数</span>}
         </div>
-      )}
+      </div>
     </div>
   );
 }
-

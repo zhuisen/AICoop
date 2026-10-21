@@ -234,5 +234,15 @@ export function cacheSavingOf(t: TokenClasses, model: string, platform: string):
   return (t.cache_read * (p.in - p.cacheRead)) / 1e6;
 }
 
+/**
+ * 没有缓存机制时的费用基线：全部输入（未命中 + 缓存读 + 缓存写）按普通输入价，输出照旧。
+ * ★ 不是 `costOf + cacheSavingOf`：那只加回了读折扣，缓存写的溢价还留在里面（阶段 4 评审实测
+ *   1M 个 1h 写 + 0.5M 读：真基线 $7.50，旧算法给 $12.50）。
+ */
+export function noCacheCostOf(t: TokenClasses, model: string, platform: string): number {
+  const p = priceOf(model, platform);
+  return ((t.uncached_in + t.cache_read + t.cache_write) * p.in + t.output * p.out) / 1e6;
+}
+
 export const fmtUSD = (n: number): string =>
   n >= 1000 ? `$${(n / 1000).toFixed(2)}K` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;

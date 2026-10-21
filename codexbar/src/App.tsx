@@ -311,7 +311,8 @@ export default function App() {
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {/* Sidebar — AICoop P10_Nav（components/NavRail.tsx） */}
-        <NavRail t={t} page={page} onPage={setPage} />
+        {/* 侧栏再点「Token 消耗」= 回总览（R2 §2「侧栏图标返回」）。 */}
+        <NavRail t={t} page={page} onPage={(pg) => { if (pg === "traffic") setDrill(null); setPage(pg); }} />
 
         {/* Content */}
         <div style={{ flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -341,9 +342,10 @@ export default function App() {
           {page === "relay" && <RelayPage t={t} />}
 
           {page === "traffic" && (drill
-            ? <PlatformPage t={t} data={traffic} raw={trafficRaw} cacheMode={cacheMode}
+            ? <PlatformPage t={t} data={traffic} raw={trafficRaw} cacheMode={cacheMode} prefs={platPrefs}
                             pk={drill} st={trafficSt} setSt={setTrafficSt}
-                            onBack={() => setDrill(null)} busy={trafficBusy} />
+                            onBack={() => setDrill(null)} busy={trafficBusy}
+                            onSwitch={setDrill} onRefresh={refreshTraffic} />
             : <TrafficPage t={t} data={traffic} raw={trafficRaw} cacheMode={cacheMode} prefs={platPrefs}
                            st={trafficSt} setSt={setTrafficSt}
                            onDrill={setDrill} busy={trafficBusy} err={trafficErr}

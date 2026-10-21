@@ -159,7 +159,7 @@ export default function MenuBarToday({ view, colors, cacheMode, refreshedAt, bus
 
         {/* 24 h 堆叠图 —— 无 tooltip；整块可点 → 工作台 AI用量信息。 */}
         <div className="mb-today-chart-click" onClick={onOpenOverview} onMouseLeave={() => setHv(null)}
-             title="打开工作台 · AI用量信息" style={{ position: "relative", height: 100, overflow: "hidden", cursor: "pointer" }}>
+             title="打开工作台 · Token 消耗" style={{ position: "relative", height: 100, overflow: "hidden", cursor: "pointer" }}>
           <svg className="mb-reveal" width="100%" height={VH} viewBox={`0 0 ${VW} ${VH}`} preserveAspectRatio="none"
                aria-hidden="true" style={{ display: "block" }}>
             {[...cum].reverse().map((c) => (

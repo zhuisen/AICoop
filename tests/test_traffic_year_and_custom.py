@@ -326,11 +326,18 @@ class TheChartCaptionShareTheTokenLine(unittest.TestCase):
                          f"★★★ {bad} 又在图表上方另起了一行标题 —— 整页会高 26px")
 
     def test_both_pages_pass_the_caption_down(self):
-        """★ 反向闸：删掉那一行却忘了把 caption 传下去 = 说明文字整个消失，而页面看着很正常。"""
+        """★ 反向闸：说明文字不能整个消失。
+
+        2026-10-22 改写（AICoop R2）：两页的图换成 `TkArea`，区间小字（`MM-DD → MM-DD · 按周`）挪进**胶囊行**
+        右端（`data-range-label`），仍不另起一行。判据：两页都渲染它，且它和平台胶囊在同一个 flex 行里。"""
         for f in self.PAGES:
             with self.subTest(file=f):
-                self.assertIn("caption={capt}", (ROOT / f).read_text(encoding="utf-8"),
-                              "★ 没有把 caption 传给 StackedArea —— 那行小字消失了")
+                src = (ROOT / f).read_text(encoding="utf-8")
+                i = src.find("<span data-range-label")
+                self.assertGreaterEqual(i, 0, "★ 区间小字没了")
+                row = src[src.rfind("<div", 0, i):i]
+                self.assertIn("<PlatChips", row, "★ 区间小字不在胶囊那一行 —— 另起了一行，整页会变高")
+                self.assertIn("rangeText(st, today, labels,", src[i:i + 200])
 
 
 class AFixedPresetResetsGranularity(unittest.TestCase):
@@ -708,29 +715,30 @@ class LoadingSaysNothingNotZero(unittest.TestCase):
     （否则会拿 90 天的数配「年度」的轴），两件事是同一个改动的两半。
     """
 
+    # 2026-10-22 改写（AICoop R2）：加载态骨架抽成 `tkModel.ts::skeletonKpis`，两页的 7 格都由 `buildKpis` 出。
     TS = (ROOT / "codexbar" / "src" / "pages" / "TrafficPage.tsx").read_text(encoding="utf-8")
+    MODEL = (ROOT / "codexbar" / "src" / "components" / "tk" / "tkModel.ts").read_text(encoding="utf-8")
+
+    def _skel(self):
+        i = self.MODEL.index("export function skeletonKpis(")
+        return self.MODEL[i:self.MODEL.index("\n}", i)]
 
     def test_the_kpi_strip_has_a_loading_branch(self):
-        i = self.TS.index("const kpis: Kpi[] =")
-        head = self.TS[i:i + 400]
-        self.assertRegex(head, r"loading\s*\?",
+        self.assertRegex(self.TS, r"!data \? \(\s*<>\s*<KpiGrid[^>]*items=\{skeletonKpis\(",
                          "★★★ KPI 没有加载分支 ⇒ 空窗期显示 `总 token 0 · $0.000`")
 
     def test_every_loading_kpi_is_a_dash(self):
-        """★ 判据打在**值**上，不是"有没有那个变量"。留一格漏成 0 就是留一句假话。"""
-        i = self.TS.index("const kpis: Kpi[] =")
-        j = self.TS.index("] : [", i)
-        branch = self.TS[i:j]
-        vals = re.findall(r'v:\s*("[^"]*")', branch)
-        self.assertGreaterEqual(len(vals), 5, "加载分支的格子数不对 —— 探针失准")
-        self.assertEqual(set(vals), {'"—"'},
-                         f"★ 加载态里有不是「—」的值: {sorted(set(vals))}")
+        """★ 判据打在**值**上，不是"有没有那个变量"。"""
+        vals = re.findall(r'value:\s*("[^"]*")', self._skel())
+        self.assertGreaterEqual(len(vals), 1, "探针失准")
+        self.assertEqual(set(vals), {'"—"'}, f"★ 加载态里有不是「—」的值: {sorted(set(vals))}")
+        self.assertIn("labels.map((label) => ({ label, value: \"—\"", self._skel(), "★ 不是每一格都走同一个「—」")
 
     def test_the_cache_kpi_is_dashed_while_loading_too(self):
-        """★ 它在主分支外面 push，最容易被漏掉 —— 漏了就是一格真话旁边的一格假话。"""
-        i = self.TS.index('kpis.push({ k: "缓存"')
-        self.assertIn("!loading", self.TS[i:i + 160],
-                      "★ 缓存那一格没跟着加载态走")
+        """★ 缓存那一格在骨架里也得有（否则数据到达时从 6 格跳成 7 格），并且同样是「—」。"""
+        sk = self._skel()
+        self.assertIn('if (cache) labels.push(s2 ? "缓存" : "缓存命中");', sk)
+        self.assertIn("countsCacheRead(cacheMode))} />", self.TS, "★ 骨架没按缓存口径决定第 7 格")
 
 
 class EveryBucketsForCallCarriesTheRangeState(unittest.TestCase):
@@ -744,7 +752,8 @@ class EveryBucketsForCallCarriesTheRangeState(unittest.TestCase):
     **同一格、两个原因、同一个假值** —— 所以这条闸打在「所有调用点」上，不是某个已知的坑上。
     """
 
-    FILES = ["codexbar/src/pages/TrafficPage.tsx", "codexbar/src/pages/PlatformPage.tsx"]
+    FILES = ["codexbar/src/pages/TrafficPage.tsx", "codexbar/src/pages/PlatformPage.tsx",
+             "codexbar/src/components/tk/tkModel.ts"]
 
     def test_no_call_site_drops_an_argument(self):
         bad = []

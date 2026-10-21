@@ -62,6 +62,8 @@ export default function CreditChip({ a, busy, open, onOpenChange, onConfirm }: {
   }, [open, onOpenChange, list.length]);
 
   const tone = open ? "open" : n === 0 ? "none" : warn ? "warn" : "ok";
+  // ★ 剩不到一天时写「23小时」比「1天」长两格 ⇒ 1200 宽四列（内容宽 237）也放不下，阈值放宽到 250（`ov-chip-hrs`）。
+  //   2026-10-22 全量测试随时钟走过「剩 1天 → 23小时」变红抓到的。
   // ★ 窄卡（内容宽 < 226，即 860 宽三列）里「重置卡」三个字由 CSS 容器查询藏掉 —— 否则带「· 剩 1天」时
   //   左边的「到期 MM-DD」被挤成省略号（用户 2026-10-21「到期日期挡住了」，有渲染闸）。
   const long = busy ? "使用中…" : n === 0 ? "无重置卡"
@@ -73,7 +75,7 @@ export default function CreditChip({ a, busy, open, onOpenChange, onConfirm }: {
     : `共 ${n} 张 · 到期未知（运行 codex-rotate credits 取明细后才能选用）`;
   return (
     <span ref={box} style={{ display: "inline-flex", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-      <span className={`ov-chip ov-chip-${tone}`} role="button" tabIndex={0} data-card-badge="" data-card-chip={n}
+      <span className={`ov-chip ov-chip-${tone}${warn && (a.cardDays ?? 0) < 1 ? " ov-chip-hrs" : ""}`} role="button" tabIndex={0} data-card-badge="" data-card-chip={n}
             aria-expanded={open} title={open ? undefined : title}
             onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
         <IcCard /><span className="ov-chip-long">{long}</span><span className="ov-chip-short">×{n}</span>

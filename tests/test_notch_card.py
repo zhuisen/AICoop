@@ -241,7 +241,7 @@ class Shape(unittest.TestCase):
         self.assertNotIn("onClick", tag)
         self.assertNotIn("set_main_visible", self.tsx, "旧面板「点这里打开 CodexBar」那条路要随功能 3 一起退役")
         links = re.findall(r'data-notch-link="(\w+)" onClick=\{go\("(\w+)"\)\}>([^<]+)<', self.tsx)
-        self.assertEqual(links, [("requests", "requests", "请求页 →"), ("traffic", "traffic", "用量页 →"),
+        self.assertEqual(links, [("requests", "requests", "请求页 →"), ("traffic", "traffic", "Token 消耗 →"),
                                  ("overview", "overview", "总览 →")], "在跑 = 请求页、今日 = 用量页，别弄反")
         self.assertRegex(self.tsx, r'emit\("open-main-page", \{ page, platform: null \}\)')
 
@@ -403,7 +403,7 @@ class TheBundleRenders(unittest.TestCase):
             tok = text(element(h, 'data-notch-trow="%s"' % k)).split()[1:]
             self.assertNotIn("0", tok, "0 用量的平台不显示")
         t = text(element(h, "data-notch-today"))
-        self.assertIn("用量页 →", t)
+        self.assertIn("Token 消耗 →", t)  # 2026-10-22 页名改「Token 消耗」（AICoop R2）
         self.assertRegex(t, r"今日 [\d,]+ 次请求 · 均 [\d.]+ t/s")
         self.assertIn("<path", element(h, "data-notch-chart"))
 

@@ -572,7 +572,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
           `prefers-reduced-motion` 同语义，两者任一为「关」就不动画。
           只影响主窗那两张图与 KPI；菜单栏没有入场动效，所以不需要跨 webview 广播。 */}
       <Row label="入场动效"
-           desc="打开「AI 用量信息」或切时间档时，图表从左往右揭开、KPI 数字从 0 滚上来。关掉后数据直接到位（系统里开了「减弱动态效果」时本来就不播）。">
+           desc="打开「Token 消耗」页时，7 个指标依次上浮、平台卡片随后出现。关掉后直接到位（系统里开了「减弱动态效果」时本来就不播）。">
         <div onClick={() => update({ intro: !s.intro })} style={{
           width: 38, height: 22, borderRadius: 11, padding: 2, cursor: "pointer", flexShrink: 0,
           background: s.intro ? t.accent : t.barTrack, transition: "background .2s",
@@ -750,7 +750,7 @@ function PlatformSection({ t }: { t: Theme }) {
 
       <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
         {keys.length === 0 && (
-          <div style={{ fontSize: 11, color: t.muted }}>还没有扫描过，去「AI用量信息」页跑一次就会出现。</div>
+          <div style={{ fontSize: 11, color: t.muted }}>还没有扫描过，去「Token 消耗」页跑一次就会出现。</div>
         )}
         {keys.map((k, i) => {
           const p = snap?.platforms[k];

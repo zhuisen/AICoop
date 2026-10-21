@@ -60,10 +60,14 @@ class TheOrder(unittest.TestCase):
         self.assertEqual(r, [["c", "a", "b"], ["a", "b", "c"]], "★ 列表/图例仍按用户排序 —— 不许原地改")
 
     def test_the_card_shows_the_same_number_it_is_sorted_by(self):
+        """2026-10-22 改写（AICoop R2）：卡上「今日」改成**今天这一天**的 token（卡底一行），
+        排序、`data-today`、卡底数字三处都读 `todayTok(data, key, today)`，不再按「最后一个桶」。"""
         code = re.sub(r"//[^\n]*", "", (SRC / "pages" / "TrafficPage.tsx").read_text(encoding="utf-8"))
-        self.assertIn("sortCardsByToday(view?.list ?? [], isToday).map((p) => (\n          <PlatformCard", code)
-        self.assertIn("const shown = cardTodayOf({ total, buckets }, isToday);", code,
-                      "★ 排序口径与大字不同源 ⇒ 看着像排乱了")
+        self.assertIn("[...list].sort((a, b) => todayTok(data, b.key, today) - todayTok(data, a.key, today))", code)
+        self.assertIn("{cards.map((r) => (\n                <TkCard", code, "★ 渲染的不是排好序的那份")
+        self.assertIn("data-today={todayTok(data, r.key, today)}", code, "★ 排序口径与卡上的数不同源")
+        self.assertIn("今日 <span style={{ color: p.text }}>{fmtTokL(todayB?.total ?? 0, L)}", code)
+        self.assertIn("const todayB: Bucket | undefined = data.platforms[r.key]?.days[today];", code)
 
 
 def _cards(q):

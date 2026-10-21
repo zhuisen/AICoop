@@ -4,7 +4,8 @@
 三方一致的根因之一：ResizeObserver 回调里逐像素 setState / 强制同步布局。
 
 ## 守的
-1. 图表高度向下取到 4px —— 拖 40px 只重画 ~10 次，且永远不高于容器（向上取会溢出，一屏页面的根开始滚）。
+1. 图表尺寸向下取到 4px —— 拖 40px 只重画 ~10 次，且永远不大于容器（向上取会溢出）。
+   Token 消耗页（R2，2026-10-22）图高固定，取整的是宽（`TrafficPage.tsx::useWidth`）。
 2. KPI 条拖窗口时**不再**逐格 `getComputedStyle`（每格的单位宽只随内容/字体变，量一次缓存）。
 3. 续航色带只在「哪几段写得下名字」翻转时重渲染（签名比较）。
 4. 顶栏全名/短名：当前档存 ref（不再每次翻档拆 RO 重建），回全名要多 16px 余量（临界点来回拖不翻）。
@@ -108,14 +109,16 @@ def _measure():
         pg.evaluate("""() => { window.__vb = 0; window.__gcs = 0; const c = %s;
           new MutationObserver(ms => { window.__vb += ms.length; })
           .observe(c, {attributes: true, attributeFilter: ['viewBox']}); }""" % chart)
-        h0 = pg.evaluate("() => (%s).viewBox.baseVal.height" % chart)
+        # ★ 2026-10-22 改写（AICoop R2）：Token 消耗页的图高按密度档固定（页内滚，偏离 R2-1），
+        #   会逐像素变的是**宽**。所以拖宽 40 × 1px，数 viewBox 改了几次（4px 一档 ⇒ ~10 次）。
+        w0 = pg.evaluate("() => (%s).viewBox.baseVal.width" % chart)
         for i in range(1, 41):
-            pg.set_viewport_size({"width": 1000 + i * 3, "height": 900 + i})
+            pg.set_viewport_size({"width": 1000 + i, "height": 900})
             pg.wait_for_timeout(30)
         pg.wait_for_timeout(300)
         out = pg.evaluate("""() => { const s = %s;
-          return { vb: window.__vb, gcs: window.__gcs, h: s.viewBox.baseVal.height }; }""" % chart)
-        out["h0"] = h0
+          return { vb: window.__vb, gcs: window.__gcs, w: s.viewBox.baseVal.width }; }""" % chart)
+        out["w0"] = w0
         br.close()
     return out
 
@@ -126,7 +129,7 @@ M = _measure()
 @unittest.skipIf(M is None, "harness 3304 没起 / 无 playwright —— 这是 skip 不是绿")
 class OnTheRealBundle(unittest.TestCase):
     def test_chart_redraws_every_4px_not_every_px(self):
-        self.assertGreater(M["h"], M["h0"], "夹具下图表没长高 —— 证不到节流（断言打空）")
+        self.assertGreaterEqual(M["w"] - M["w0"], 32, "夹具下图表没变宽 —— 证不到节流（断言打空）")
         self.assertLessEqual(M["vb"], 12, "★★ 拖 40px 图表重画了 %d 次 —— 还是逐像素" % M["vb"])
 
     def test_kpi_strip_does_not_force_layout_while_dragging(self):

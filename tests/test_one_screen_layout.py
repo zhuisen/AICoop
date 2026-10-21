@@ -6,8 +6,9 @@
 ① AI用量 / 平台详情：KPI 条**一行**、没有格子出框；页面根不滚；
    底部列表/模型表在**自己的框里滚**（证明是滚动不是裁切）；图表高度不低于改动前的固定值，
    大窗口下**长高**（证明是撑满不是写死）。
-② KPI 只缩 hero 数字：标签 12.5px / 小字 11px 是 D 档定稿，**不许跟着缩**。
-③ 比最小窗口还窄时退回换行 —— **缩到下限仍放不下就换行，绝不裁**。
+② KPI 7 格任何宽度一行、字号不变（数字 24 / 标签 12.5 / 副标 11.5），860 靠短标签（AICoop R2，2026-10-22
+   取代 10-14 的「让出最大占比 + 只缩 hero 数字」，偏离 R2-2）。
+③ 数字**绝不截断**（在最小窗口 860 上量）。
 ④ 代理轮换：汇总条**整条**一行（放不下就整条挪到标题下面，不在内部折成竖排）；页面根不滚。
 ⑤ 中转站：表格最右一列不被卡片裁掉。
 """
@@ -21,22 +22,22 @@ MIN_WIN = (860, 560)      # tauri.conf.json 的 minWidth/minHeight
 BIG_WIN = (1440, 900)
 
 KPI_JS = """() => {
-  const s = document.querySelector('[data-kpi-fit]');
+  // AICoop R2（2026-10-22）：7 格网格 [data-kpis] > [data-kpi]；数字 [data-kpi-value]、副标 [data-kpi-sub]。
+  const s = document.querySelector('[data-kpis]');
   if (!s) return null;
   const sr = s.getBoundingClientRect();
-  // ★ 让出去的格子仍在 DOM 里（隐形 + 绝对定位），按「可见格」量，否则它的 top=0 会被数成第二行
-  const dropped = [...s.querySelectorAll('[data-kpi-dropped]')].map(c => c.children[0].textContent);
-  const cells = [...s.children].filter(c => !c.hasAttribute('data-kpi-dropped'));
+  const cells = [...s.querySelectorAll('[data-kpi]')];
   const rs = cells.map(c => c.getBoundingClientRect());
   const px = sel => [...s.querySelectorAll(sel)].map(e => parseFloat(getComputedStyle(e).fontSize));
-  const droppedShown = [...s.querySelectorAll('[data-kpi-dropped]')].filter(c => getComputedStyle(c).visibility !== 'hidden').length;
-  return {n: cells.length, fit: s.dataset.kpiFit, dropped, droppedShown,
+  const page = document.querySelector('[data-token-page],[data-token-detail]');
+  return {n: cells.length, labels: cells.map(c => c.getAttribute('data-kpi')),
           rows: new Set(rs.map(r => Math.round(r.top))).size,
           outside: rs.filter(r => r.left < sr.left - .5 || r.right > sr.right + .5).length,
-          value: px('.cb-kpi-v'),
+          clipped: [...s.querySelectorAll('[data-kpi-value]')].filter(e => e.scrollWidth > e.clientWidth + 1).length,
+          value: px('[data-kpi-value]'),
           label: cells.map(c => parseFloat(getComputedStyle(c.children[0]).fontSize)),
-          sub: cells.filter(c => c.children[2]).map(c => parseFloat(getComputedStyle(c.children[2]).fontSize)),
-          root: (() => { const p = s.parentElement; return p.scrollHeight - p.clientHeight; })()};
+          sub: px('[data-kpi-sub]'),
+          root: page ? page.scrollHeight - page.clientHeight : null};
 }"""
 BOX_JS = """(sel) => { const e = document.querySelector(sel); if (!e) return null;
   return {h: e.clientHeight, over: e.scrollHeight - e.clientHeight, oy: getComputedStyle(e).overflowY}; }"""
@@ -99,12 +100,10 @@ def _measure():
             pg.close()
 
         for name, nav, box in (("traffic", "traffic&tab=30d", "[data-traffic-list]"),
-                               ("platform", "platform:claude", "[data-platform-table]")):
+                               ("platform", "platform:claude", "[data-platform-scroll]")):
             for tag, size in (("min", MIN_WIN), ("big", BIG_WIN)):
                 visit(f"{name}:{tag}", nav, size,
                       {"kpi": (KPI_JS, None), "box": (BOX_JS, box), "svg": (SVG_JS, None)})
-        visit("traffic:tight", "traffic&tab=30d", (700, 560), {"kpi": (KPI_JS, None)})
-        visit("traffic:narrow", "traffic&tab=30d", (640, 560), {"kpi": (KPI_JS, None)})
         for tag, size in (("min", MIN_WIN), ("big", BIG_WIN)):
             visit(f"home:{tag}", "home", size, {"cards": (CARDS_JS, None)})
         visit("logs:min", "logs", MIN_WIN, {"h": (LOGS_JS, None)})
@@ -134,23 +133,27 @@ class OneScreenDashboard(unittest.TestCase):
             self.assertEqual(k["rows"], 1, f"{key}: KPI 折成了 {k['rows']} 行")
             self.assertEqual(k["outside"], 0, f"{key}: {k['outside']} 格伸出了 KPI 条")
 
-    def test_max_share_gives_way_first(self):
-        """用户 2026-10-14：「最小尺寸下，AI用量信息，去掉最大占比」—— 整格让出去，其余保持原字号。"""
-        lo, hi = self._kpi("traffic:min"), self._kpi("traffic:big")
-        self.assertEqual(lo["dropped"], ["最大占比"])
-        self.assertEqual(lo["droppedShown"], 0, "让出去的格子还看得见（会叠在 KPI 条左上角）")
-        self.assertEqual(set(lo["value"]), {29}, "让出最大占比后 860 宽应放得下原字号")
-        self.assertEqual(hi["dropped"], [], "宽窗口下最大占比应在")
-        self.assertEqual(hi["n"], 7)
+    def test_all_seven_cells_stay_and_860_uses_short_labels(self):
+        """★ 2026-10-22 **改写**（AICoop R2，偏离 R2-2，待用户确认）。
 
-    def test_only_the_hero_number_shrinks(self):
-        k = self._kpi("traffic:tight")
-        self.assertEqual(k["dropped"], ["最大占比"], "先让格子，再缩数字")
-        self.assertLess(max(k["value"]), 29, "700 宽下 6 格 29px 放不下，这里没缩说明适配没生效")
-        self.assertGreaterEqual(min(k["value"]), 20)
-        self.assertEqual(set(k["label"]), {12.5}, "★ 标签 12.5px 是定稿，不许跟着缩")
-        self.assertEqual(set(k["sub"]), {11}, "★ 小字 11px 是定稿（9px 时用户报过「没看到」）")
-        self.assertEqual(set(self._kpi("traffic:big")["value"]), {29}, "大窗口下应保持原字号")
+        原判据（用户 2026-10-14「最小尺寸下，AI用量信息，去掉最大占比」）：860 宽整格让出「最大占比」、
+        仍放不下再缩 hero 数字。R2 稿写「任何宽度一行 7 列，窄窗靠缩短写法」（860 用短标签 Token / 请求 /
+        日均 / 费用 / 日均费 / 最大 / 缓存），两者不能同时成立，按稿。守的仍是同一条底线：**一行、不出框、不截断**。"""
+        lo, hi = self._kpi("traffic:min"), self._kpi("traffic:big")
+        self.assertEqual(lo["n"], 7)
+        self.assertEqual(hi["n"], 7)
+        self.assertEqual(lo["labels"][5], "最大", "860 宽「最大占比」写短名")
+        self.assertEqual(hi["labels"][5], "最大占比")
+        for key in ("traffic:min", "platform:min"):
+            self.assertEqual(self._kpi(key)["clipped"], 0, f"★★ {key}: 有数字被截断 —— 截断比让格更糟")
+
+    def test_type_sizes_do_not_shrink(self):
+        """R2 稿：数字 24、标签 12.5、副标 11.5，任何宽度不变（字号不变，窄窗缩短内容）。"""
+        for key in ("traffic:min", "traffic:big", "platform:min"):
+            k = self._kpi(key)
+            self.assertEqual(set(k["value"]), {24}, key)
+            self.assertEqual(set(k["label"]), {12.5}, key)
+            self.assertEqual(set(k["sub"]), {11.5}, key)
 
     def test_overview_cards_stay_148_and_the_box_scrolls(self):
         """★ 2026-10-19 **作废并改写**（PLAN §4 F5 · 需用户确认）。
@@ -172,11 +175,8 @@ class OneScreenDashboard(unittest.TestCase):
         self.assertLessEqual(lo["root"], 1, "★★ 总览页面根在滚")
         self.assertEqual(hi["fullRows"], hi["rows"], "大窗口下应一屏放下全部卡片")
 
-    def test_below_the_minimum_it_wraps_instead_of_clipping(self):
-        k = self._kpi("traffic:narrow")
-        self.assertEqual(k["fit"], "wrap")
-        self.assertGreater(k["rows"], 1)
-        self.assertEqual(k["outside"], 0, "★★ 数字被裁比折行严重得多")
+    # ★ 2026-10-22 删掉 `test_below_the_minimum_it_wraps_instead_of_clipping`（700 / 640 宽）：
+    #   窗口最小 860（tauri.conf.json `minWidth`），那两档在 app 里到不了；「绝不裁」改在 860 上直接量（上面 clipped）。
 
     def test_the_page_does_not_scroll_its_list_does(self):
         for key in ("traffic:min", "platform:min"):

@@ -673,7 +673,7 @@ export default function NotchHud() {
                     })}
                     <div className="nh-foot" data-notch-todayfoot style={{ height: 32 }}>
                       <span>今日 <b>{live ? fmtCount(live.today.n) : "—"}</b> 次请求 · 均 <b>{HL.fmtAvg(live?.today.avg_tps)}</b> t/s</span>
-                      <a href="#" className="nh-link" data-notch-link="traffic" onClick={go("traffic")}>用量页 →</a>
+                      <a href="#" className="nh-link" data-notch-link="traffic" onClick={go("traffic")}>Token 消耗 →</a>
                     </div>
                   </div>
                 </div>
