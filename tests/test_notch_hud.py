@@ -363,8 +363,11 @@ class ReviewFindingsStayFixed(unittest.TestCase):
 
     def test_first_open_event_is_not_lost(self):
         self.assertIn('v["open"] = Value::Bool(notch::is_open())', code_only(LIB))
-        self.assertRegex(self.hud, r"Promise\.all\(uns\)\.then\(\(\) => invoke",
+        self.assertRegex(self.hud, r"Promise\.all\(uns\)\.then\(\(\) => \{[^}]*?return invoke<[^>]*>\(\"notch_geometry\"\)",
                          "监听注册好之后再问一次当前展开态")
+        self.assertIn('v["mode"]', code_only(LIB), "★ 首次问也要带展开种类，否则错过 `notch-mode` 时画成 4e 卡片")
+        self.assertIn('v["near"] = Value::Bool(notch::is_near())', code_only(LIB), "★ 也要带「靠近」，否则窗口刚建好时光标已在靠近区就漏亮")
+        self.assertIn("setNear(!!g.near);", self.hud)
         self.assertIn('"notch-geom"', self.hud, "改分辨率 / 换屏后前端的刘海尺寸要跟着变")
 
 
@@ -405,8 +408,8 @@ class PushNotPoll(unittest.TestCase):
         code = _code(TSX)
         self.assertEqual(code.count("setInterval"), 1, "只允许面板展开时那一个倒计时定时器")
         i = code.index("setInterval")
-        guard = code.rfind("if (!open) return;", 0, i)
-        self.assertNotEqual(guard, -1, "唯一的定时器必须挂在 `if (!open) return;` 之后")
+        guard = code.rfind("if (!cardOpen) return;", 0, i)
+        self.assertNotEqual(guard, -1, "唯一的定时器必须挂在 `if (!cardOpen) return;` 之后（只有 4e 卡片有倒计时）")
         self.assertLess(i - guard, 120, "定时器离 open 守卫太远，可能不在同一个 effect 里")
 
 
@@ -524,7 +527,9 @@ class ActivityGlow(unittest.TestCase):
         css = _code(CSS)
         self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow \{ opacity: 0; \}", "没有平台在跑时光晕要收掉")
         self.assertRegex(css, r"(?m)^\.nh-quiet \.nh-glow i \{ animation: none; \}", "收掉后不能还在跑动画（白耗 CPU）")
-        self.assertRegex(_code(TSX), r"opacity: !lit \? 0 : isOpen \? 0\.6 : 0\.9",
+        # AICoop 阶段 2：任一种展开（含空闲格子）都降到 60%，所以判 `open` 不判 4e 的 `isOpen`
+        # 空闲格子开着时平台色光晕让位（展开种类在展开那一刻定）
+        self.assertRegex(_code(TSX), r"opacity: !lit \|\| idleOpen \? 0 : open \? 0\.6 : 0\.9",
                          "交接包：卡片展开时光晕降到 60% 保留（不是收掉）")
 
     def test_holds_still_under_reduce_motion(self):

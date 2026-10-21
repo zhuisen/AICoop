@@ -87,6 +87,12 @@ if (el) {
 // ⚠️ **必须 `innerText` 不能 `textContent`**：harness 把探针脚本**内联进 body**，
 // 而 `textContent` 连 `<script>` 里的源码一起算。
 out.oldHero = /当前使用中|建议切到|全池续航/.test(document.body.innerText || '');
+// 夹具里此刻能进接力条的号（同 harness `read_rotation_board`：非失效、非停用、不在冷却、非 Pro、5h 有读数且没用完）——
+// 闸按它判，不按写死的个数：真夹具随当天用量变（2026-10-21 下午两个号见底冷却，写死的「≥3」就红了）。
+const _S = (window.__HSTATE || {}).slots || {}, _now = Date.now() / 1000;
+out.eligible = Object.keys(_S).filter(function (a) { const s = _S[a];
+  return !s.auth_dead && !s.rotate_off && !((s.cooling_until || 0) > _now) && s.plan !== 'pro'
+    && ((s.quota || {}).primary || {}).used_percent != null && s.quota.primary.used_percent < 100; }).length;
 document.title = '__RH__' + JSON.stringify(out);
 """
 
@@ -273,7 +279,8 @@ class TheBarSaysWhoIsInAndWhoIsOut(unittest.TestCase):
     def test_every_usable_account_gets_a_segment(self):
         for w, d in self.by_width.items():
             with self.subTest(width=w):
-                self.assertGreaterEqual(d["segs"], 3, f"接力条段数太少：{d['segs']}")
+                self.assertGreaterEqual(d["eligible"], 2, f"★ 夹具里能进接力条的号只有 {d['eligible']} 个 —— 闸没有判别力")
+                self.assertGreaterEqual(d["segs"], d["eligible"], f"接力条段数 {d['segs']} 少于能用的号 {d['eligible']}")
 
     def test_every_segment_is_a_named_account(self):
         """★ 2026-10-19 取代「不可用的号合成一段灰」：接力条上**没有无主的灰段**（交接包：空档画红色斜纹）。"""

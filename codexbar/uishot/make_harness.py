@@ -149,7 +149,12 @@ STUB = """
     var ids = Object.keys(STATE.slots || {}).filter(function (a) { return !STATE.slots[a].auth_dead && !STATE.slots[a].rotate_off; });
     var now = Date.now() / 1000;
     if (p.get('ovcool') === '1' && ids.length > 1) STATE.slots[ids[1]].cooling_until = now + 41 * 60 + 30;
-    if (p.get('ovunprobed') === '1' && ids.length) { STATE.slots[ids[ids.length - 1]].quota = {}; }
+    // ★ 「未探测」那个不能撞上在用 / 冷却（含真夹具里本来就在冷却的）/ 额度低那几个：撞上时卡片显示的是另一种状态，闸就失去判别力（2026-10-21 实测撞上在用号）
+    if (p.get('ovunprobed') === '1' && ids.length) {
+      var unp = ids.slice().reverse().filter(function (a) { return a !== STATE.active && a !== STATE.last_aid && a !== ids[1] && a !== ids[2]; })[0];
+      // 真夹具里它本身可能正在冷却（冷却先于未探测判）⇒ 一并清掉，否则卡片照样显示「冷却」
+      if (unp) { STATE.slots[unp].quota = {}; STATE.slots[unp].cooling_until = 0; }
+    }
     if (p.get('ovlow') === '1' && ids.length > 2) {
       var q3 = STATE.slots[ids[2]].quota || {};
       if (q3.primary) q3.primary.used_percent = 94; else if (q3.secondary) q3.secondary.used_percent = 94;
@@ -849,6 +854,9 @@ function relayEntry() {
         // 空闲额度格子（`?hv=idle`）：harness 里没有菜单栏 webview，由这里替它回一份格子
         if (args.event === 'idle-panel-want' && location.pathname.indexOf('harness-tpshover') >= 0 && p.get('hv') === 'idle')
           setTimeout(function () { fire('idle-panel', HV_IDLE_CELLS(p.get('hvcells'))); }, 0);
+        // 刘海屏版空闲格子（`?nt=I`）同一份格子
+        if (args.event === 'idle-panel-want' && location.pathname.indexOf('harness-notch') >= 0 && p.get('ntcells') !== 'none')
+          setTimeout(function () { fire('idle-panel', HV_IDLE_CELLS(p.get('ntcells'))); }, 0);
         return Promise.resolve(null);
       // ★ `?snap_delay=<ms>` 让快照**异步**送达。默认 0(同步)保持既有行为。
       //   真机上快照是 `invoke` 异步取的,内容会在挂载**之后**才长出来 —— harness 原本内联同步给,
@@ -1356,12 +1364,19 @@ function relayEntry() {
       // ★ 刘海卡片（`harness-notch.html`，交接包 4e）的四条命令：几何 / 谁在跑 / 卡片高度上报 / 版面。
       //   不打桩 ⇒ 落到 default 返回 null ⇒ 刘海尺寸、光晕全是默认空值，卡片照样渲染、零报错 —— 假绿。
       case 'notch_geometry':
-        return Promise.resolve({ left: 0, width: 179, height: 32, top: 0, open: p.get('ntopen') !== '0' });
+        return Promise.resolve({ left: 0, width: 179, height: 32, top: 0, open: p.get('ntopen') !== '0',
+                                 mode: p.get('ntmode') || ((p.get('nt') || 'A') === 'I' ? 'idle' : 'run') });
       case 'notch_activity': {
         var ntS = p.get('nt') || 'A';
-        return Promise.resolve(ntS === 'B' ? { codex: false, claude: false, agy: false, grok: false }
+        // `?ntact=1`：空闲格子开着时 AI 开跑（展开种类已定，光晕不该跟着换）
+        return Promise.resolve((ntS === 'B' || ntS === 'I') && p.get('ntact') !== '1' ? { codex: false, claude: false, agy: false, grok: false }
                                            : { codex: true, claude: true, agy: true, grok: false });
       }
+      case 'notch_dismiss':
+        // 同 Rust `notch::dismiss`：收起（推 `notch-open` false）—— 不推的话「点了真的收起」验不到
+        ntCalls.push(cmd + '=' + JSON.stringify(args));
+        setTimeout(function () { fire('notch-open', false); }, 0);
+        return Promise.resolve(null);
       case 'notch_card_resize':
         ntCalls.push(cmd + '=' + JSON.stringify(args));
         return Promise.resolve(null);
@@ -1524,8 +1539,8 @@ function relayEntry() {
   //   logo 14 pt、胶囊宽 61，面板 290、右沿比胶囊右沿多 10）。格子夹具 `?hvcells=4`（默认：托盘三家 + Grok；
   //   Gemini 剩 6% 是插队）· `8` 两行（再加 Kimi / DeepSeek 未接入 + 两个重复填充不可能出现，所以只到 6 家）· `1` 只一家。
   function HV_IDLE_CELLS(mode) {
-    var C = function (key, main, reset, inBar) { return { key: key, main: main, reset: reset, inBar: inBar, low: main !== null && Math.round(main) < 10 }; };
-    var all = [C('codex', 67, '↻ 2h14m', true), C('claude', 40, '↻ 1h05m', true), C('agy', 6, '↻ 3h40m', true),
+    var C = function (key, main, reset, inBar) { return { key: key, main: main, reset: reset, inBar: inBar, low: main !== null && Math.round(main) < 10, stale: false }; };
+    var all = [C('codex', 67, '↻ 2h14m', true), C('claude', 40, '↻ 1h05m', true), C('agy', String(mode) === 'ok' ? 86 : 6, '↻ 3h40m', true),
                C('grok', 86, '↻ 5d21h', false), C('kimi', null, '', false), C('deepseek', null, '', false)];
     var m = String(mode || '4');
     return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4 };
@@ -1596,11 +1611,13 @@ function relayEntry() {
   //   `?ntopen=0` 不展开（拍果冻下垂）· `?ntcur=<dx>,<distance>` 200 ms 时推一帧 `notch-cursor`
   //   `?nttab=today` 1000 ms 点「今日」· `?ntexpand=claude` 1000 ms 把鼠标移进那一行（250 ms 后应展开）
   //   `?ntclose=1&ntreopen=1` 收起后 2200 ms 再展开 · `?ntreduce=1` 减弱动态效果 · `?ntclick=requests|traffic|overview` 1200 ms 点链接 · `?ntclose=1` 1600 ms 收起
+  //   `?nt=I` 空闲 + 刘海屏版额度格子（AICoop P11 `P11_NotchHover`）：`?ntcells=1|4|8|ok|none`（同托盘面板那份；`ok` = 没有低额度）·
+  //   `?ntempty=1` 1000 ms 格子变空 · `?ntnear=1` 200 ms 推 `notch-near`（配 `ntopen=0` 拍「靠近」光晕）· `?ntpick=<key>` 1200 ms 点那一格
   //   `?ntbg=desk` 画一块桌面 + 32 高菜单栏底（截图看得见透明窗）。刘海与卡片恒黑，浅色主题无关。
   //   `?ntat=<ms>`（默认 1800）起把卡片实量 / logo 落点 / IPC / emit 写进 <body data-nt-*>（dump-dom 读）。
   if (location.pathname.indexOf('harness-notch') >= 0) {
     var ntScene = p.get('nt') || 'A';
-    if (!p.get('run')) p.set('run', ntScene === 'B' ? '0' : '3');
+    if (!p.get('run')) p.set('run', ntScene === 'B' || ntScene === 'I' ? '0' : '3');
     if (!p.get('agypool')) p.set('agypool', '2');
     if (ntScene === 'C' && !p.get('agylive')) { p.set('agylive', 'sub1'); p.set('agylive_at', '60'); }
     if (p.get('ntreduce') === '1') {
@@ -1620,6 +1637,14 @@ function relayEntry() {
         var c = p.get('ntcur').split(',');
         fire('notch-cursor', { x: 0, y: 0, dx: +c[0], distance: +c[1] });
       }, 200);
+      if (p.get('ntnear') === '1') setTimeout(function () { fire('notch-near', true); }, 200);
+      // `?ntempty=1` 1000 ms 时格子变空（设置改成「只看菜单栏」之类）—— 展开着的空闲面板应自己收起
+      if (p.get('ntempty') === '1') setTimeout(function () { fire('idle-panel', { cells: [], max: 4 }); }, 1000);
+      if (p.get('ntpick')) setTimeout(function () {
+        var el = document.querySelector('[data-notch-idle-cell="' + p.get('ntpick') + '"]');
+        clicks.push('ntpick →命中 ' + (el ? 1 : 0));
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }, 1200);
       if (p.get('nttab') === 'today') setTimeout(function () {
         var el = document.querySelector('[data-notch-tab="today"]');
         clicks.push('nttab →命中 ' + (el ? 1 : 0));
@@ -1652,6 +1677,22 @@ function relayEntry() {
           content: content ? content.getBoundingClientRect().height : null, w: card.getBoundingClientRect().width,
           x: card.getBoundingClientRect().left - sr.left, y: card.getBoundingClientRect().top - sr.top }));
         b.setAttribute('data-nt-geom', JSON.stringify(geom));
+        var ip = document.querySelector('[data-notch-idle]');
+        if (ip) {
+          var ir = ip.getBoundingClientRect(), cs = getComputedStyle(ip);
+          var ng = document.querySelector('[data-notch-near-glow]');
+          b.setAttribute('data-nt-idle', JSON.stringify({
+            x: ir.left - sr.left, y: ir.top - sr.top, w: ir.width, h: ir.height, op: +cs.opacity,
+            glow: ng ? +getComputedStyle(ng).opacity : null,
+            lowdot: !!document.querySelector('[data-notch-idle-lowdot]') && !!ng && +getComputedStyle(ng).opacity > 0,
+            runglow: +getComputedStyle(document.querySelector('.nh-glow')).opacity,
+            drip: document.querySelector('[data-notch-drip]').getAttribute('data-notch-drip'),
+            cells: Array.prototype.map.call(document.querySelectorAll('[data-notch-idle-cell]'), function (e) {
+              var r = e.getBoundingClientRect(), m = e.querySelector('[data-notch-idle-main]');
+              return { k: e.getAttribute('data-notch-idle-cell'), x: r.left - ir.left, y: r.top - ir.top, w: r.width, h: r.height,
+                       main: m ? m.getAttribute('data-notch-idle-main') : null, bg: getComputedStyle(e).backgroundColor };
+            }) }));
+        }
         b.setAttribute('data-nt-fly', String(document.querySelectorAll('[data-notch-fly]').length));
         b.setAttribute('data-nt-calls', JSON.stringify(ntCalls));
         b.setAttribute('data-nt-emit', JSON.stringify(emittedJ));
@@ -2421,8 +2462,11 @@ def redacted_state():
         return max((q.get(w) or {}).get("used_percent") or 0 for w in ("primary", "secondary"))
     others = [a for a in alive_ids if a != active]
     last_aid = min(others, key=lambda a: (_used(a), alive_ids.index(a))) if others else active
+    # ★ 置顶里必须有在用的那个（2026-10-21）：「正在使用」上的置顶角标只画给置顶号，
+    #   原来固定取前两个活号，在用号换成「剩得最多」后它在不在置顶里就看当天用量（`test_the_pin_is_visible_on_the_banner` 红过）。
+    pinned = [last_aid] + [a for a in alive_ids if a != last_aid][:1]
     return {"active": active, "last_aid": last_aid, "slots": out_slots,
-            "pinned": alive_ids[:2],
+            "pinned": pinned,
             "last_proxy_ts": raw.get("last_proxy_ts")}
 
 

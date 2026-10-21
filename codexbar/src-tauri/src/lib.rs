@@ -673,6 +673,8 @@ fn notch_geometry() -> Option<Value> {
     return notch::notch_geometry().and_then(|g| serde_json::to_value(g).ok()).map(|mut v| {
         // 前端监听注册好后问这一次，顺带拿当前展开态 —— 首个 `notch-open` 可能早于 listen 生效
         v["open"] = Value::Bool(notch::is_open());
+        v["mode"] = Value::String(if notch::open_idle() { "idle" } else { "run" }.into());
+        v["near"] = Value::Bool(notch::is_near());
         v
     });
     #[cfg(not(target_os = "macos"))]
@@ -692,16 +694,29 @@ fn notch_activity() -> Option<Value> {
 #[tauri::command]
 fn notch_panel_height(app: AppHandle, h: f64) {
     #[cfg(target_os = "macos")]
-    notch::set_panel_height(&app, h);
+    notch::set_panel_height(&app, h, false);
     #[cfg(not(target_os = "macos"))]
     let _ = (app, h);
 }
 
 /// 4e 悬浮卡片量出来的自然高度（随 Tab / 会话展开 / 告警行变；上限约 560）。与 `notch_panel_height` 同一份状态，
 /// 新名字给 F4 的卡片用 —— 窗口按它加上 10 pt 空隙与阴影边摆。
+/// ★ `mode = "idle"` ⇒ 空闲格子那份高度（两种展开各存一份，见 `notch::set_panel_height`）。
 #[tauri::command]
-fn notch_card_resize(app: AppHandle, h: f64) {
-    notch_panel_height(app, h)
+fn notch_card_resize(app: AppHandle, h: f64, mode: Option<String>) {
+    #[cfg(target_os = "macos")]
+    notch::set_panel_height(&app, h, mode.as_deref() == Some("idle"));
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, h, mode);
+}
+
+/// 点了刘海里的空闲额度格子：收起（网页自己发 `open-main-page`）。
+#[tauri::command]
+fn notch_dismiss(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    notch::dismiss(&app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 }
 
 /// 4e 展开态版面（刘海窗口内坐标）：窗口宽高、刘海矩形、卡片矩形。网页画光桥 / 卡片 / logo 来向用。
@@ -3073,7 +3088,7 @@ pub fn run() {
             check_update,
             open_url,
             set_dock_visible,
-            set_notch_hud, notch_status, notch_geometry, notch_panel_height, notch_activity,
+            set_notch_hud, notch_status, notch_geometry, notch_panel_height, notch_activity, notch_dismiss,
             notch_card_resize, notch_layout,
             read_requests, read_live, read_statusline_quota, claude_otel,
             set_tps_tray, set_idle_tray, set_idle_prefs, tpshover_dismiss, tpshover_resize, tpshover_layout, tray_pill_hide_logos,

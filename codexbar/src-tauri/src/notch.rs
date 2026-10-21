@@ -56,6 +56,13 @@ const CURSOR_EMIT_RANGE: f64 = DRIP_RANGE + 16.0;
 /// 窗口收起时**不接收鼠标**，所以这圈边不会挡菜单栏图标。
 const GLOW_X: f64 = 60.0;
 const GLOW_Y: f64 = 60.0;
+/// AICoop P11「刘海屏版」（交接包 2026-10-21 `P11_NotchHover`，1.5× 画、这里 ÷1.5）：**空闲时**
+/// 光标进刘海四周的「靠近」区（左右各 60、向下 32）⇒ 网页亮中性白光晕（`notch-near`）；
+/// 停在刘海上（刘海 + 下沿 5 pt）180 ms ⇒ 展开额度格子（`notch-mode` = idle）。有 AI 在跑时照旧：碰到即展开 4e 卡片。
+const NEAR_X: f64 = 60.0;
+const NEAR_B: f64 = 32.0;
+const IDLE_DWELL: Duration = Duration::from_millis(180);
+const IDLE_DWELL_B: f64 = 5.0;
 /// 几何（刘海位置）最多多久重读一次。合盖/开盖/改分辨率后靠它自愈（下一次鼠标移动时）。
 const GEOM_TTL: Duration = Duration::from_secs(3);
 
@@ -93,6 +100,11 @@ pub struct Cursor { pub x: f64, pub y: f64, pub dx: f64, pub distance: f64 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static OPEN: AtomicBool = AtomicBool::new(false);
+/// 这一轮展开是不是空闲额度格子（展开那一刻定，收起前不变 —— 刘海本身不随在跑 / 空闲变样，
+/// 中途换内容只会让正在读的人眼前一跳）。
+static OPEN_IDLE: AtomicBool = AtomicBool::new(false);
+/// 最近一次推给网页的「靠近」（网页挂载时补问一次，`notch-near` 可能早于 listen 生效）。
+static NEAR: AtomicBool = AtomicBool::new(false);
 /// ★ 代次（四方评审 2026-10-17）：每次开/关 +1，每次展开/收起 +1。后台线程与排进主线程的闭包
 ///   **执行前**核对自己领到的那一代 —— 关掉之后旧线程不许再把窗口展开、旧的收起计时不许裁掉新一轮动画。
 static ENABLE_GEN: AtomicU64 = AtomicU64::new(0);
@@ -102,7 +114,10 @@ static OPEN_GEN: AtomicU64 = AtomicU64::new(0);
 static TRACKER: AtomicU64 = AtomicU64::new(0);
 static TRACKER_SEQ: AtomicU64 = AtomicU64::new(0);
 static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
+/// 两种展开各自的面板高度（4e 卡片 / 空闲格子）。★ 分开存：共用一份时，换种类那一下窗口与命中区
+/// 先用上一种的高度，要等网页收到 `notch-mode`、再一次 IPC 来回才更正（三方评审 2026-10-21）。
 static PANEL_H: Mutex<f64> = Mutex::new(420.0);
+static PANEL_H_IDLE: Mutex<f64> = Mutex::new(86.5);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
 static MONITORS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -180,7 +195,9 @@ fn cached() -> Option<Notch> {
     GEOM.lock().unwrap().and_then(|(v, _)| v)
 }
 
-fn card_h() -> f64 { *PANEL_H.lock().unwrap() }
+fn card_h() -> f64 {
+    if OPEN_IDLE.load(Ordering::SeqCst) { *PANEL_H_IDLE.lock().unwrap() } else { *PANEL_H.lock().unwrap() }
+}
 
 /// 收起/展开时窗口在桌面坐标里的矩形。
 /// 展开：宽 = 卡片 + 两侧阴影边 与 收起态光晕宽 取大（展开时光晕降到 60% 仍在）；
@@ -229,6 +246,31 @@ fn hit_h(g: &Notch, open: bool, x: f64, y: f64, ch: f64) -> bool {
     let left = cx.min(g.left) - CARD_HIT_PAD;
     let right = (cx + cw).max(g.left + g.width) + CARD_HIT_PAD;
     x >= left && x <= right && y >= g.top - TOUCH && y <= cy + chh + CARD_HIT_PAD
+}
+
+/// 「靠近」区：刘海左右各 60、向下 32（P11 画板虚线框）。
+fn in_near(g: &Notch, x: f64, y: f64) -> bool {
+    x >= g.left - NEAR_X && x <= g.left + g.width + NEAR_X && y >= g.top - TOUCH && y <= g.top + g.height + NEAR_B
+}
+
+/// 空闲时「停在刘海上」的那块：刘海本身（左右 +2）+ 下沿 5 pt（画板 270×56 ÷ 1.5）。
+fn on_notch(g: &Notch, x: f64, y: f64) -> bool {
+    x >= g.left - TOUCH && x <= g.left + g.width + TOUCH && y >= g.top - TOUCH && y <= g.top + g.height + IDLE_DWELL_B
+}
+
+/// 收起态这一帧要不要展开、展开哪一种（`Some(true)` = 空闲额度格子，`Some(false)` = 4e 卡片）。
+/// `dwelled` = 光标连续停在 `on_notch` 里多久（调用方离开就清零）。
+/// ★ 空闲但格子为空（`idle_cells == false`）⇒ 退回 4e 卡片、碰到即开 —— 不能让刘海在空闲时变成点不开的死块。
+fn closed_step(running: bool, idle_cells: bool, touch: bool, dwelled: Option<Duration>) -> Option<bool> {
+    if running || !idle_cells { return touch.then_some(false); }
+    dwelled.filter(|d| *d >= IDLE_DWELL).map(|_| true)
+}
+
+/// 光标在靠近区里时，「靠近」光晕该不该亮。
+/// ★ 只在碰下去会展开空闲格子时亮：有 AI 在跑 / 没有格子 ⇒ 开的是 4e 卡片，白光晕会说错话。
+/// ★ 刚收起、光标还没离开靠近区（`blocked`）⇒ 不亮：画板「面板先淡出上移，再收光晕」。
+fn near_lit(open: bool, blocked: bool, running: bool, idle_cells: bool) -> bool {
+    !open && !blocked && !running && idle_cells
 }
 
 /// 光标在不在刘海那块屏的顶部采样带里（60 Hz 采样只在这里开）。
@@ -312,6 +354,17 @@ fn mouse_desktop(g: &Notch) -> (f64, f64) {
     (p.x, g.primary_h - p.y)
 }
 
+/// 展开成哪一种：先发 `notch-mode`，再展开（同一线程按序到网页，网页收到 `notch-open` 时已知道画哪种）。
+fn open_as(app: &AppHandle, idle: bool) {
+    if OPEN.load(Ordering::SeqCst) { return; }
+    OPEN_IDLE.store(idle, Ordering::SeqCst);
+    let _ = app.emit_to(LABEL, "notch-mode", if idle { "idle" } else { "run" });
+    set_open(app, true);
+}
+
+/// 点了空闲格子：收起（网页同时发了 `open-main-page`）。
+pub fn dismiss(app: &AppHandle) { set_open(app, false); }
+
 fn set_open(app: &AppHandle, open: bool) {
     if OPEN.swap(open, Ordering::SeqCst) == open { return; }
     let gen = OPEN_GEN.fetch_add(1, Ordering::SeqCst) + 1;
@@ -348,6 +401,13 @@ fn track(app: AppHandle) {
         let mut last_cursor: Option<(f64, f64)> = None;
         let mut emitting = false;
         let mut accepting = false;
+        // 空闲「靠近」光晕：变了才推；线程退出时补一帧 false（否则光晕常亮）
+        let mut near_sent = false;
+        let mut dwell_from: Option<Instant> = None;
+        // ★ 收起之后，光标没离开靠近区之前不再亮「靠近」：画板「面板先淡出上移，再收光晕」——
+        //   不挡的话点完格子（格子上沿在靠近区里）光晕会从 55% 反跳到 100%（三方评审 2026-10-21）
+        let mut was_open = false;
+        let mut near_block = false;
         loop {
             std::thread::sleep(TRACK_TICK);
             if ENABLE_GEN.load(Ordering::SeqCst) != gen || !ENABLED.load(Ordering::SeqCst) { break; }
@@ -364,11 +424,34 @@ fn track(app: AppHandle) {
             }
             emitting = near;
 
+            if was_open && !open {
+                near_block = true;
+                accepting = false;
+                since_out = None;
+            }
+            was_open = open;
+            let zone = in_near(&g, x, y);
+            if !zone { near_block = false; }
+            let near_now = zone && near_lit(open, near_block, crate::activity::activity().any(), crate::tps_hover::idle_has_cells());
+            if near_now != near_sent {
+                let _ = app.emit_to(LABEL, "notch-near", near_now);
+                NEAR.store(near_now, Ordering::SeqCst);
+                near_sent = near_now;
+            }
+
             if !open {
-                if hit(&g, false, x, y) {
-                    set_open(&app, true);
+                let on = on_notch(&g, x, y);
+                if on { dwell_from.get_or_insert_with(Instant::now); } else { dwell_from = None; }
+                // 不在停留区时 `touch` 必为假（碰触区是停留区的子集）、`dwell` 为空 ⇒ 不用读活动
+                let step = if !on { None } else {
+                    closed_step(crate::activity::activity().any(), crate::tps_hover::idle_has_cells(),
+                                hit(&g, false, x, y), dwell_from.map(|t| t.elapsed()))
+                };
+                if let Some(idle) = step {
+                    open_as(&app, idle);
                     accepting = true;
                     since_out = None;
+                    dwell_from = None;
                     continue;
                 }
                 if !in_band(&g, x, y) { break; }
@@ -390,6 +473,8 @@ fn track(app: AppHandle) {
                 }
             }
         }
+        if near_sent { let _ = app.emit_to(LABEL, "notch-near", false); }
+        NEAR.store(false, Ordering::SeqCst);
         let _ = TRACKER.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst);
     });
 }
@@ -425,6 +510,8 @@ fn ensure_window(app: &AppHandle, g: &Notch) -> Result<(), String> {
 
 fn drop_window(app: &AppHandle) {
     OPEN.store(false, Ordering::SeqCst);
+    OPEN_IDLE.store(false, Ordering::SeqCst);
+    NEAR.store(false, Ordering::SeqCst);
     crate::activity::unsubscribe(crate::activity::NOTCH);
     if let Some(w) = app.get_webview_window(LABEL) { let _ = w.destroy(); }
 }
@@ -535,6 +622,10 @@ pub fn notch_geometry() -> Option<Notch> { cached() }
 
 pub fn is_open() -> bool { OPEN.load(Ordering::SeqCst) }
 
+pub fn open_idle() -> bool { OPEN_IDLE.load(Ordering::SeqCst) }
+
+pub fn is_near() -> bool { NEAR.load(Ordering::SeqCst) }
+
 /// 展开态的版面（**刘海窗口内**坐标，逻辑 pt）：刘海在哪、卡片在哪。网页画光桥 / 卡片 / logo 来向用。
 pub fn open_layout() -> Option<serde_json::Value> {
     let g = cached()?;
@@ -548,10 +639,12 @@ pub fn open_layout() -> Option<serde_json::Value> {
     }))
 }
 
-/// 前端量出展开卡片的自然高度后告诉这里（随 Tab / 会话展开 / 告警行变）。
-pub fn set_panel_height(app: &AppHandle, h: f64) {
-    *PANEL_H.lock().unwrap() = h.clamp(80.0, CARD_H_MAX);
-    if OPEN.load(Ordering::SeqCst) { place_soon(app, true); }
+/// 前端量出面板的自然高度后告诉这里。`idle` = 空闲格子那份，否则 4e 卡片（随 Tab / 会话展开 / 告警行变）。
+/// 只有这一轮展开正是这一种时才重摆窗口。
+pub fn set_panel_height(app: &AppHandle, h: f64, idle: bool) {
+    let slot = if idle { &PANEL_H_IDLE } else { &PANEL_H };
+    *slot.lock().unwrap() = h.clamp(80.0, CARD_H_MAX);
+    if OPEN.load(Ordering::SeqCst) && OPEN_IDLE.load(Ordering::SeqCst) == idle { place_soon(app, true); }
 }
 
 #[cfg(test)]
@@ -630,6 +723,53 @@ mod tests {
         assert!((notch_distance(&g, 646.0 - 3.0, 32.0 + 4.0) - 5.0).abs() < 1e-9);
         let c = cursor_payload(&g, false, 735.5, 50.0);
         assert_eq!((c.x, c.y, c.dx, c.distance), (735.5 - 579.0, 50.0, 0.0, 18.0));
+    }
+    #[test]
+    fn the_near_zone_is_sixty_each_side_and_thirty_two_below() {
+        let g = air13();
+        assert!(in_near(&g, 646.0 - 60.0, 10.0) && !in_near(&g, 646.0 - 60.5, 10.0));
+        assert!(in_near(&g, 825.0 + 60.0, 10.0) && !in_near(&g, 825.0 + 60.5, 10.0));
+        assert!(in_near(&g, 735.0, 64.0) && !in_near(&g, 735.0, 64.5), "刘海下沿往下 32 pt");
+    }
+    #[test]
+    fn idle_dwell_area_is_the_notch_plus_five_below() {
+        let g = air13();
+        assert!(on_notch(&g, 735.0, 37.0) && !on_notch(&g, 735.0, 37.5));
+        assert!(on_notch(&g, 644.0, 10.0) && !on_notch(&g, 643.5, 10.0));
+        assert!(!on_notch(&g, 620.0, 10.0), "靠近区里、刘海外 ⇒ 只亮光晕，不展开");
+    }
+    #[test]
+    fn idle_opens_the_grid_only_after_180ms_on_the_notch() {
+        let ms = |n| Some(Duration::from_millis(n));
+        assert_eq!(closed_step(false, true, true, None), None, "空闲：碰到不立即展开");
+        assert_eq!(closed_step(false, true, true, ms(179)), None);
+        assert_eq!(closed_step(false, true, true, ms(180)), Some(true));
+        assert_eq!(closed_step(false, true, false, ms(200)), Some(true), "刘海下沿 5 pt 里停够也算（不在 +2 的碰触区）");
+    }
+    #[test]
+    fn running_keeps_the_instant_card_and_no_cells_falls_back_to_it() {
+        assert_eq!(closed_step(true, true, true, None), Some(false), "在跑：碰到即展开 4e 卡片");
+        assert_eq!(closed_step(true, true, false, Some(Duration::from_secs(1))), None);
+        assert_eq!(closed_step(false, false, true, None), Some(false), "空闲但没有格子 ⇒ 4e 卡片，不是死块");
+        assert_eq!(closed_step(false, false, false, Some(Duration::from_secs(1))), None);
+    }
+    #[test]
+    fn each_kind_of_opening_uses_its_own_height() {
+        // ★ 换种类那一下 Rust 已有对的高度（不等网页收到 `notch-mode` 再报）
+        *PANEL_H.lock().unwrap() = 400.0;
+        *PANEL_H_IDLE.lock().unwrap() = 86.5;
+        OPEN_IDLE.store(true, Ordering::SeqCst);
+        assert_eq!(card_h(), 86.5);
+        OPEN_IDLE.store(false, Ordering::SeqCst);
+        assert_eq!(card_h(), 400.0);
+    }
+    #[test]
+    fn the_near_glow_only_promises_what_a_touch_would_open() {
+        assert!(near_lit(false, false, false, true));
+        assert!(!near_lit(true, false, false, true), "展开着：光晕归展开态管");
+        assert!(!near_lit(false, true, false, true), "刚收起、还没离开靠近区 ⇒ 不反跳");
+        assert!(!near_lit(false, false, true, true), "有 AI 在跑 ⇒ 碰到开 4e，不亮白光晕");
+        assert!(!near_lit(false, false, false, false), "没有格子 ⇒ 碰到开 4e，不亮白光晕");
     }
     #[test]
     fn notch_screen_as_primary_matches_the_measured_air() {

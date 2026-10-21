@@ -251,7 +251,8 @@ class Shape(unittest.TestCase):
         self.assertRegex(self.css, r"\.nh-flylayer \{[^}]*transition: opacity 150ms;", "切到今日时淡出")
 
     def test_every_open_returns_to_the_default_tab(self):
-        i = self.tsx.index("if (open) {")
+        # AICoop 阶段 2：4e 卡片只在「在跑」那种展开里出现（空闲那种画额度格子），展开流程挂在 `cardOpen` 上
+        i = self.tsx.index("if (cardOpen) {")
         self.assertIn("setChosen(v);", self.tsx[i:i + 900])
         self.assertIn("const v = C.defaultView(cur.rows.length);", self.tsx[i:i + 900])
 
@@ -362,7 +363,9 @@ class TheBundleRenders(unittest.TestCase):
             self.assertEqual(card["h"], card["logic"], "卡片实高 = 版面逻辑（%s）" % q)
             self.assertEqual(card["content"] + 16, card["logic"], "内容实高 + 上下内边距 = 版面逻辑（%s）" % q)
             self.assertEqual((card["w"], card["x"], card["y"]), (300, 179 / 2 - 150, 42), "宽 300、居中、刘海下沿下方 10")
-            self.assertEqual(body_json(h, "data-nt-calls")[-1], 'notch_card_resize={"h":%d}' % want["height"],
+            # AICoop 阶段 2：两种展开各报一份（`mode`），这里只看 4e 卡片那份的最后一次
+            run_calls = [c for c in body_json(h, "data-nt-calls") if c.startswith("notch_card_resize=") and '"mode":"run"' in c]
+            self.assertEqual(run_calls[-1:], ['notch_card_resize={"h":%d,"mode":"run"}' % want["height"]],
                              "最后报给 Rust 的高度 = 卡片实高")
             geom = {g["k"]: g for g in body_json(h, "data-nt-geom")}
             for i, k in enumerate(("codex", "claude", "agy")):

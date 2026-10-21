@@ -449,7 +449,7 @@ fn greet_allowed(app: &AppHandle) -> bool {
 
 /// 空闲面板有没有格子（菜单栏 webview 随 `set_idle_tray` 带来）。没有就不弹 —— 否则是一条带阴影的细线。
 static IDLE_CELLS: AtomicBool = AtomicBool::new(false);
-fn idle_has_cells() -> bool { IDLE_CELLS.load(Ordering::SeqCst) }
+pub fn idle_has_cells() -> bool { IDLE_CELLS.load(Ordering::SeqCst) }
 pub fn set_idle_cells(n: usize) { IDLE_CELLS.store(n > 0, Ordering::SeqCst); }
 
 pub fn set_panel_height(app: &AppHandle, h: f64) {

@@ -22,6 +22,9 @@ import { grokLastGoodRemPct, grokQuotaVisible, grokRemPct, type GrokSnapshot } f
 import { applyCacheMode, applyPlatformPrefs, colorOf, fmtTok, todayView, type TrafficData } from "./traffic";
 import { fmtUSD } from "./rates";
 import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER as REQ_ORDER } from "./requests";
+import { IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
+import * as NI from "./notchIdle";
+import NotchIdleGrid from "./components/NotchIdleGrid";
 import "./notch.css";
 
 /** 卡片开着时倒计时文字的刷新间隔。收起时卡片看不见，不需要它。 */
@@ -90,6 +93,11 @@ export default function NotchHud() {
   const { live } = useLive();
   const { mode: cacheMode } = useCacheMode();
   const [open, setOpen] = useState(false);
+  /** 这一轮展开是哪一种（Rust `notch-mode`，展开前一刻推）：空闲额度格子 / 4e 卡片。收起后保留上一轮的，直到下次展开。 */
+  const [mode, setMode] = useState<"idle" | "run">("run");
+  /** 空闲时光标在刘海「靠近」区里（Rust `notch-near`，左右各 60、向下 32）。 */
+  const [near, setNear] = useState(false);
+  const [idleData, setIdleData] = useState<IdlePanelData | null>(null);
   /** 只为让「随时间变」的部分重算：窗口过重置点、冷却结束、倒计时文字。 */
   const [tick, setTick] = useState(0);
   const [nw, setNw] = useState(179);
@@ -115,6 +123,10 @@ export default function NotchHud() {
     let dead = false;
     const uns = [
       listen<boolean>("notch-open", (e) => setOpen(!!e.payload)),
+      listen<string>("notch-mode", (e) => setMode(e.payload === "idle" ? "idle" : "run")),
+      listen<boolean>("notch-near", (e) => setNear(!!e.payload)),
+      // 空闲格子：常驻的菜单栏 webview 算好推过来（与托盘悬停面板同一份）
+      listen<IdlePanelData>(IDLE_PANEL_EVENT, (e) => setIdleData(e.payload)),
       // 改分辨率 / 换屏后刘海尺寸变了，Rust 摆完窗口再告诉这里
       listen<{ width: number; height: number }>("notch-geom", (e) => geom(e.payload)),
       // 果冻下垂：Rust 只在收起态、光标在刘海附近时以 60 Hz 推（离开范围时补一帧让这滴黑收回去）
@@ -122,8 +134,16 @@ export default function NotchHud() {
     ];
     // ★ 监听都注册好之后再问一次当前状态：窗口刚建好时光标已经停在刘海上，
     //   `notch-open` 可能早于 listen 生效 —— 不补这一句，Rust 认为展开了、这里还收着。
-    void Promise.all(uns).then(() => invoke<{ width: number; height: number; open?: boolean } | null>("notch_geometry"))
-      .then((g) => { if (dead || !g) return; geom(g); setOpen(!!g.open); })
+    void Promise.all(uns).then(() => {
+      void emit(IDLE_PANEL_WANT).catch(noop);
+      return invoke<{ width: number; height: number; open?: boolean; mode?: string; near?: boolean } | null>("notch_geometry");
+    }).then((g) => {
+      if (dead || !g) return;
+      geom(g);
+      if (g.mode) setMode(g.mode === "idle" ? "idle" : "run");
+      setNear(!!g.near);
+      setOpen(!!g.open);
+    })
       .catch(noop);
     return () => { dead = true; for (const u of uns) void u.then((f) => f()); };
   }, []);
@@ -189,6 +209,8 @@ export default function NotchHud() {
   const reqAt = useRef(0);
 
   const [act, setAct] = useState<NotchActivity>(NO_ACTIVITY);
+  // ★ 4e 卡片只在「在跑」那种展开里出现；空闲那种展开画额度格子（P11 刘海屏版）
+  const cardOpen = open && mode !== "idle";
   useEffect(() => {
     // 谁正在跑 —— Rust 用 FSEvents 看四家自己的会话文件，**变了才推**（`activity.rs::watch_activity`）。
     // ★ **空闲时不亮** —— 光晕只表示「有 AI 在跑」，额度看卡片。
@@ -212,13 +234,24 @@ export default function NotchHud() {
     return () => clearTimeout(id);
   }, [state, agyShownSnap, tick]);
 
+  // 空闲那种展开也要按当下的「减弱动态效果」画（4e 卡片在自己的展开流程里读）
+  // ★ 系统设置随时可能改：只在展开时重读的话，开着 app 时打开「减弱动态效果」，下次靠近照样亮光晕
+  useEffect(() => {
+    let mq: MediaQueryList | null = null;
+    try { mq = window.matchMedia("(prefers-reduced-motion: reduce)"); } catch (_e: unknown) { return; }
+    const on = () => setReduce(prefersReduce());
+    mq.addEventListener?.("change", on);
+    return () => { mq?.removeEventListener?.("change", on); };
+  }, []);
+  useEffect(() => { if (open && mode === "idle") setReduce(prefersReduce()); }, [open, mode]);
+
   // 卡片开着才走倒计时文字
   useEffect(() => {
-    if (!open) return;
+    if (!cardOpen) return;
     setTick((n) => n + 1);
     const id = setInterval(() => setTick((n) => n + 1), OPEN_TICK_MS);
     return () => clearInterval(id);
-  }, [open]);
+  }, [cardOpen]);
 
   // ── 派生 ───────────────────────────────────────────────────────────────
   const rows = useMemo(() => runningRows(live), [live]);
@@ -279,11 +312,11 @@ export default function NotchHud() {
 
   const wasOpen = useRef(false);
   useEffect(() => {
-    if (open === wasOpen.current) return;
-    wasOpen.current = open;
+    if (cardOpen === wasOpen.current) return;
+    wasOpen.current = cardOpen;
     clearTimers();
     const cur = st.current;
-    if (open) {
+    if (cardOpen) {
       const red = prefersReduce();
       setReduce(red);
       dispatch({ t: "reset" });
@@ -339,7 +372,7 @@ export default function NotchHud() {
       later(() => setFly([]), 620);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [cardOpen]);
 
   // 两拍起飞：第一拍放在起点（无过渡）并强制算一次样式，第二拍给终点 + 过渡
   useLayoutEffect(() => {
@@ -353,7 +386,7 @@ export default function NotchHud() {
 
   // 今日 Tab 可见时补读各家今日均速（起一次 `requests.py --json`；60 s 节流）
   useEffect(() => {
-    if (!open || view !== "today") return;
+    if (!cardOpen || view !== "today") return;
     const now = Date.now();
     if (now - reqAt.current <= REFETCH_MS) return;
     reqAt.current = now;
@@ -367,7 +400,7 @@ export default function NotchHud() {
       setTpsBy(out);
     }).catch(noop);
     return () => { alive = false; };
-  }, [open, view]);
+  }, [cardOpen, view]);
 
   // 会话展开 / 折叠：悬停 250 ms 展开、离开这一行 250 ms 折叠（与悬停面板同一份规则，`tpsHoverLogic.ts`）
   const multiKeys = rows.filter(isMulti).map((r) => r.key).join(",");
@@ -380,7 +413,7 @@ export default function NotchHud() {
   }, [ex]);
   // 行高变了 ⇒ 还在飞的 logo 落点作废：直接交给行自己画
   const openKeys = Object.keys(ex.open).filter((k) => ex.open[k]).join(",");
-  useEffect(() => { if (openKeys) setFly((f) => (f.length && open ? [] : f)); }, [openKeys, open]);
+  useEffect(() => { if (openKeys) setFly((f) => (f.length && cardOpen ? [] : f)); }, [openKeys, cardOpen]);
 
   // 卡片实际高度报给 Rust（定窗口高与命中区）：长高立刻报，变矮等 420 ms 高度动画走完再报
   const lastH = useRef<number | null>(null);
@@ -389,10 +422,23 @@ export default function NotchHud() {
     const h = lay.height;
     if (lastH.current === h) return;
     if (resizeT.current != null) window.clearTimeout(resizeT.current);
-    const send = () => { lastH.current = h; resizeT.current = null; invoke("notch_card_resize", { h }).catch(noop); };
+    const send = () => { lastH.current = h; resizeT.current = null; invoke("notch_card_resize", { h, mode: "run" }).catch(noop); };
     const d = C.resizeDelay(lastH.current, h, reduce);
     if (d === 0) send(); else resizeT.current = window.setTimeout(send, d);
   }, [lay.height, reduce]);
+  // ★ 空闲格子的高度单独报一份（Rust 两种展开各存一份）：换种类那一下 Rust 已经有对的高度，不等网页收到 `notch-mode`。
+  //   格子面板没有高度动画 ⇒ 立刻报；还没收到格子（0 格）不报 —— 报上去会被钳成 80，是一块看不见的命中区。
+  const idleCells = idleData?.cells ?? [];
+  const idleH = NI.notchGrid(idleCells.length).h;
+  useEffect(() => { if (idleH > 0) invoke("notch_card_resize", { h: idleH, mode: "idle" }).catch(noop); }, [idleH]);
+  // 展开着格子变空（设置改成「只看菜单栏」、数据刷新）⇒ 收起，不留一块空白展开态
+  useEffect(() => { if (open && mode === "idle" && idleData && !idleCells.length) invoke("notch_dismiss").catch(noop); },
+            [open, mode, idleData, idleCells.length]);
+
+  const pickIdle = (key: string) => {
+    emit("open-main-page", NI.cellTarget(key)).catch(noop);
+    invoke("notch_dismiss").catch(noop);
+  };
 
   const go = (page: "requests" | "traffic" | "overview") => (e: MouseEvent) => {
     e.preventDefault();
@@ -401,7 +447,11 @@ export default function NotchHud() {
   };
 
   // ── 画 ─────────────────────────────────────────────────────────────────
-  const isOpen = open;
+  const isOpen = cardOpen;
+  const idleOpen = open && mode === "idle";
+  const idleLow = idleCells.some((c) => c.low);
+  const niOp = NI.idleGlowOpacity({ lit, reduce, near, idleOpen, cardOpen: isOpen });
+  const niTr = NI.idleGlowTransition(niOp);
   const ms = (v: number) => `${v}ms`;
   const fade = "150ms ease-out";
   const vT = reduce ? "0ms" : `420ms ${SP}`;
@@ -416,7 +466,8 @@ export default function NotchHud() {
   const qT2 = isOpen && !reduce ? `440ms ${SP} ${ms(qDelay)}` : "100ms";
   const barT = reduce ? "0ms" : isOpen ? `600ms ${SP} ${ms(qDelay + 120)}` : "100ms";
   const tdIn = isOpen && !isRunV;
-  const drip = C.dripGeom(cursor, nw, isOpen);
+  // 任一种展开都收起果冻下垂：展开后 Rust 不再推光标，传 `isOpen`（只认 4e）会让空闲展开时那滴黑冻在最后一帧
+  const drip = C.dripGeom(cursor, nw, open);
   const nameW = C.nameColWidth(lines.map((l) => l.name));
   const flying = new Set(fly.map((f) => f.key));
   // 今日面积图（256 × 70，色序与光晕 / 平台色同；占比最大的一层贴底）
@@ -446,10 +497,16 @@ export default function NotchHud() {
 
   return (
     <div className={["nh-root", lit ? "nh-active" : "nh-quiet", isOpen && "nh-open", reduce && "nh-reduce"].filter(Boolean).join(" ")}
-         data-notch-open={isOpen ? "1" : "0"} data-notch-view={view} data-notch-h={lay.height}
+         data-notch-open={isOpen ? "1" : "0"} data-notch-mode={mode} data-notch-near={near ? "1" : "0"} data-notch-view={view} data-notch-h={lay.height}
          style={{ ["--glow" as string]: glow, ["--cw" as string]: `${C.CARD_W}px` }}>
       <div className="nh-stage">
-        <div className="nh-glow" aria-hidden="true" style={{ opacity: !lit ? 0 : isOpen ? 0.6 : 0.9 }}>
+        <div className="ni-glow" aria-hidden="true" data-notch-near-glow={niOp} style={{ opacity: niOp, transition: niTr }}>
+          <i className="e" /><i className="s" style={{ boxShadow: NI.idleGlowShadow(idleLow) }} />
+          {/* 小红点是光晕的一部分：同一层的不透明度与过渡（一起淡入、一起延后淡出、减弱动态效果时一起不显示） */}
+          {idleLow && <i className="ni-lowdot" data-notch-idle-lowdot />}
+        </div>
+        {/* 平台色光晕跟这一轮展开的种类走：空闲格子开着时 AI 开跑，不在格子头顶换成平台色（收起后再亮） */}
+        <div className="nh-glow" aria-hidden="true" style={{ opacity: !lit || idleOpen ? 0 : open ? 0.6 : 0.9 }}>
           <i className="g2" /><i className="g1" />
           {litKeys.map((k, i) => hot.has(k) && (
             <i key={k} className="ga" data-notch-alert-glow={k} style={{ left: C.alertBlobLeft(i, litKeys.length, nw) }} />
@@ -657,6 +714,8 @@ export default function NotchHud() {
             </div>
           </div>
         </div>
+
+        <NotchIdleGrid cells={idleCells} open={idleOpen} reduce={reduce} onPick={pickIdle} />
 
         <div className="nh-island" />
         <div className="nh-drip" data-notch-drip={drip.on ? drip.h.toFixed(1) : "0"}
