@@ -262,8 +262,8 @@ export default function App() {
     <div className={theme === "light" ? "cb-light" : undefined} data-nav-count={navN}
          style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", background: t.appBg, color: t.text, fontFamily: "'Space Grotesk'", borderRadius: winUI ? 12 : 0, overflow: "hidden", boxShadow: t.shadow, transition: "background-color .35s ease, color .35s ease" }}>
 
-      {/* Title bar */}
-      <div data-tauri-drag-region style={{ height: 38, flexShrink: 0, display: "flex", alignItems: "center", padding: "0 14px", gap: 8, borderBottom: `1px solid ${t.chromeBorder}`, background: t.chromeBg, position: "relative", transition: "background-color .35s ease" }}>
+      {/* Title bar —— 只剩 Windows 那一版（macOS 用户 2026-10-22「顶部占位的地方去掉」：红黄绿进侧栏顶、眼睛与版本进侧栏底） */}
+      {winUI && <div data-tauri-drag-region style={{ height: 38, flexShrink: 0, display: "flex", alignItems: "center", padding: "0 14px", gap: 8, borderBottom: `1px solid ${t.chromeBorder}`, background: t.chromeBg, position: "relative", transition: "background-color .35s ease" }}>
         {/* ★ 窗口控制:macOS 左上红黄绿 / Windows 右上 ─ □ ✕(见下方 winCtl)。
             位置是 OS 级肌肉记忆,属于「必须各平台原生」那一类,不能统一。 */}
         {!winUI && <>
@@ -310,15 +310,35 @@ export default function App() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {/* Sidebar — AICoop P10_Nav（components/NavRail.tsx） */}
         {/* 侧栏再点「Token 消耗」= 回总览（R2 §2「侧栏图标返回」）。 */}
-        <NavRail t={t} page={page} onPage={(pg) => { if (pg === "traffic") setDrill(null); setPage(pg); }} />
+        <NavRail t={t} page={page} onPage={(pg) => { if (pg === "traffic") setDrill(null); setPage(pg); }}
+                 headH={winUI ? 0 : 26}
+                 head={winUI ? undefined : (
+                   <div data-win-lights style={{ display: "flex", gap: 7, flexShrink: 0 }}>
+                     <span onClick={() => { invoke("set_main_visible", { show: false }).catch(() => {}); }} style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57", cursor: "pointer" }} title="隐藏" />
+                     <span onClick={() => win.minimize()} style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e", cursor: "pointer" }} title="最小化" />
+                     <span onClick={() => { win.toggleMaximize().catch(() => {}); }} style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840", cursor: "pointer" }} title="缩放" />
+                   </div>)}
+                 foot={winUI ? undefined : <>
+                   <span data-privacy-toggle onClick={togglePrivacy} title={privacy ? "打码中 — 邮箱与 account_id 已遮蔽,可安全截图。点击恢复" : "打码:遮蔽邮箱与 account_id,方便截图分享"}
+                         style={{ display: "grid", placeItems: "center", width: 28, height: 22, borderRadius: 6, cursor: "pointer",
+                                  color: privacy ? t.accentText : t.muted, background: privacy ? t.accent : "transparent", transition: "background .2s, color .2s" }}>
+                     {privacy ? <IconEyeOff /> : <IconEye />}
+                   </span>
+                   {/* 版本走 `fullVersion()`（`X.Y.Z+B`）：B 换一行，窄栏放得下 */}
+                   <span data-app-version title={ver ? `v${ver}` : undefined}
+                         style={{ fontSize: 9.5, lineHeight: 1.25, color: t.muted, fontFamily: "'JetBrains Mono'", textAlign: "center", whiteSpace: "pre" }}>
+                     {ver ? `v${ver.replace("+", "\n+")}` : ""}
+                   </span>
+                 </>} />
 
-        {/* Content */}
-        <div style={{ flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Content —— 去掉标题栏后，顶上 12 px 是拖动条（按下即拖窗口；页面里的控件不受影响） */}
+        <div style={{ position: "relative", flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {!winUI && <div data-tauri-drag-region style={{ position: "absolute", top: 0, left: 0, right: 0, height: 12, zIndex: 5 }} />}
           {page === "overview" && (
             <Overview t={t} isDark={theme === "dark"} privacy={privacy} provider={provider} setProvider={setProvider}
               colors={{ codex: colorOf(traffic, "codex"), claude: colorOf(traffic, "claude"),

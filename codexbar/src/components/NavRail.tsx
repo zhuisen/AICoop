@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Theme } from "../theme";
 
 /**
@@ -33,9 +33,9 @@ const SETTINGS: Item = { id: "settings", name: "设置", icon: SVG(<g className=
 export const NAV_ORDER: NavPage[] = [...MAIN.map((i) => i.id), SETTINGS.id];
 
 /** 稿子的 `yOf`：前 5 项是常量；设置贴底（随栏高变）⇒ 用 CSS 锚定，不测量。 */
-const topOf = (id: NavPage): string => {
+const topOf = (id: NavPage, head = 0): string => {
   const i = MAIN.findIndex((m) => m.id === id);
-  return i >= 0 ? `${16 + i * 48}px` : "calc(100% - 56px)";
+  return i >= 0 ? `${16 + head + i * 48}px` : "calc(100% - 56px)";
 };
 
 /** 动效关着吗：系统「减弱动态效果」，或 harness 的 `?notrans=1`（WAAPI 不吃 CSS 的 `transition: none`）。 */
@@ -57,7 +57,11 @@ function slide(el: HTMLElement | null, fromTop: number | null, ms: number): void
              { duration: ms, easing: "cubic-bezier(.2,.9,.3,1)" });
 }
 
-export function NavRail({ t, page, onPage }: { t: Theme; page: NavPage; onPage: (p: NavPage) => void }) {
+/** 去掉标题栏后（用户 2026-10-22「顶部占位的地方去掉」）：红黄绿放在栏顶 `head`（高 `headH`），隐私眼睛与版本放在栏底 `foot`。 */
+export function NavRail({ t, page, onPage, head, headH = 0, foot }: {
+  t: Theme; page: NavPage; onPage: (p: NavPage) => void;
+  head?: ReactNode; headH?: number; foot?: ReactNode;
+}) {
   const [hover, setHover] = useState<NavPage | null>(null);
   /** 悬停块离开时原地淡出：记住最后悬停的那项，块停在那里（不跳回选中项再淡出）。 */
   const [lastHover, setLastHover] = useState<NavPage | null>(null);
@@ -122,13 +126,16 @@ export function NavRail({ t, page, onPage }: { t: Theme; page: NavPage; onPage: 
                   borderRight: `1px solid ${t.navBorder}`, background: t.railBg,
                   display: "flex", flexDirection: "column", alignItems: "center", transition: "background-color .35s ease" }}>
       <i ref={selRef} aria-hidden="true" data-nav-sel={page}
-         style={{ ...block, top: topOf(page), background: t.accent, willChange: "transform", pointerEvents: "none" }} />
+         style={{ ...block, top: topOf(page, headH), background: t.accent, willChange: "transform", pointerEvents: "none" }} />
       <i ref={hovRef} aria-hidden="true" data-nav-hover={hover ?? ""}
-         style={{ ...block, top: topOf(hover ?? lastHover ?? page), background: t.navHoverBg, pointerEvents: "none",
+         style={{ ...block, top: topOf(hover ?? lastHover ?? page, headH), background: t.navHoverBg, pointerEvents: "none",
                   opacity: hover && hover !== page ? 1 : 0, transition: "opacity .1s" }} />
+      {head && <div data-tauri-drag-region onMouseEnter={leave}
+                    style={{ height: headH, alignSelf: "stretch", flexShrink: 0, display: "flex", alignItems: "flex-start", justifyContent: "center" }}>{head}</div>}
       {MAIN.map(button)}
       {/* 最后一项与设置之间的大空白、分隔线同样算离开 */}
-      <span style={{ flex: 1, alignSelf: "stretch" }} onMouseEnter={leave} />
+      <span data-tauri-drag-region style={{ flex: 1, alignSelf: "stretch" }} onMouseEnter={leave} />
+      {foot && <div onMouseEnter={leave} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 10 }}>{foot}</div>}
       <i onMouseEnter={leave} style={{ display: "block", width: 28, height: 1, background: t.navDivider, margin: "0 auto 8px" }} />
       {button(SETTINGS)}
     </nav>
