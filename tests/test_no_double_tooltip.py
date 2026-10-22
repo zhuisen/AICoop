@@ -44,14 +44,16 @@ const out = { triggers: [], inside: [] };
 for (const el of document.querySelectorAll('[title]')) {
   const ttl = (el.getAttribute('title') || '').trim();
   const id = (el.dataset && Object.keys(el.dataset)[0]) || el.tagName;
-  const wrap = el.closest('.cb-hoverwrap');
+  // ★ 2026-10-22 起也管悬浮堆叠（`.ov-xs` / `.ov-xs-pop`）：用户报「鼠标长时间停留继续悬浮出新的重复的信息」——
+  //   堆叠外壳挂着与展开内容同文的 `title`，停 ~1 s 系统提示又弹一层
+  const wrap = el.closest('.cb-hoverwrap, .ov-xs');
   if (!wrap) continue;
   // ★★★ 判据：`.cb-hoverwrap:hover .cb-hoverpop` —— **悬浮在 wrap 里的任何地方**
   //   都会展开浮层。所以「触发侧」= 在 wrap 里、且**不在 pop 里**。
   //   ⚠️ 第一版写的是 `el.querySelector('.cb-hoverpop') || el.matches('.cb-hoverwrap')`，
   //     而角标是浮层的**兄弟**（既不包含它、也不是 wrap 本身）⇒ 一个都逮不到。
   //     变异实测当场抓到：把 title 挂回角标，闸照样绿。**闸自己是空的**。
-  const inPop = el.closest('.cb-hoverpop');
+  const inPop = el.closest('.cb-hoverpop, .ov-xs-pop');
   if (!inPop) { out.triggers.push({ id: id, title: ttl.slice(0, 60) }); continue; }
   // ② 浮层**内部**的 title：只在它与浮层里已有的文字重复时才算缺陷
   const body = inPop.textContent || '';
@@ -60,6 +62,7 @@ for (const el of document.querySelectorAll('[title]')) {
 out.nodes = document.querySelectorAll('*').length;
 out.titles = document.querySelectorAll('[title]').length;
 out.pops = document.querySelectorAll('.cb-hoverpop').length;
+out.stacks = document.querySelectorAll('.ov-xs').length;
 document.title = '__DT__' + JSON.stringify(out);
 """
 
@@ -116,6 +119,10 @@ class OneHoverShowsOneThing(unittest.TestCase):
         """★★ 若全 app 一个 `.cb-hoverpop` 都没渲染，这条闸就没有判别力。"""
         total = sum(d.get("pops", 0) for d, _ in self.res.values())
         self.assertGreater(total, 0, "★★ 一个自定义浮层都没渲染 —— 这条闸此刻是空的")
+
+    def test_the_hover_stacks_are_on_the_pages(self):
+        """★ 堆叠（总览「快到期」、消耗页「价格待核」）至少渲染出一个，否则上面那条对它们是空的。"""
+        self.assertGreater(sum(d.get("stacks", 0) for d, _ in self.res.values()), 0, "★ 一个悬浮堆叠都没渲染")
 
     def test_no_popup_trigger_also_carries_a_native_title(self):
         """★★★ 这就是用户报的那条：悬浮时两层同时弹出，且说的是同一件事。"""

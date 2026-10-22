@@ -3,7 +3,7 @@ import { SPRING } from "../../tpsHoverLogic";
 import type { PriceWarn } from "../../rates";
 import { tkPal } from "./tkPal";
 import type { Theme } from "../../theme";
-import { cacheModeDesc, cacheModeLabel, type CacheMode } from "../../traffic";
+import { cacheModeLabel, type CacheMode } from "../../traffic";
 
 const Info = () => (
   <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
@@ -17,16 +17,15 @@ function text(w: PriceWarn): string {
 }
 
 /** 堆叠里的另一条弱提示（缓存口径、估算价……）：`head` 是等宽粗体的那一段。 */
-export interface StackNote { key: string; head: string; text: string; /** 悬停提示里的全文（条目一行放不下时） */ full?: string }
+export interface StackNote { key: string; head: string; text: string }
 
 /**
  * 缓存口径不是 full 时的那条（原 `CacheChip`）：不在数字旁边说一声，页面会把 34.2B 显示成 0.46B 而毫无提示。
  * 口径名放在粗体那段，排除了什么放后半句；改口径在设置里。
  */
 export function cacheNotes(mode: CacheMode): StackNote[] {
-  // 条目一行高 30、最宽 340 ⇒ 只写短句；口径的完整解释进悬停提示
-  return mode === "full" ? [] : [{ key: "cache", head: cacheModeLabel(mode), text: "数字按这个口径算 · 设置里改",
-                                   full: `${cacheModeDesc(mode)}（口径在「设置 › 缓存计入口径」里改）` }];
+  // 条目一行高 30、最宽 340 ⇒ 只写短句。★ 外壳不挂 `title`：停久了系统提示会把展开的内容再弹一遍（用户 2026-10-22）
+  return mode === "full" ? [] : [{ key: "cache", head: cacheModeLabel(mode), text: "数字按这个口径算 · 设置里改" }];
 }
 
 /**
@@ -45,8 +44,7 @@ export default function PriceStack({ t, items, extra = [] }: { t: Theme; items: 
   // 底色 / 描边 / 字色走 `.ov-xs[data-level="weak"]`（黄、带透明度，用户 2026-10-22）
   const vars = { "--xsShadow": "none", "--tx": p.text, "--tx3": p.label, "--sp": SPRING } as CSSProperties;
   return (
-    <span className="ov-xs" data-level="weak" tabIndex={0} data-price-warn={items.length} data-warn-n={rows.length} data-layers={Math.min(rows.length, 3)} style={vars}
-          title={rows.map((w) => `${w.head} · ${w.full ?? w.text}`).join("\n")}>
+    <span className="ov-xs" data-level="weak" tabIndex={0} data-price-warn={items.length} data-warn-n={rows.length} data-layers={Math.min(rows.length, 3)} style={vars}>
       <span className="ov-xs-chip"><Info />{rows.length} 项{extra.length ? "提示" : "价格待核"}</span>
       <span className="ov-xs-pop" role="tooltip">
         {rows.map((w, i) => (
