@@ -177,17 +177,14 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const live = inUse && inUse.status !== "dead" ? inUse : null;
     const cw = live?.windows.find((w) => w.mins === 10080);
     const aw = agyWinRows(agyQuota).find((r) => r.label === "周");
-    const g = grok?.accounts[0];
-    const gNow = g ? grokRemPct(g) : null;
-    const gEnd = g ? (gNow === null ? g.last_good?.period_end : g.quota?.period_end) : null;
     const on = new Set(platforms.map((p) => p.key));
     return weeklyWarns([
       { key: "codex", week: cw?.pct ?? null, reset: cw?.reset ?? "" },
       { key: "claude", week: claudeRem(claude?.week, now), reset: claude?.week?.resetsAt ? fmtEta(claude.week.resetsAt) : "" },
       { key: "agy", week: aw?.remaining ?? null, reset: aw?.reset_at ? agyResetText(aw).text : "" },
-      { key: "grok", week: g ? gNow ?? grokLastGoodRemPct(g) : null, reset: gEnd ? fmtEta(gEnd) : "" },
+      // ★ grok 只有周窗口：格子的大数字就是周 ⇒ 不再在底部重复一条（用户 2026-10-22 截图：0% 的格子 + 一条「周额度剩 0%」）
     ].filter((w) => on.has(w.key)));
-  }, [inUse, claude, agyQuota, grok, platforms, tick]);
+  }, [inUse, claude, agyQuota, platforms, tick]);
 
   const panel = useRef<IdlePanelData | null>(null);
   useEffect(() => {
