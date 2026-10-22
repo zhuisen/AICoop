@@ -254,8 +254,6 @@ class TheHarnessCanExerciseThem(unittest.TestCase):
         self.assertIn("rotate_off", self.H, "★★ 按号开关那一档没有夹具")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class EveryOperationLeavesATrace(unittest.TestCase):
@@ -351,3 +349,7 @@ class EveryOperationLeavesATrace(unittest.TestCase):
         # AICoop P7：原始日志在 `components/rot/RotRecords.tsx`。
         lp = code(ROOT / "codexbar" / "src" / "components" / "rot" / "RotRecords.tsx")
         self.assertIn('l.text.includes("✗") ? p.down', lp, "★★ 失败行没有单独染色")
+
+
+if __name__ == "__main__":
+    unittest.main()

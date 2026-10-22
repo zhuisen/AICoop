@@ -50,14 +50,15 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
   const cells = data?.cells ?? [];
   // 周额度 < 10%：那一家格子左上角的小红牌「周 N%」（用户 2026-10-22 选 A1，取代底部长条）
   const weekOf = new Map((data?.warns ?? []).map((w) => [w.key, w.rem]));
-  // 藏起来的几家（B1）：面板底部一行一家，带「撤销」
-  const snoozed = cells.length ? data?.snoozed ?? [] : [];
+  // 藏起来的几家（B1）：面板底部一行一家，带「撤销」。
+  // ★ 全藏了也照画（全方面评审 §8，三方一致）：原来 0 格时连「已隐藏 · 撤销」也不画、面板不弹 ⇒ 撤销入口跟着消失。
+  const snoozed = data?.snoozed ?? [];
   // 面板宽跟格子数走；比格子宽（只有「已隐藏」行撑着）时格子居中
   const panelW = G.panelWidth(cells.length, snoozed.length > 0);
   const g0 = G.gridLayout(cells.length);
   const ox = (panelW - G.panelWidth(cells.length, false)) / 2;
   const g = ox ? { ...g0, pos: g0.pos.map((p) => ({ x: Math.round((p.x + ox) * 2) / 2, y: p.y })) } : g0;
-  const noteTop = g.h - G.PAD + 2;
+  const noteTop = cells.length ? g.h - G.PAD + 2 : G.PAD - 2;
   const panelH = snoozed.length ? noteTop + snoozed.length * G.NOTE_H + G.PAD - 2 : g.h;
   const hov = hovKey === null ? -1 : cells.findIndex((c) => c.key === hovKey);
 
@@ -75,9 +76,11 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
     });
     return () => { void un.then((f) => f()); };
   }, []);
+  // ★ 每次打开先清悬停：光标此刻在托盘上，不在任何格子上；不清的话上次悬停的格子仍高亮（全方面评审 §8）
+  useEffect(() => { if (mode === "open") setHovKey(null); }, [mode]);
   const snooze = (key: string, undo = false) => { void emit(IDLE_SNOOZE_EVENT, { key, undo }).catch(noop); };
 
-  const isOpen = mode === "open" && cells.length > 0;
+  const isOpen = mode === "open" && (cells.length > 0 || snoozed.length > 0);
   const px = layout?.panel.x ?? 40, py = layout?.panel.y ?? 30;
 
   // logo 飞行：打开 = 托盘 → 环心；关闭 = 环心 → 托盘。托盘以外的几家只在环心淡入 / 淡出。

@@ -172,8 +172,6 @@ class TheHarnessCanReachEveryTab(unittest.TestCase):
         self.assertIn("p.get('mbplat')", h)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheTabCountsEveryPlatform(unittest.TestCase):
@@ -196,3 +194,7 @@ class TheTabCountsEveryPlatform(unittest.TestCase):
 
 # ⚠️ 「菜单栏至少装得下 4 个账号」那一组 2026-09-14 由用户**撤回**（「这个需求不要了」）。
 #    连同 `MIN_ROWS` / 行高测量 / 地板持久化一并回退，面板高度仍然只由今日页决定。
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -41,6 +41,17 @@ CR = load()
 NOW = time.time()
 
 
+def _load_proxy():
+    """代理的 `cooling()` / `_win_used()` 只读传进去的 slot，不碰盘；模块顶层只有常量。"""
+    spec = importlib.util.spec_from_file_location("proxy_uc", ROOT / "proxy" / "proxy.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+PX = _load_proxy()
+
+
 def iso(days):
     return time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime(NOW + days * 86400))
 
@@ -115,6 +126,8 @@ class Flow(unittest.TestCase):
             self.posts.append((path, dict(body)))
             return self.post_result
         CR._api_post = post
+        self.orig["CREDIT_READ_DELAYS"] = CR.CREDIT_READ_DELAYS
+        CR.CREDIT_READ_DELAYS = (0, 0, 0, 0)        # 不真睡
         self.addCleanup(lambda: [setattr(CR, k, v) for k, v in self.orig.items()])
 
     def run_cmd(self, *extra):
@@ -166,6 +179,124 @@ class Flow(unittest.TestCase):
         self.detail = [card("a", None)]
         self.assertEqual(self.run_cmd("--json"), 1)
         self.assertEqual(self.posts, [])
+
+    def test_a_confirmed_reset_clears_the_cooling(self):
+        """★ 阶段 E 评审 codex：冷却现在能按周窗口拉到几天后；重置卡成功却不清，额度回来了代理照样不挑它。"""
+        self.state["slots"][self.aid]["cooling_until"] = NOW + 3 * 86400
+        self.assertEqual(self.run_cmd("--json"), 0)
+        self.assertNotIn("cooling_until", self.state["slots"][self.aid])
+
+    def test_after_a_confirmed_reset_the_proxy_no_longer_cools_it(self):
+        """★★ 用户 2026-10-23 实报：某个号用了重置卡之后仍在冷却。判据打在**代理的** `cooling()` 上（选号就看它），
+        且 GET /usage 没读到时也成立：旧的 100% 不能把它判回冷却。"""
+        now = time.time()
+        sl = self.state["slots"][self.aid]
+        sl["cooling_until"] = now + 3 * 86400
+        sl["quota"] = {"captured_at": now - 600,
+                       "primary": {"window_minutes": 300, "used_percent": 100, "resets_at": now + 3600},
+                       "secondary": {"window_minutes": 10080, "used_percent": 100, "resets_at": now + 3 * 86400}}
+        self.assertTrue(PX.cooling(sl, now), "前提：用卡之前它确实在冷却")
+        self.post_result = (200, json.dumps({"code": "ok", "credit": {"id": "near"}, "windows_reset": 2}).encode())
+        self.assertEqual(self.run_cmd("--json"), 0)
+        self.assertFalse(PX.cooling(sl, time.time()), "★★ 用卡成功之后代理仍判它冷却")
+        self.assertIsNone(PX._win_used(sl, "primary"), "★ 旧的 100% 属于上一个窗口 ⇒ 未知，不是仍见底")
+        self.assertIsNone(PX._win_used(sl, "secondary"))
+
+    def test_the_fresh_reading_replaces_the_old_quota(self):
+        """★ `_probe_quota` 的读数要写回 —— 原来回值被丢掉，旧额度一直留着。"""
+        fresh = {"captured_at": time.time(), "primary": {"window_minutes": 300, "used_percent": 0, "resets_at": NOW + 18000}}
+        orig = CR._probe_quota
+        CR._probe_quota = lambda aid, slot, act: (fresh, "ok") if self.posts else orig(aid, slot, act)
+        self.assertEqual(self.run_cmd("--json"), 0)
+        self.assertEqual(self.state["slots"][self.aid]["quota"], fresh)
+
+    def _spent_both(self):
+        now = time.time()
+        q = {"captured_at": now - 600,
+             "primary": {"window_minutes": 300, "used_percent": 100, "resets_at": now + 3600},
+             "secondary": {"window_minutes": 10080, "used_percent": 40, "resets_at": now + 3 * 86400}}
+        self.state["slots"][self.aid]["quota"] = json.loads(json.dumps(q))
+        return q
+
+    def test_an_echo_of_the_pre_reset_reading_is_not_written(self):
+        """★★ 用户 2026-10-23「用完重置卡，没有立马刷新恢复全额度」：重置刚确认时 `/usage` 还回重置前那份
+        （5h 仍 100%、`resets_at` 没变）。照写 ⇒ 旧的 100% 回来，要等 quotad 下一轮。回声不写，接着读，读到新的才写。"""
+        q = self._spent_both()
+        echo = dict(q, captured_at=time.time())
+        fresh = {"captured_at": time.time(), "primary": {"window_minutes": 300, "used_percent": 0, "resets_at": NOW + 18000}}
+        seq = [echo, echo, fresh]
+        CR._probe_quota = lambda aid, slot, act: ((seq.pop(0) if seq else fresh), "ok") if self.posts else ({}, "ok")
+        self.assertEqual(self.run_cmd("--json"), 0)
+        sl = self.state["slots"][self.aid]
+        self.assertEqual(sl["quota"], fresh, "★ 回声之后读到的新读数要写进去")
+        self.assertEqual([r["echo"] for r in sl["last_credit_use"]["reads"]], [True, True, False])
+
+    def test_if_it_only_ever_echoes_the_window_stays_unknown(self):
+        """一直是回声 ⇒ 不写；见底窗口留着「此刻已重置 ⇒ 未知」（—），不回到 100%、也不编满额。"""
+        q = self._spent_both()
+        echo = dict(q, captured_at=time.time())
+        CR._probe_quota = lambda aid, slot, act: (json.loads(json.dumps(echo)), "ok") if self.posts else ({}, "ok")
+        self.assertEqual(self.run_cmd("--json"), 0)
+        sl = self.state["slots"][self.aid]
+        self.assertIsNone(PX._win_used(sl, "primary"), "★ 回声把旧的 100% 写回去了")
+        self.assertEqual(len(sl["last_credit_use"]["reads"]), len(CR.CREDIT_READ_DELAYS))
+
+    def test_a_window_that_was_not_spent_is_not_an_echo(self):
+        """周 40% 原样读回来不算回声（它本来就没见底，不该因此一直重读）。"""
+        q = self._spent_both()
+        fresh = {"captured_at": time.time(), "primary": {"window_minutes": 300, "used_percent": 0, "resets_at": NOW + 18000},
+                 "secondary": q["secondary"]}
+        CR._probe_quota = lambda aid, slot, act: (fresh, "ok") if self.posts else ({}, "ok")
+        self.assertEqual(self.run_cmd("--json"), 0)
+        self.assertEqual(len(self.state["slots"][self.aid]["last_credit_use"]["reads"]), 1)
+
+    def test_a_spent_window_read_back_with_room_is_fresh_even_with_the_same_reset(self):
+        """回声的判据是「仍见底且 reset 没变」，不是「reset 没变」：服务端可能只清用量不挪重置点。"""
+        q = self._spent_both()
+        fresh = json.loads(json.dumps(q)); fresh["captured_at"] = time.time(); fresh["primary"]["used_percent"] = 0
+        CR._probe_quota = lambda aid, slot, act: (fresh, "ok") if self.posts else ({}, "ok")
+        self.assertEqual(self.run_cmd("--json"), 0)
+        sl = self.state["slots"][self.aid]
+        self.assertEqual(sl["quota"], fresh)
+        self.assertEqual(len(sl["last_credit_use"]["reads"]), 1)
+
+    def test_one_reset_window_does_not_vouch_for_two_spent_ones(self):
+        """★ 阶段 F 评审 codex：服务端只说重置了 1 个窗口，而两个都见底 ⇒ 不猜是哪个，旧读数原样留着等新 GET。"""
+        now = time.time()
+        sl = self.state["slots"][self.aid]
+        q = {"captured_at": now - 600,
+             "primary": {"window_minutes": 300, "used_percent": 100, "resets_at": now + 3600},
+             "secondary": {"window_minutes": 10080, "used_percent": 100, "resets_at": now + 3 * 86400}}
+        sl["quota"] = json.loads(json.dumps(q))
+        self.assertEqual(self.run_cmd("--json"), 0)
+        self.assertEqual(sl["quota"]["primary"]["resets_at"], q["primary"]["resets_at"])
+        self.assertEqual(sl["quota"]["secondary"]["resets_at"], q["secondary"]["resets_at"])
+        self.assertNotIn("cooling_until", sl, "冷却照样清：服务端确认重置过")
+
+    def test_a_late_reading_never_resurrects_a_removed_account(self):
+        """★ 阶段 F 评审 codex：请求期间号被 remove，迟到的 GET 读数用 `setdefault` 建回一个残缺槽位。"""
+        fresh = {"captured_at": time.time(), "primary": {"window_minutes": 300, "used_percent": 0}}
+
+        def probe(aid, slot, act):
+            if self.posts:
+                self.state["slots"].pop(aid, None)      # 发完之后、读数回来之前，号被删了
+                return fresh, "ok"
+            return {}, "ok"
+        orig = CR._probe_quota
+        CR._probe_quota = probe
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.suppress(SystemExit):
+                CR.cmd_use_credit(["Egan", "--json"])
+        finally:
+            CR._probe_quota = orig
+        self.assertNotIn(self.aid, self.state["slots"], "★ 删掉的号被迟到的读数复活了")
+
+    def test_no_effect_keeps_the_cooling(self):
+        """反向：服务端没重置任何窗口 ⇒ 冷却照旧（别把「没生效」也当成回满）。"""
+        self.state["slots"][self.aid]["cooling_until"] = NOW + 3600
+        self.post_result = (200, json.dumps({"code": "no_credit", "credit": None, "windows_reset": 0}).encode())
+        self.run_cmd("--json")
+        self.assertEqual(self.state["slots"][self.aid].get("cooling_until"), NOW + 3600)
 
     def test_no_effect_is_failure_and_keeps_the_request_id_for_retry(self):
         self.post_result = (200, json.dumps({"code": "no_credit", "credit": None, "windows_reset": 0}).encode())
@@ -260,7 +391,8 @@ class Wiring(unittest.TestCase):
                     self.assertNotIn(bad, code, "★★★ 卡片自己发了命令 —— 绕过了确认")
         self.assertEqual(chip.count("onConfirm("), 1, "★★★ 弹层里不止一处会确认")
         i = chip.index("onConfirm(")
-        self.assertIn("data-use-credit-confirm", chip[i - 200:i], "★★★ 确认不在「确认使用」按钮上")
+        btn = chip.rfind("<span", 0, i)
+        self.assertIn("data-use-credit-confirm", chip[btn:i], "★★★ 确认不在「确认使用」按钮上")
         self.assertNotRegex(chip, r'e\.key === "Enter"[^\n]*onConfirm', "★★★ 回车会确认 —— 连按回车会花掉一张卡")
 
 

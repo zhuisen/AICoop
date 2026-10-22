@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import type { Theme } from "../../theme";
 import { MONO } from "./RelayBits";
 import { fmtTok } from "../../traffic";
 
@@ -51,12 +52,15 @@ export interface ModelCardData {
 
 const W = 220, H = 40;
 
-export default function ModelSparkCard({ d, focused, dimmed, onPick }: {
+export default function ModelSparkCard({ t, d, focused, dimmed, onPick }: {
+  /** 主题：原来底色写死深色、文字跟主题走 ⇒ 浅色主题下深字压深底（全方面评审 §4）。 */
+  t: Theme;
   d: ModelCardData;
   focused: boolean;
   dimmed: boolean;
   onPick: () => void;
 }): React.ReactElement {
+  const sub = t.isDark ? "#8a93a0" : t.muted;
   const [hov, setHov] = useState<number | null>(null);
   const n = d.series.length;
   // ★ 每卡独立 y 轴：`max × 1.1`。全 0 时用一个正的分母，否则整条线贴顶或 NaN。
@@ -75,8 +79,8 @@ export default function ModelSparkCard({ d, focused, dimmed, onPick }: {
   return (
     <div data-model-card={d.model} data-model-focused={focused ? "1" : undefined}
          onClick={onPick}
-         style={{ background: "#10161d",
-                  border: `1px solid ${focused ? d.color : "rgba(255,255,255,.07)"}`,
+         style={{ background: t.isDark ? "#10161d" : t.cardBg,
+                  border: `1px solid ${focused ? d.color : t.isDark ? "rgba(255,255,255,.07)" : t.cardBorder}`,
                   borderRadius: 13, padding: "13px 15px", cursor: "pointer",
                   transition: "border-color .15s, transform .15s, opacity .15s",
                   opacity: dimmed ? 0.35 : 1, minWidth: 0 }}>
@@ -85,14 +89,14 @@ export default function ModelSparkCard({ d, focused, dimmed, onPick }: {
                        flex: "none" }} />
         <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, whiteSpace: "nowrap",
                        overflow: "hidden", textOverflow: "ellipsis" }}>{d.model}</span>
-        <span style={{ marginLeft: "auto", fontSize: 10, color: "#8a93a0", fontFamily: MONO,
+        <span style={{ marginLeft: "auto", fontSize: 10, color: sub, fontFamily: MONO,
                        flex: "none" }}>{(d.pct * 100).toFixed(1)}%</span>
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
         <span style={{ fontSize: 22, fontWeight: 700, fontFamily: MONO,
                        fontVariantNumeric: "tabular-nums" }}>{fmtTok(d.totalTok)}</span>
-        <span style={{ fontSize: 10.5, color: "#8a93a0", fontFamily: MONO }}>
+        <span style={{ fontSize: 10.5, color: sub, fontFamily: MONO }}>
           {d.totalReq} 轮
         </span>
       </div>
@@ -115,18 +119,20 @@ export default function ModelSparkCard({ d, focused, dimmed, onPick }: {
         {hov !== null && (
           <>
             <div style={{ position: "absolute", top: 0, bottom: 0, left: hovLeft, width: 1,
-                          background: "rgba(255,255,255,.3)", pointerEvents: "none" }} />
+                          background: t.isDark ? "rgba(255,255,255,.3)" : "rgba(0,0,0,.22)", pointerEvents: "none" }} />
             <div style={{ position: "absolute", left: hovLeft, top: hovTop, width: 7, height: 7,
-                          borderRadius: "50%", background: d.color, border: "2px solid #10161d",
+                          borderRadius: "50%", background: d.color, border: `2px solid ${t.isDark ? "#10161d" : t.cardBg}`,
                           transform: "translate(-50%,-50%)", pointerEvents: "none" }} />
             <div data-model-tip style={{
               position: "absolute", top: -4, left: hovLeft, transform: shift,
-              background: "rgba(10,13,16,.6)", backdropFilter: "blur(6px)",
-              border: "1px solid rgba(255,255,255,.12)", borderRadius: 6, padding: "4px 7px",
+              // ★ 浮层底跟主题（阶段 C 评审 codex：浅色下深色半透明底 + `t.muted` 日期实算 1.06:1）。半透明 + 模糊保留
+              background: t.isDark ? "rgba(10,13,16,.6)" : "rgba(255,255,255,.82)", backdropFilter: "blur(6px)",
+              border: `1px solid ${t.isDark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.10)"}`, borderRadius: 6, padding: "4px 7px",
+              color: t.text,
               fontFamily: MONO, fontSize: 9.5, whiteSpace: "nowrap", pointerEvents: "none",
               zIndex: 3,
             }}>
-              <span style={{ color: "#8a93a0" }}>{d.labels[k]?.slice(5) ?? ""}</span>{" "}
+              <span style={{ color: sub }}>{d.labels[k]?.slice(5) ?? ""}</span>{" "}
               <b>{fmtTok(d.series[k] ?? 0)}</b>
             </div>
           </>
@@ -136,9 +142,9 @@ export default function ModelSparkCard({ d, focused, dimmed, onPick }: {
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 10,
                     color: "#6b7480", fontFamily: MONO }}>
         <span>峰 {fmtTok(Math.max(...d.series, 0))}/日</span>
-        <span>实扣 <b style={{ color: "#E0A21C" }}>{d.costText}</b></span>
+        <span>实扣 <b style={{ color: t.isDark ? "#E0A21C" : "#9a5b00" }}>{d.costText}</b></span>
       </div>
-      <div style={{ marginTop: 7, height: 3, borderRadius: 2, background: "rgba(255,255,255,.07)",
+      <div style={{ marginTop: 7, height: 3, borderRadius: 2, background: t.isDark ? "rgba(255,255,255,.07)" : "rgba(0,0,0,.07)",
                     overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${(d.bar * 100).toFixed(1)}%`, background: d.color,
                       borderRadius: 2, transition: "width .4s" }} />

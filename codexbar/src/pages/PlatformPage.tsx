@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { type Theme, modelColor } from "../theme";
-import { costOf, fmtUSD, priceOf, isPriced, priceWarnings } from "../rates";
+import { costOf, fmtUSD, priceOf, isPriced, priceWarnings, recentModels } from "../rates";
 import type { TrafficData, RangeState, CacheMode, Bucket, Platform, PlatformPrefs } from "../traffic";
 import Seg from "../components/Seg";
 import Toast from "../components/Toast";
@@ -321,7 +321,7 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
     toastT.current = window.setTimeout(() => setToast(null), 1800);
   }, []);
   const [lastPk, setLastPk] = useState(pk);
-  if (lastPk !== pk) { setLastPk(pk); setHm(null); setIso(new Set()); }
+  if (lastPk !== pk) { setLastPk(pk); setHm(null); setIso(new Set()); setIsoCls(new Set()); }
 
   const rows = useMemo(() => (data ? platRows(t, data, st, today) : []), [t, data, st, today]);
   const me = rows.find((r) => r.key === pk) ?? null;
@@ -397,7 +397,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
     return parts.length ? parts.map((x) => `${x.name} ${x.pct.toFixed(1)}%`).join(" · ") : null;
   }, [raw, pk, st, today, cacheMode]);
   // 「标 * 的是估算价」原是表下常驻的琥珀脚注 ⇒ 并进标题行的弱提示堆叠（同「消耗」页的价格待核）
-  const priceWarns = useMemo(() => priceWarnings((v?.models ?? []).map((m) => ({ model: m.m, platform: pk })), today), [v, pk, today]);
+  //   价格待核与「消耗」页同一口径：这一家最近 30 天用过的模型，不随所选区间变（`recentModels`）。
+  const priceWarns = useMemo(() => (data ? priceWarnings(recentModels(data, today, pk), today) : []), [data, pk, today]);
   const hitCol = countsCacheRead(cacheMode);
   const cols = modelCols(L, hitCol);
   const dpt = fmtPt(cache?.dpt ?? null);
@@ -584,7 +585,7 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
                     <span style={{ ...R, fontSize: 12.5, color: p.text2 }}>${money(q.out)}</span>
                   </>}
                   <span style={{ ...R, fontSize: 12.5, color: p.label }} title="等效费用 ÷ 该模型 token 数">
-                    {m.total > 0 ? `$${(m.cost / (m.total / 1e6)).toFixed(3)}` : "—"}{L > 0 && est && <span style={{ color: p.amber }}> *</span>}
+                    {m.total > 0 ? `$${(m.cost / (m.total / 1e6)).toFixed(3)}` : "—"}{L > 0 && est && m.total > 0 && <span style={{ color: p.amber }}> *</span>}
                   </span>
                   {hitCol && (
                     <span style={{ ...R, fontSize: 12.5, color: lowHit(m.hit, avgHit) ? p.down : p.text2 }}

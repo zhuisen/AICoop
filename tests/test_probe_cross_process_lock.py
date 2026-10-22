@@ -75,8 +75,29 @@ class OneBillPerAccountAtATime(unittest.TestCase):
         self.assertEqual(self.billed, ["B"], "★★ 另一个进程正在探 A，这里又给 A 计了一次费")
         self.assertIn("另一个进程正在探这个号", out)
 
-    def test_the_lock_is_released_after_each_account(self):
-        """占住的锁在探完那个号后就放掉 —— 否则一次全池探针会把之后所有单号探针挡在外面。"""
+    def test_the_whole_batch_is_claimed_up_front(self):
+        """阶段 A 评审：逐号占的话，批次还没走到 B 时别的进程探完 B 并释放，批次走到 B 照样再探 ⇒ 两次计费。
+        所以探 A 的那一刻，B 必须已经被这一批占住。"""
+        seen = []
+
+        def billed(aid, slot, is_active, model, effort):
+            self.billed.append(aid)
+            if aid == "A":
+                fh = open(self.dir / f".probe-{uuid.uuid5(uuid.NAMESPACE_OID, 'B').hex[:12]}.lock", "w")
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    seen.append("B free")
+                except BlockingIOError:
+                    seen.append("B held")
+                finally:
+                    fh.close()
+            return (None, "HTTP 400 stub", "")
+        self.m._billed_probe = billed
+        self.probe()
+        self.assertEqual(seen, ["B held"], "★★ 探 A 时 B 还没被占 —— 另一个进程能在这之间探 B，批次随后再探一次")
+
+    def test_the_lock_is_released_after_the_batch(self):
+        """整批结束就放掉 —— 否则一次全池探针会把之后所有单号探针挡在外面。"""
         self.probe()
         self.hold("A")   # 能占到 = 已释放（LOCK_NB 占不到会抛）
 

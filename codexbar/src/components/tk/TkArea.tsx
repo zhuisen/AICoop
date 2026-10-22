@@ -43,7 +43,10 @@ export default function TkArea({ t, width, height, labels, layers, fmt, unit, ti
   const st0 = stackTops(layers.map((l) => l.values));
   const rawMax = Math.max(1, ...(st0[st0.length - 1] ?? [1]));
   const target: Disp = { keys: layers.map((l) => l.key), vals: layers.map((l) => l.values), maxV: rawMax * 1.08 };
-  const sig = `${n}|${labels[0] ?? ""}|${target.keys.join(",")}|${target.vals.map((v) => v.join(",")).join(";")}`;
+  // ★ 两个签名：`sig` = 数据集身份（档位 / 起点 / 图层），悬停下标跟它走；`dataSig` 再带上数值，只驱动过渡动画。
+  //   数值进了悬停签名的话，心跳刷新时鼠标不动浮层也会消失（全方面评审 2026-10-22 §2）。
+  const sig = `${n}|${labels[0] ?? ""}|${target.keys.join(",")}`;
+  const dataSig = `${sig}|${target.vals.map((v) => v.join(",")).join(";")}`;
 
   const [disp, setDisp] = useState<Disp>(target);
   const dispRef = useRef<Disp>(target);
@@ -81,7 +84,7 @@ export default function TkArea({ t, width, height, labels, layers, fmt, unit, ti
     raf.current = requestAnimationFrame(step);
     return () => { cancelAnimationFrame(raf.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig]);
+  }, [dataSig]);
 
   const xAt = (i: number) => (n <= 1 ? (X0 + CW) / 2 : X0 + (i / (n - 1)) * (CW - X0));
   const yAt = (v: number) => Y0 - (v / Math.max(1, disp.maxV)) * (Y0 - Y1);

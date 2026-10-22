@@ -13,7 +13,7 @@ import PlatformPage from "./pages/PlatformPage";
 import RequestsPage, { type ReqNav } from "./pages/RequestsPage";
 import type { RangeState } from "./traffic";
 import { colorOf, daysNeeded, DEFAULT_RANGE, todayOf, singleDayOf, hoursOfDay } from "./traffic";
-import SettingsPage, { getSettings, loadTheme, saveTheme, TRAY_STYLES, type ThemeName } from "./pages/SettingsPage";
+import SettingsPage, { getSettings, loadTheme, patchSettings, saveTheme, TRAY_STYLES, type ThemeName } from "./pages/SettingsPage";
 import { useStore } from "./hooks/useStore";
 import { useExpiryWatch } from "./hooks/useExpiryWatch";
 import { useDeadWatch } from "./hooks/useDeadWatch";
@@ -243,12 +243,14 @@ export default function App() {
   const { live, error: liveErr } = useLive();
   /** 自动切号开关（codex）。真源是 localStorage `codexbar_settings.autoSwitchEnabled`（`useAutoSwitch` 读它）。 */
   const toggleAutoSwitch = () => {
-    const next = !autoSwitch;
+    // ★ 从真源现读再翻转（2026-10-22 评审）：设置页也能改这个开关，按挂载时那份 state 翻会写反
+    const next = !getSettings().autoSwitchEnabled;
+    patchSettings({ autoSwitchEnabled: next });
     setAutoSwitch(next);
-    const st = getSettings(); st.autoSwitchEnabled = next;
-    localStorage.setItem("codexbar_settings", JSON.stringify(st));
     showToast(next ? "✓ 自动切号 已开启" : "自动切号 已关闭");
   };
+  // 离开设置页回来时重读（设置页与总览同在主窗口，设置页改完不广播）
+  useEffect(() => { setAutoSwitch(getSettings().autoSwitchEnabled); }, [page]);
   // ★★ 这一段**必须排在 `agySnap` 之后**：它读 `agySnap`，而 `const` 有暂时性死区。
   //    放在前面时页面**整页白屏**，只在 harness 的 `errors` 探针里留一句
   //    `Cannot access 'je' before initialization`（压缩后的变量名）——

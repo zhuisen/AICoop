@@ -6,7 +6,7 @@ import type { RotEvent } from "../../overview";
 /** 轮换数据里总览要用的那一小块（与日志页 `Rotation` 同一份 JSON，只取三样）。 */
 export interface RotationDay {
   events: RotEvent[];
-  segments: { acc: string; end: number; tokens: number }[];
+  segments: { acc: string; start?: number; end: number; tokens: number }[];
   generated_at: number;
 }
 

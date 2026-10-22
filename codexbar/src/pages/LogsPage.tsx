@@ -145,44 +145,38 @@ export default function LogsPage({ t, pools }: {
   // ★ 每次取数一个序号：换平台 / 换窗口后，上一次（可能是冷扫 30d）晚回来的结果不许盖掉当前视图，
   //   它的 finally 也不许提前熄灭当前这次的「刷新中」（评审 gemini 阶段 5）。
   const seqRef = useRef(0);
+  /** 屏上 `rot` 属于哪一份数据（`平台:窗口`）。★ 同一份的重扫失败 ⇒ 留着旧数、标「刷新失败」（§7.0b）；
+   *  换了窗口 / 平台 ⇒ 旧数一律不许挂在新标签下面（全方面评审 §3：原来两种情形走同一条清空路径，
+   *  而换窗口没快照时又先挂着旧窗口的数）。 */
+  const rotKey = useRef<string | null>(null);
   const load = useCallback(async (hours: WinH) => {
     const seq = ++seqRef.current;
     const cur = () => seq === seqRef.current;
-    if (plat === "agy") {
-      // ★ Gemini 没有快照（冷路径实测 0.2s，不值得多一份缓存文件）。
-      setBusy(true);
+    const key = `${plat}:${hours}`;
+    const adopt = (r: Rotation) => { rotKey.current = key; setRot(r); setErr(null); };
+    const fail = (why: string) => {
+      if (rotKey.current !== key) { rotKey.current = null; setRot(null); }
+      setErr(why);
+    };
+    // ★ 换了平台 / 窗口：旧数据与旧错误都不许挂在新标签下（阶段 C 评审 gemini：只清 rot 会残留「✗ 读取失败」）
+    if (rotKey.current !== key) { rotKey.current = null; setRot(null); setErr(null); }
+    if (plat === "codex") {
+      // ★★ 两段式：先把**成品快照**画出来（读盘 ~1ms），再后台重扫。Gemini 没有快照（冷路径实测 0.2s，不值得多一份缓存文件）。
       try {
-        const r = await invoke<Rotation>("read_agy_rotation", { hours });
-        if (!cur()) return;
-        setRot(r.ok ? r : null);
-        setErr(r.ok ? null : (r.detail ?? "读不到 agy 日志"));
-      } catch (e: unknown) {
-        if (!cur()) return;
-        setRot(null);
-        setErr(String(e));
-      } finally {
-        if (cur()) setBusy(false);
-      }
-      return;
+        const snap = await invoke<Rotation | null>("read_rotation_snapshot", { hours });
+        if (cur() && snap && snap.ok && rotKey.current !== key) adopt(snap);
+      } catch { /* 没有快照是首次运行的正常状态，不是故障 */ }
+      if (!cur()) return;
     }
-    // ★★ 两段式：先把**成品快照**画出来（读盘 ~1ms），再后台重扫。
-    try {
-      const snap = await invoke<Rotation | null>("read_rotation_snapshot", { hours });
-      if (cur() && snap && snap.ok) { setRot(snap); setErr(null); }
-    } catch { /* 没有快照是首次运行的正常状态，不是故障 */ }
-    if (!cur()) return;
-
     setBusy(true);
     try {
-      const r = await invoke<Rotation>("read_proxy_rotation", { hours });
+      const r = await invoke<Rotation>(plat === "agy" ? "read_agy_rotation" : "read_proxy_rotation", { hours });
       if (!cur()) return;
-      setRot(r.ok ? r : null);
-      setErr(r.ok ? null : (r.detail ?? "读不到 proxy/proxy.log"));
+      if (r.ok) adopt(r);
+      else fail(r.detail ?? (plat === "agy" ? "读不到 agy 日志" : "读不到 proxy/proxy.log"));
     } catch (e: unknown) {
       if (!cur()) return;
-      // ★ 失败必须清空，**不能留着上一窗口的数** —— 旧数字挂在新标签下面，看上去完全正常。
-      setRot(null);
-      setErr(String(e));
+      fail(String(e));
     } finally {
       // ★ 必须在 `finally`：失败时不熄灯，「刷新中」会一直亮着。只熄自己这一次的。
       if (cur()) setBusy(false);
@@ -190,25 +184,27 @@ export default function LogsPage({ t, pools }: {
   }, [plat]);
 
   // ★ 换版块 / 换窗口先清聚焦：不许把另一个数据集的状态留在新标签下面。
-  useEffect(() => { setRot(null); setFocus(null); }, [plat]);
-
-  useEffect(() => {
-    void load(win);
-    const id = setInterval(() => { void load(win); }, 30_000);
-    return () => clearInterval(id);
-  }, [load, win]);
+  useEffect(() => { rotKey.current = null; setRot(null); setErr(null); setFocus(null); }, [plat]);
 
   /** 服务日志（quotad / agy / dawnprobe / autosync …）—— 原始日志与展开日志的另一半来源。
-   *  ⚠️ 其中 **dawnprobe 是全仓唯一会自动花钱的任务**，它的成败要看得见。 */
+   *  ⚠️ 其中 **dawnprobe 是全仓唯一会自动花钱的任务**，它的成败要看得见。
+   *  ★ 跟 30 s 刷新与 ↻ 一起读（全方面评审 §3：原来只在换窗口时读一次）。 */
   const [svc, setSvc] = useState<SvcLine[]>([]);
-  useEffect(() => {
+  const loadSvc = useCallback(() => {
     invoke<string>("read_logs")
       .then((raw) => { setSvc(parseServiceLogs(raw || "", new Date())); })
-      .catch(() => { /* 服务日志读不到不影响本页其余部分 */ });
-  }, [win]);
+      .catch(() => { /* 服务日志读不到不影响本页其余部分；留着上次读到的 */ });
+  }, []);
+  const refreshAll = useCallback((h: WinH) => { void load(h); loadSvc(); }, [load, loadSvc]);
+
+  useEffect(() => {
+    refreshAll(win);
+    const id = setInterval(() => { refreshAll(win); }, 30_000);
+    return () => clearInterval(id);
+  }, [refreshAll, win]);
 
   /** 每号实测 t/s（请求账本，与「请求」页同口径：只取 `est=false`、中位数）。账本只留近 2 天。 */
-  const { rows: reqs } = useReqLedger();
+  const { rows: reqs, ok: reqOk } = useReqLedger();
 
   const logs = useMemo(() => {
     // ★ Gemini 版的 `rot.log` 就是 `agy.log` 的换号行，而服务日志里 `agy` 那一源**已经整份**含着它们 —— 不并第二次。
@@ -257,6 +253,8 @@ export default function LogsPage({ t, pools }: {
           + `（${Math.round(cov.attributed_pct * 100)}%）。对不上的不按时间猜、不计入，所以合计是**下界**。`
         : "窗口内没有可归属的生成记录。")
       + (cov && cov.responses_unplaced > 0 ? ` 另有 ${cov.responses_unplaced} 场会话认不出身份、未计入。` : "")
+      + (cov && ((cov.logs_unreadable ?? 0) + (cov.dbs_unreadable ?? 0)) > 0
+        ? ` ⚠️ 读不了 ${cov.logs_unreadable ?? 0} 份 agy 日志、${cov.dbs_unreadable ?? 0} 个会话库 —— 那部分**没看到**，不是没运行。` : "")
     : cov
     ? `已归属 ${cov.responses_with_tokens}/${cov.responses_seen} 次响应`
       + `（${cov.attributed_pct === null ? "—" : Math.round(cov.attributed_pct * 100) + "%"}）。`
@@ -265,6 +263,8 @@ export default function LogsPage({ t, pools }: {
           + `流断了 codex 就不写用量记录，而这部分**已经计费** —— 花了钱但看不到明细。`
         : "")
       + `另外，直连 codex 的请求不经过代理、连分母都不在，所以合计是**下界**不是总量。`
+      + ((cov.rollouts_unreadable ?? 0) > 0 ? ` ⚠️ 有 ${cov.rollouts_unreadable} 个会话文件读不了 / 解压不了，那部分 token **没看到**。` : "")
+      + (cov.state_error ? ` ⚠️ 读不到 state.json（${cov.state_error}），套餐 / 额度 / 「已移除」都无法判断。` : "")
       + (cov.undated_lines > 0 ? ` 另有 ${cov.undated_lines} 行旧格式日志无时间戳、未计入。` : "")
       + windowNote(cov)
     : undefined;
@@ -288,11 +288,12 @@ export default function LogsPage({ t, pools }: {
     const m = new Map<string, number | null>();
     const start = rot?.window.start ?? Infinity;
     for (const l of lanes) {
-      m.set(l.acc, median(reqs.filter((r) => r.platform === plat && r.account === l.acc && !r.est && r.t_end >= start)
-                             .map((r) => r.tps)));
+      // ★ 账本过期（>10 分钟没读成功 / 跨了自然日）⇒ 写 —，不拿旧账本算现在的速度（全方面评审 §3）
+      m.set(l.acc, reqOk ? median(reqs.filter((r) => r.platform === plat && r.account === l.acc && !r.est && r.t_end >= start)
+                                   .map((r) => r.tps)) : null);
     }
     return m;
-  }, [lanes, reqs, plat, rot]);
+  }, [lanes, reqs, reqOk, plat, rot]);
 
   const recs: Rec[] = useMemo(() => {
     if (!rot) return [];
@@ -454,7 +455,9 @@ export default function LogsPage({ t, pools }: {
         </div>
         <span style={{ flex: 1 }} />
         {err && rot == null && <span title={err} style={{ fontSize: 12, color: p.down, flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>✗ 读取失败</span>}
-        <RefreshAgo t={t} generatedAt={rot?.generated_at ?? null} L={L} busy={busy} onRefresh={() => { void load(win); }}
+        {err && rot != null && <span data-rot-stale="" title={`下面是上次读到的结果；这次刷新失败：${err}`}
+                                     style={{ fontSize: 12, color: WARN, flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ 刷新失败 · 显示上次结果</span>}
+        <RefreshAgo t={t} generatedAt={rot?.generated_at ?? null} L={L} busy={busy} onRefresh={() => { refreshAll(win); }}
                     hint={isAgy ? "点击重读 agy 日志（只读本地文件）" : "点击重新扫描 proxy.log（只读本地文件，不消耗额度）"} />
         <div data-rot-win role="group" aria-label="时间范围"
              style={{ display: "inline-flex", padding: 3, borderRadius: 10, gap: 2, flexShrink: 0,

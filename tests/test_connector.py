@@ -483,12 +483,17 @@ class TheBlockedStateIsNotApplyable(unittest.TestCase):
     """
 
     def test_default_picks_are_empty_when_blocked(self):
-        src = (ROOT / "codexbar" / "src" / "components" / "ConnectorPanel.tsx") \
-            .read_text(encoding="utf-8")
-        self.assertIn("function defaultPicks(steps: Step[], blocked: boolean)", src,
-                      "defaultPicks 没有接受 blocked")
-        self.assertIn("out[s.id] = !blocked &&", src,
-                      "★ blocked 时仍会默认勾选")
+        """行为闸（2026-10-22 勾选逻辑搬进零 import 的 `connectorPicks.ts`，用 node 直接跑）。"""
+        steps = [{"id": "runtime", "state": "todo", "optional": False},
+                 {"id": "wrapper", "state": "todo", "optional": True},
+                 {"id": "provider", "state": "done", "optional": False}]
+        mod = (ROOT / "codexbar" / "src" / "connectorPicks.ts").as_posix()
+        js = ("import('file://%s').then(m => console.log(JSON.stringify([m.defaultPicks(%s, true), m.defaultPicks(%s, false)])))"
+              % (mod, json.dumps(steps), json.dumps(steps)))
+        r = subprocess.run(["node", "--experimental-strip-types", "-e", js], capture_output=True, text=True, timeout=60)
+        blocked, free = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(blocked, {"runtime": False, "wrapper": False, "provider": False}, "★ blocked 时仍会默认勾选")
+        self.assertEqual(free, {"runtime": True, "wrapper": False, "provider": False})
 
     def test_apply_guards_on_blocked(self):
         src = (ROOT / "codexbar" / "src" / "components" / "ConnectorPanel.tsx") \

@@ -38,12 +38,15 @@ class StalenessCriterion(unittest.TestCase):
         cls.src = TS.read_text(encoding="utf-8")
 
     def test_threshold_exists_and_is_anchored_to_polling(self):
-        """★ 阈值必须是**采集周期的倍数**,不是拍的整数。quotad 全池扫描 300s。"""
+        """★ 阈值必须是**采集周期的倍数**,不是拍的整数。周期从 quotad 现读（全方面评审 §11：原来这里写死 300，
+        而夜间周期已是 1800 —— 阈值 1800 只剩 1 个周期的容差，空闲号每到周期末都闪「陈旧」，这条闸照样绿）。"""
         m = re.search(r"export const QUOTA_STALE_SEC = ([^;]+);", self.src)
         self.assertIsNotNone(m, "没有单一阈值真源")
         val = eval(m.group(1).replace("* 60", "* 60"))  # noqa: S307 — 源里只有算术
-        self.assertGreaterEqual(val, 300 * 3, "阈值短于 3 个扫描周期 —— 一次抖动就会误报")
-        self.assertLessEqual(val, 300 * 24, "阈值太长 —— 一个死了两小时的号还显示正常")
+        d = (ROOT / "daemon" / "quota_daemon.py").read_text(encoding="utf-8")
+        cycles = [int(re.search(r"^%s = (\d+)" % k, d, re.M).group(1)) for k in ("USAGE_SECS", "USAGE_SECS_IDLE")]
+        self.assertGreaterEqual(val, 3 * max(cycles), "阈值短于最长扫描周期的 3 倍 —— 一两次扫描失败就会误报")
+        self.assertLessEqual(val, 2 * 3600, "阈值太长 —— 一个死了两小时的号还显示正常")
 
     def test_criterion_does_not_use_window_length(self):
         """★★ 口径①:判据里不许出现 window_minutes —— 那正是被三方否掉的做法。"""

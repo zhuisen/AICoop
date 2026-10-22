@@ -164,11 +164,16 @@ class TheMissingGroupIsCarried(unittest.TestCase):
 
 class EveryWritePathCarries(unittest.TestCase):
     def test_each_summary_write_is_preceded_by_the_carry(self):
-        """`quota`（经 `_store_quota`）与 `health` 两条路都写摘要；漏一条，那条路就照旧整份替换。"""
+        """`quota` 与 `health` 两条路都写摘要；漏一条，那条路就照旧整份替换。
+        ★ 2026-10-22 起两条路都经 `_store_quota`（全方面评审 §10）⇒ 写入点只剩那一处，`health` 必须调它。"""
         lines = (ROOT / "agy-rotate").read_text(encoding="utf-8").splitlines()
         code = [re.sub(r"#.*", "", l) for l in lines]
         writes = [i for i, l in enumerate(code) if re.search(r'a\["quota_summary"\]\s*=', l)]
-        self.assertGreaterEqual(len(writes), 2, "写入点比预期少 —— 闸可能没找对地方")
+        self.assertGreaterEqual(len(writes), 1, "一个写入点都没找到 —— 闸没找对地方")
+        src = "\n".join(code)
+        health = src[src.index("def cmd_health("):]
+        health = health[:health.index("\ndef ")]
+        self.assertIn("_store_quota(sub, a,", health, "★★ health 没走 `_store_quota`，又成了第二个写摘要的口")
         for i in writes:
             with self.subTest(line=i + 1):
                 self.assertTrue(any("carry_missing_groups(" in code[j] for j in range(max(0, i - 4), i)),

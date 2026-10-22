@@ -306,8 +306,6 @@ class ShippedAndVerifiable(unittest.TestCase):
             self.assertIn("setTimeout", win, "{} 的驱动没有重试等待".format(sel))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CacheAndSnapshot(unittest.TestCase):
@@ -518,3 +516,7 @@ class LaneNameIsNeverTruncated(unittest.TestCase):
         当前号在泳道上有「当前」徽章。它还是右侧最长的一项。"""
         src = strip_js_comments(page_src())
         self.assertNotIn("当前号", src, "顶栏那句「现在 · 当前号」还在")
+
+
+if __name__ == "__main__":
+    unittest.main()

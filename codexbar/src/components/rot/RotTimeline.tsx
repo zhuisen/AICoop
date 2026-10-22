@@ -20,6 +20,7 @@ const REASON_CN: Record<string, string> = {
   resume: "同号空闲后继续",
   pro_fallback: "Plus 全部不可用 → Pro 保底接管",
   drift: "身份变了却没有换号记录",
+  parallel: "开头时另有 agy 进程在跑（并行，不算换号）",
   auto: "自动切换", wanted: "恢复成你选的", borrow: "借用已停用的", manual: "手动切换",
 };
 

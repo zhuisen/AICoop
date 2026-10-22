@@ -216,8 +216,6 @@ class TheRelayLaneHasItsOwnCounters(unittest.TestCase):
         self.assertIn("committed_aborts", pool)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheFormNeverOffersAFieldNobodyReads(unittest.TestCase):
@@ -257,3 +255,7 @@ class TheFormNeverOffersAFieldNobodyReads(unittest.TestCase):
                 for k in d.keys if isinstance(k, ast.Constant)]
         self.assertTrue(keys, "解析不出 up 的键 —— 探针坏了")
         self.assertNotIn("model", keys, f"★ `up` 里又装了没人读的 model: {keys}")
+
+
+if __name__ == "__main__":
+    unittest.main()

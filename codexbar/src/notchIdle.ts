@@ -36,6 +36,8 @@ export const MAIN_TOP = 73.5;
 export const MAIN_PX = 15;
 export const RESET_PX = 10.5;
 export const LOW = "#FF8A73";
+/** 底部「已隐藏 X … · 撤销」一行的高（同悬停面板 `idleGridLayout.ts::NOTE_H`）。 */
+export const NOTE_H = 22;
 /** 展开时光晕降到 55%（画板「光晕降到 55%」）。 */
 export const OPEN_GLOW = 0.55;
 /** 靠近 200 ms 淡入；离开 300 ms 后才开始淡出。 */
@@ -45,12 +47,15 @@ export const GLOW_OUT_DELAY_MS = 300;
 export interface NotchGrid { cw: number; ch: number; h: number; pos: { x: number; y: number }[] }
 
 /** n 格的版面（面板内坐标）。没有格子 ⇒ 高度 0。 */
-export function notchGrid(n: number): NotchGrid {
+export function notchGrid(n: number, notes = 0): NotchGrid & { noteTop: number } {
   const cw = (PANEL_W - 2 * PAD - GAP * (COLS - 1)) / COLS;
   const rows = Math.ceil(n / COLS);
   const pos = Array.from({ length: n }, (_, k) => ({ x: PAD + (k % COLS) * (cw + GAP), y: PAD + Math.floor(k / COLS) * (CELL_H + GAP) }));
-  const h = rows ? PAD + rows * CELL_H + (rows - 1) * GAP + PAD : 0;
-  return { cw, ch: CELL_H, h, pos };
+  const gh = rows ? PAD + rows * CELL_H + (rows - 1) * GAP + PAD : 0;
+  // ★ 「已隐藏」行（全方面评审 §9：刘海原来不画，藏了的那家在刘海上没有撤销入口）。全藏了也照画
+  const noteTop = rows ? gh - PAD + 2 : PAD - 2;
+  const h = notes ? noteTop + notes * NOTE_H + PAD - 2 : gh;
+  return { cw, ch: CELL_H, h, pos, noteTop };
 }
 
 const WHITE_SH = "0 2.67px 17.33px 4px rgba(233,237,243,.30), 0 0 0 1px rgba(233,237,243,.18)";

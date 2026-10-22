@@ -14,7 +14,7 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
   --hv-tx: #eef2f7; --hv-tx2: #aab3c0; --hv-tx3: #798390;
   --hv-line: rgba(255,255,255,.06); --hv-hov: rgba(255,255,255,.04);
   --hv-chip-bg: rgba(255,255,255,.03); --hv-chip-line: rgba(255,255,255,.06);
-  --hv-acc: #2dd4bf;
+  --hv-acc: #2dd4bf; --hv-warn: #E0A21C;
 }
 /* 浅色：HoverSpec.html F 画板。行悬停底色交接包没给浅色值 —— 取同一透明度的黑（偏离记录 PLAN §4）。 */
 .hv-win[data-theme="light"] {
@@ -22,7 +22,8 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
   --hv-tx: #161b22; --hv-tx2: #4d5663; --hv-tx3: #606b77;
   --hv-line: rgba(0,0,0,.07); --hv-hov: rgba(0,0,0,.04);
   --hv-chip-bg: rgba(0,0,0,.025); --hv-chip-line: rgba(0,0,0,.07);
-  --hv-acc: #0e9f8e;
+  /* ★ 浅色青 / 琥珀当文字用要深一档（全方面评审 §8：#0e9f8e 白底 3.30:1）。闸 tests/test_stage_d_fixes.py */
+  --hv-acc: #0e7a6e; --hv-warn: #9a5b00;
 }
 
 .hv-win { position: relative; width: 100vw; height: 100vh; overflow: hidden; white-space: nowrap;
@@ -68,6 +69,7 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
 
 .hv-foot { display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 14px;
   border-top: 1px solid var(--hv-line); font-size: 12px; color: var(--hv-tx2); }
+.hv-stale { color: var(--hv-warn); }
 .hv-foot b { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; color: var(--hv-tx); font-weight: 600; }
 .hv-link { color: var(--hv-acc); text-decoration: none; font-size: 12px; font-weight: 500; cursor: pointer; }
 
@@ -78,7 +80,7 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
 .hv-win[data-theme="dark"] {
   --ig-bg: #1c2128; --ig-border: rgba(255,255,255,.1); --ig-shadow: 0 12px 30px rgba(0,0,0,.5);
   --ig-tx: #eef2f7; --ig-tx2: #aab3c0; --ig-tx3: #8f99a6; --ig-track: rgba(255,255,255,.08); --ig-ring-none: rgba(255,255,255,.2);
-  --ig-hl-ring: rgba(233,237,243,.3); --ig-hl-bg: rgba(255,255,255,.045); --ig-dot: #eef2f7;
+  --ig-hl-ring: rgba(233,237,243,.3); --ig-hl-bg: rgba(255,255,255,.045); --ig-dot: #eef2f7; --ig-acc: #2dd4bf;
   /* 强警告（周额度 < 10%）：与 overview.css `.ov-xs[data-level="strong"]` 同一组数 */
   --ig-warn-tx: #FF8A73; --ig-warn-line: rgba(255,77,46,.45);
   --ig-warn-bg: color-mix(in srgb, color-mix(in srgb, #FF4D2E 16%, #161c25) 92%, transparent);
@@ -86,7 +88,7 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
 .hv-win[data-theme="light"] {
   --ig-bg: #ffffff; --ig-border: rgba(0,0,0,.1); --ig-shadow: 0 12px 30px rgba(0,0,0,.18);
   --ig-tx: #161b22; --ig-tx2: #4d5663; --ig-tx3: #606b77; --ig-track: rgba(0,0,0,.08); --ig-ring-none: rgba(0,0,0,.2);
-  --ig-hl-ring: rgba(0,0,0,.18); --ig-hl-bg: rgba(0,0,0,.035); --ig-dot: #161b22;
+  --ig-hl-ring: rgba(0,0,0,.18); --ig-hl-bg: rgba(0,0,0,.035); --ig-dot: #161b22; --ig-acc: #0e7a6e;
   --ig-warn-tx: #b42318; --ig-warn-line: rgba(220,38,38,.4);
   --ig-warn-bg: color-mix(in srgb, color-mix(in srgb, #FF4D2E 12%, #ffffff) 92%, transparent);
 }
@@ -106,7 +108,7 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
   cursor: pointer; transition: opacity 120ms; }
 .ig-x:hover { color: var(--ig-tx); }
 .ig-note { position: absolute; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ig-tx2); white-space: nowrap; }
-.ig-undo { color: #2dd4bf; cursor: pointer; }
+.ig-undo { color: var(--ig-acc); cursor: pointer; }
 .ig-dot { position: absolute; left: 7px; top: 7px; width: 6px; height: 6px; border-radius: 3px; background: var(--ig-dot); }
 .ig-reset { position: absolute; right: 7.5px; top: 5px; font-family: 'JetBrains Mono', 'PingFang SC', monospace;
   font-size: 10.5px; color: var(--ig-tx2); font-variant-numeric: tabular-nums; }

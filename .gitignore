@@ -44,6 +44,7 @@ app/**/.build_number
 # agy 账号池（含 OAuth client 与账号元数据；凭证本体在 auth/agy/）
 .agy-pool.json
 .agy-pool.json.lock
+.agy-probe.lock
 # 额度窗口的锚点账本(traffic/quota_anchors.py)。与 state.json 同目录,
 # key 里带 account_id / grok account_key —— 敏感度同 .grok-quota.json,不入库。
 .quota-anchors.json

@@ -92,6 +92,8 @@ POLL_SECS = int(os.environ.get("AGY_SAMPLER_POLL", "60"))
 #    (实测踩过:第二次调用零样本,而第一次因为冷启动较慢侥幸采到了)。
 #    额度只在 agy 活着时可读,错过这个窗口就永远补不回来。
 POLL_FAST_SECS = int(os.environ.get("AGY_SAMPLER_POLL_FAST", "2"))
+#: 跨过重置点之后最多快轮询多久（秒）。
+RESET_FAST_SECS = int(os.environ.get("AGY_SAMPLER_RESET_FAST", "120"))
 # 快轮询的时间上限:超过它还没读到,说明这次不是"预热中"而是真的没有可读的东西。
 FAST_PHASE_SECS = int(os.environ.get("AGY_SAMPLER_FAST_PHASE", "90"))
 # 静默期也要打点 —— 否则「没消耗」与「没在看」不可分(见文件头不变量 ②)。
@@ -247,11 +249,14 @@ def _on_term(_sig, _frm):
     raise SystemExit(0)
 
 
-for _s in (signal.SIGTERM, signal.SIGINT):
-    try:
-        signal.signal(_s, _on_term)
-    except (ValueError, OSError):        # 非主线程 / 平台不支持 —— 不装也不能让脚本起不来
-        pass
+def _install_term():
+    """★ 只在当脚本跑时装（`__main__` 里调）。原来写在模块顶层：测试按路径加载这个文件时，处理器装进了
+    **测试进程**，之后测试进程收到 SIGTERM 就在随便哪条用例里抛 `SystemExit`（2026-10-22 全套测试实测）。"""
+    for _s in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_s, _on_term)
+        except (ValueError, OSError):        # 非主线程 / 平台不支持 —— 不装也不能让脚本起不来
+            pass
 
 
 def _csrf_backoff():
@@ -341,6 +346,9 @@ def main():
                       if isinstance(v[2], (int, float)) and v[2] > 0]
                 nxt = min(rs) if rs else None
             crossed = nxt is not None and now >= nxt and last_write < nxt
+            # ★ 只在重置点之后 `RESET_FAST_SECS` 内快轮询（全方面评审 §10，同 B46）：读数不变 / 读失败时 `last_write`
+            #   不前进，原来会按快节拍一直打到下一次心跳（最长 30 分钟、每 5 s 一次）。
+            crossed = crossed and now - nxt < RESET_FAST_SECS
             # 还没采到第一个读数、且仍在快轮询期内 ⇒ 用快节拍抢那个窗口
             fast = (not got_one) and (now - started < FAST_PHASE_SECS)
             time.sleep(POLL_FAST_SECS if (fast or crossed) else POLL_SECS)
@@ -355,4 +363,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _install_term()
     sys.exit(main())

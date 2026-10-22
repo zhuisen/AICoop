@@ -209,5 +209,71 @@ def broken_indirect():
         self.assertEqual(violations, [], "credential -> state inversion:\n" + "\n".join(violations))
 
 
+def _state_with(node: ast.With) -> bool:
+    for item in node.items:
+        e = item.context_expr
+        if call_name(e) == "_state_mutex" or (call_name(e) == "open" and contains_name(e, "STATE_LOCK")):
+            return True
+    return False
+
+
+def _calls_by_function(tree: ast.AST) -> dict:
+    """顶层函数 → [(被调名, 是否已在 `with _state_mutex()` 里)]。嵌套函数并进外层（它们只在外层里被调）。"""
+    out = {}
+
+    def walk(node, guarded, acc):
+        for ch in ast.iter_child_nodes(node):
+            g = guarded or (isinstance(ch, ast.With) and _state_with(ch))
+            name = call_name(ch)
+            if name:
+                acc.append((name, guarded))
+            walk(ch, g, acc)
+
+    for n in getattr(tree, "body", []):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            acc = []
+            walk(n, False, acc)
+            out[n.name] = acc
+    return out
+
+
+class EveryWholeStateSaveHoldsTheStateLock(unittest.TestCase):
+    """★ 全方面评审 §11（三方）：锁序闸只查锁的**顺序**，不查「没拿 state 锁就 `_save_state`」——
+    §10 前两条（keepalive / ensure-live 锁外整份写回旧 state，丢 quota / cooling / pinned）因此全绿也能存在。
+
+    判据：一个命令只要经由调用链走到一次**不在 `with _state_mutex()` 里**的 `_save_state`，它就必须在
+    `STATE_LOCKED`（`main()` 替它整段持锁）；quotad 直接调 CLI 函数时必须自己持锁。
+    `_mutate_state` 是锁内重读 + 写，本身就是守卫。"""
+
+    def test_commands_that_save_unguarded_are_state_locked(self):
+        tree = ast.parse((ROOT / "codex-rotate").read_text(encoding="utf-8"))
+        calls = _calls_by_function(tree)
+        need = {"_save_state"}
+        changed = True
+        while changed:
+            changed = False
+            for f, cs in calls.items():
+                if f in need or f == "_mutate_state":
+                    continue
+                if any(c in need and not g for c, g in cs):
+                    need.add(f)
+                    changed = True
+        cmds, locked = {}, set()
+        for n in tree.body:
+            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name):
+                if n.targets[0].id == "CMDS":
+                    cmds = {k.value: v.id for k, v in zip(n.value.keys, n.value.values)}
+                elif n.targets[0].id == "STATE_LOCKED":
+                    locked = {e.value for e in n.value.elts}
+        self.assertTrue(cmds and locked, "没解析到 CMDS / STATE_LOCKED —— 闸没找对地方")
+        self.assertIn("cmd_quota", need, "已知需要持锁的命令没被认出来 —— 调用图坏了")
+        bad = sorted(c for c, f in cmds.items() if f in need and c not in locked)
+        self.assertEqual(bad, [], "★ 这些命令会锁外整份写 state.json：加进 STATE_LOCKED，或改用 `_mutate_state`")
+
+        daemon = _calls_by_function(ast.parse((ROOT / "daemon" / "quota_daemon.py").read_text(encoding="utf-8")))
+        bad = sorted({f for f, cs in daemon.items() for c, g in cs if c in need and not g})
+        self.assertEqual(bad, [], "★ quotad 这些函数直接调了要持锁的 CLI 函数却没持 `cli._state_mutex()`")
+
+
 if __name__ == "__main__":
     unittest.main()

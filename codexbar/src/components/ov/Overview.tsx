@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Theme } from "../../theme";
 import type { Account, AppState } from "../../helpers";
-import { agyPoolFreshness, freshnessLine, maskId } from "../../helpers";
+import { agyPoolFreshness, freshnessLine, maskId, winSlot } from "../../helpers";
 import type { Board } from "../../hooks/useRotationBoard";
 import type { AgyPoolAccount, useAgyPool } from "../../hooks/useAgyPool";
 import type { AgySnapshot } from "../../agy";
@@ -10,6 +10,7 @@ import type { GrokSnapshot } from "../../grok";
 import { grokLastGoodRemPct, grokRemPct } from "../../grok";
 import type { ClaudeQuota } from "../../mbLogic";
 import { SUB_WARN_DAYS, expiryWarnings } from "../../mbLogic";
+import { getSettings } from "../../pages/SettingsPage";
 import { CARD_WARN_DAYS } from "../../helpers";
 import type { LiveSnapshot } from "../../live";
 import type { Integration } from "../../hooks/useIntegration";
@@ -32,6 +33,7 @@ import { CmdK, ConfirmDelete, DetailSheet, type CmdItem, type SheetRow } from ".
 import { TechRows, type AccountDetail } from "../AccountTech";
 import { useFlip } from "../../hooks/useFlip";
 import { isCmdK } from "../../cmdk";
+import { modalOpen } from "../../modalOpen";
 import { TOAST_BAD, TOAST_MS, TOAST_MUTED, TOAST_OK, TOAST_WARN, type RunOpts, type ToastOpts } from "../../hooks/useStore";
 import ExpiryStack from "./ExpiryStack";
 import { useRotationDay } from "./useRotationDay";
@@ -68,8 +70,8 @@ export interface OverviewProps {
   board: Board | null; boardErr: string | null;
   agyPool: AgyPoolApi; agyBoard: Board | null; agyBoardErr: string | null;
   agySnap: AgySnapshot | null; agyBusy: boolean; agyErr: string | null; refreshAgy: () => void;
-  grokSnap: GrokSnapshot | null; grokBusy: boolean; grokErr: string | null; refreshGrok: () => void;
-  claudeQuota: ClaudeQuota | null; claudeErr: string | null; refreshClaude: () => void;
+  grokSnap: GrokSnapshot | null; grokBusy: boolean; grokErr: string | null; refreshGrok: () => Promise<boolean>;
+  claudeQuota: ClaudeQuota | null; claudeErr: string | null; refreshClaude: () => Promise<boolean | null>;
   live: LiveSnapshot | null; liveErr: string | null;
   autoSwitch: boolean; toggleAutoSwitch: () => void;
   agyOrder: string[] | undefined; setAgyOrder: (ids: string[]) => void;
@@ -192,7 +194,8 @@ export default function Overview(p: OverviewProps) {
   const gPin = (a: AgyPoolAccount) => { const e = agyEnt.get(a.sub); return e?.pin == null ? null : e.pin - 1; };
   const agyPinned = agyShownList.filter((a) => gPin(a) !== null).sort((x, y) => (gPin(x) ?? 0) - (gPin(y) ?? 0));
   const agyRest = agyShownList.filter((a) => gPin(a) === null);
-  const gBest = gMain.filter((a) => !a.rotate_off && gState(a) !== "cool").reduce<number | null>((m, a) => { const v = gTight(a); return v == null ? m : m == null || v > m ? v : m; }, null);
+  // 失效号的读数是作废前的旧值，不能当「最好的余量」（2026-10-22 评审核实：gMain 只滤用户藏起来的）
+  const gBest = gMain.filter((a) => !a.rotate_off && gState(a) !== "cool" && gState(a) !== "dead").reduce<number | null>((m, a) => { const v = gTight(a); return v == null ? m : m == null || v > m ? v : m; }, null);
 
   // ── Claude / Grok ──
   const cq = p.claudeQuota;
@@ -202,7 +205,7 @@ export default function Overview(p: OverviewProps) {
 
   // ── 平台档：号数 + 红点 ──
   const lowCodex = cMain.some((a) => a.windows.length > 0 && a.cooldownSec <= 0 && ovIsLow(a.tightest));
-  const lowAgy = gMain.some((a) => ovIsLow(gTight(a)));
+  const lowAgy = gMain.some((a) => gState(a) !== "dead" && ovIsLow(gTight(a)));
   const tabs: OvTab[] = TAB_ORDER.map((k): OvTab => ({ ...tabOf(k), note: POOL_PLATFORMS.find((x) => x.key === k)?.note }));
   function tabOf(k: PoolKey): OvTab {
     if (k === "codex") {
@@ -233,7 +236,7 @@ export default function Overview(p: OverviewProps) {
       <ProbeHead loading={billedOn.has("codex:*")} onFire={() => cx.probeAll()}
                  hint={`对 ${p.accounts.length} 个号各发一次真实补全(问 hi 要求答 ok),证明"真的还能干活"。⚠️ 计费：消耗周额度(实测单次 <1%),约 ${p.accounts.length * 7}s`} />
       <ToggleGroup>
-        <DawnChip t={p.t} kind="codex" active={codexOn} look="switch" showLabel={layout.labels} />
+        <DawnChip key="codex" t={p.t} kind="codex" active={codexOn} look="switch" showLabel={layout.labels} />
         <GroupDivider />
         <AutoSwitchItem on={p.autoSwitch} labels={layout.labels} onToggle={p.toggleAutoSwitch}
                         title={p.autoSwitch ? "自动切号开着：直连号额度见底时自动换一个" : "自动切号已关"} />
@@ -247,13 +250,15 @@ export default function Overview(p: OverviewProps) {
   } else if (agyOn) {
     actions = (<>
       <RefreshBtn labels={layout.labels} busy={p.agyPool.busy} title={`刷新全池（agy-rotate quota，零消耗）${agyFresh ? ` · ${agyFresh}` : ""}`}
-                  onClick={() => { p.agyPool.refresh(); p.showToast(`已刷新 Gemini · ${p.agyPool.accounts.length} 个号`); }} />
+                  onClick={() => { void p.agyPool.refresh().then((ok) => p.showToast(ok === null ? "Gemini 正在刷新" : ok ? `已刷新 Gemini · ${p.agyPool.accounts.length} 个号` : "✗ Gemini 刷新失败")); }} />
       <ProbeHead loading={billedOn.has("agy:*")} onFire={() => gx.probeAll()}
                  hint={`对 ${p.agyPool.accounts.length} 个号各起一次 agy 真跑一句（问 hi 要求答 ok）。⚠️ 计费：花的是 agy 自己的额度（实测单次约 15k token），每号约 30s`} />
       <ToggleGroup>
-        <DawnChip t={p.t} kind="agy" active={agyOn} look="switch" showLabel={layout.labels} />
+        <DawnChip key="agy" t={p.t} kind="agy" active={agyOn} look="switch" showLabel={layout.labels} />
         <GroupDivider />
-        <AutoSwitchItem on={p.agyPool.autoOn} labels={layout.labels} onToggle={() => p.agyPool.setAuto(!(p.agyPool.autoOn ?? true))}
+        <AutoSwitchItem on={p.agyPool.autoOn} labels={layout.labels} onToggle={() => { void p.agyPool.setAuto(!(p.agyPool.autoOn ?? true)).then((ok) => {
+                          if (!ok) p.showToast("✗ 自动切号没改成，已拨回原位", TOAST_MS, { color: TOAST_WARN });
+                        }); }}
                         title={p.agyPool.autoOn
                           ? "自动切号开着：下次启动 agy 时，额度低于阈值会自动换一个号（由 `bin/agy` wrapper 在拉起真身前决定）"
                           : "自动切号已关：wrapper 不再替你换号，`agy` 一律用当前登录的那个"} />
@@ -266,7 +271,7 @@ export default function Overview(p: OverviewProps) {
     </>);
   } else if (prov === "claude") {
     actions = (<>
-      <RefreshBtn labels={layout.labels} busy={false} text="刷新" title="重读一次状态栏转写的额度（读本机文件，零消耗）" onClick={p.refreshClaude} />
+      <RefreshBtn labels={layout.labels} busy={false} text="刷新" title="重读一次状态栏转写的额度（读本机文件，零消耗）" onClick={() => { void p.refreshClaude(); }} />
       <HeadMore items={[
         { key: "why", label: "本机只有 1 个 Claude 号：不切号、不探针", info: true,
           title: "仓库没有 Claude 账号池后端（切号要写 Claude Code 凭证，已定不碰）" },
@@ -334,8 +339,11 @@ export default function Overview(p: OverviewProps) {
       p.run(`usecredit-${a.aid}`, ["use-credit", a.node, "--card", cardId], `用重置卡 ${a.node}`,
         { resultToast: true, ms: 6000, color: TOAST_WARN }).then((ok) => { if (ok) bump(a.aid); })),
     // 到期才发的命令用**确认那一刻**的稳定身份（aid）：撤销窗口里改名 / 名字被复用都不会删错号（评审 codex#5）
-    remove: (a: Account) => setConfirmDel({ id: a.aid, label: a.node, cli: "codex-rotate login",
-      go: () => p.deferDelete(`codex:${a.aid}`, a.node, () => p.run(`remove-${a.aid}`, ["remove", a.aid], `删除 ${a.node}`, { quiet: true })) }),
+    // ★ auth.json 里那个号 CLI 拒删（`cmd_remove`）⇒ 同 Gemini 先说清楚，不弹确认、不先假删 3.2 s 再弹回（阶段 A 评审）
+    remove: (a: Account) => a.aid === p.currentNode
+      ? p.showToast(`${a.node} 正在 auth.json 里（直连）· 先切到别的号再删`, TOAST_MS, { color: TOAST_WARN })
+      : setConfirmDel({ id: a.aid, label: a.node, cli: "codex-rotate login",
+          go: () => p.deferDelete(`codex:${a.aid}`, a.node, () => p.run(`remove-${a.aid}`, ["remove", a.aid], `删除 ${a.node}`, { quiet: true })) }),
   };
   // Gemini 的写操作（`agy-rotate`；切号只对**下一次启动的** agy 生效）
   const agyPinOrder = [...p.agyPool.accounts].filter((a) => gPin(a) !== null).sort((x, y) => (gPin(x) ?? 0) - (gPin(y) ?? 0)).map((a) => a.label);
@@ -430,7 +438,7 @@ export default function Overview(p: OverviewProps) {
   if (sheet?.kind === "codex") {
     const a = p.accounts.find((x) => x.aid === sheet.id);
     if (a) {
-      const five = a.windows.find((w) => w.mins > 0 && w.mins < 1000), week = a.windows.find((w) => w.mins >= 10000);
+      const five = a.windows.find((w) => winSlot(w.mins) === "5h"), week = a.windows.find((w) => winSlot(w.mins) === "w");
       const rows: SheetRow[] = [
         { k: "状态", v: !a.rotates && a.status !== "dead" ? "不轮换" : STATE_TEXT[cState(a)] ?? "可用", mono: false },
         { k: "5h / 周", v: `${pctTxt(five?.pct)} · ${pctTxt(week?.pct)}` },
@@ -475,7 +483,7 @@ export default function Overview(p: OverviewProps) {
   // ── ⌘K（P5 §8）：只在总览页上挂监听 ──
   const [kOpen, setKOpen] = useState(() => HARNESS.cmdk);
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (isCmdK(e)) { e.preventDefault(); setKOpen((o) => !o); } };
+    const h = (e: KeyboardEvent) => { if (isCmdK(e) && !modalOpen("cmdk")) { e.preventDefault(); setKOpen((o) => !o); } };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
@@ -488,9 +496,9 @@ export default function Overview(p: OverviewProps) {
     { key: "refresh", icon: "↻", color: "var(--tx3)", label: codexOn || agyOn ? "刷新全池" : "刷新", hint: "免费",
       run: () => {
         if (codexOn) void p.run("refresh-all", ["refresh-all", "--notify"], "刷新全池", { done: "已刷新全池 · 免费" });
-        else if (agyOn) { p.agyPool.refresh(); p.showToast("已刷新全池 · 免费"); }
-        else if (prov === "claude") { p.refreshClaude(); p.showToast("已重读 Claude 额度 · 本机"); }
-        else { p.refreshGrok(); p.showToast("已刷新 Grok · 免费"); }
+        else if (agyOn) { void p.agyPool.refresh().then((ok) => p.showToast(ok === null ? "Gemini 正在刷新" : ok ? "已刷新全池 · 免费" : "✗ Gemini 刷新失败")); }
+        else if (prov === "claude") void p.refreshClaude().then((ok) => p.showToast(ok === null ? "Claude 正在重读" : ok ? "已重读 Claude 额度 · 本机" : "✗ Claude 额度读不到"));
+        else { void p.refreshGrok().then((ok) => p.showToast(ok ? "已刷新 Grok · 免费" : "✗ Grok 刷新失败")); }
       } },
     ...(() => {
       const nc = codexOn && p.board?.next ? p.accounts.find((a) => a.aid === p.board?.next?.aid) : undefined;
@@ -522,7 +530,8 @@ export default function Overview(p: OverviewProps) {
     const c = ovCounts([...cMain.map(cState), ...cDead.map(() => "dead" as const)]);
     const offN = cMain.filter((a) => !a.rotates).length;
     // 快到期（重置卡 / 订阅）：与菜单栏通知条同一套判据；失效号不算（卡与订阅对它已无意义）
-    const warns = expiryWarnings(p.accounts.filter((a) => a.status !== "dead"), nowMs, CARD_WARN_DAYS, SUB_WARN_DAYS);
+    // 订阅到期提醒天数跟设置页走（2026-10-22 评审：原来写死 7，设置页那一项只对系统通知生效）
+    const warns = expiryWarnings(p.accounts.filter((a) => a.status !== "dead"), nowMs, CARD_WARN_DAYS, getSettings().subExpiryWarnDays ?? SUB_WARN_DAYS);
     title = <AccountsTitle name="Codex" c={c} offN={offN} mode={codexMode} canCustom={!!savedCodex?.length} onMode={(m) => setSortFor("codex", m)}
                            warn={<ExpiryStack items={warns} />} />;
     grid = grid0(sections(codexPinned, codexRest, (a, i) => codexCard(a, i, true)));
@@ -565,8 +574,8 @@ export default function Overview(p: OverviewProps) {
          style={{ ...ovVars(p.isDark), flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 } as CSSProperties}>
       <div data-overview-head="" style={{ display: "flex", alignItems: "center", gap: 8, height: 32, flexShrink: 0, minWidth: 0 }}>
         <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.01em", flexShrink: 0, marginRight: 2 }}>总览</span>
-        <span className="ov-kchip" role="button" tabIndex={0} data-ov-kchip="" title="快速操作" onClick={() => setKOpen(true)}
-              onKeyDown={(e) => { if (e.key === "Enter") setKOpen(true); }}>⌘K</span>
+        <span className="ov-kchip" role="button" tabIndex={0} data-ov-kchip="" title="快速操作" onClick={() => { if (!modalOpen("cmdk")) setKOpen(true); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !modalOpen("cmdk")) setKOpen(true); }}>⌘K</span>
         <OvTabs tabs={tabs} cur={prov} onPick={p.setProvider} isDark={p.isDark} layout={layout} />
         <span style={{ flex: 1, minWidth: 0 }} />
         {actions}

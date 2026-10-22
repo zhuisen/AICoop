@@ -8,6 +8,7 @@ import { MONEY, MONO } from "./relay/RelayBits";
 import { useRelayUsage } from "../hooks/useRelayUsage";
 import { fmtTok } from "../traffic";
 import { currencyOf, money, runwayText, type RelayEntry, type RelayUsage as RU } from "../relay";
+import { ringRatio, sumOf } from "../relayView";
 
 /**
  * 中转站 · **用量** —— 1:1 复刻 `design_handoff_codexbar/中转站-交接说明.md` §4/§5。
@@ -184,58 +185,13 @@ export default function RelayUsage({ t }: { t: Theme }): React.ReactElement {
   }, [rows, range]);
 
   /** 环比：本窗口 vs 紧邻的上一个等长窗口。**样本不够就说「—」，不给一个假的 0%。** */
-  const delta = useMemo(() => {
-    if (range === "today" || view.labels.length === 0) return null;
-    const all = new Set<string>();
-    for (const r of rows) for (const d of r.u.data?.daily ?? []) all.add(d.date);
-    const n = range as number;
-    // ★★★ **上一窗口必须等长且与当前窗口零交集**（2026-09-10 修）。
-    //
-    //   原来是 `sorted.slice(Math.max(0, len - 2n), len - n)` + 只判 `size === 0`。
-    //   两个洞：`len - n` 为负时 JS `slice` 把负数 end 当**从尾部倒数** ⇒ 取到的
-    //   "上一窗口"落在当前窗口**内部**（拿总量和自己的子集比）；以及没有等长校验 ⇒
-    //   1 天可以冒充 7 天的上期。实测本机真快照：7d 档显示「环比 ↑148757.6%」，
-    //   14d 档「↑87.7%」，而注释一直承诺"样本不够就说 —"。
-    //   参考实现 `TrafficPage.tsx` / `PlatformPage.tsx` 都有 `win.length === n` 守卫，
-    //   这一页抄了口径没抄守卫。
-    //
-    //   现在按**自然日**回退一个等长窗口，并要求它与当前窗口不相交。
-    if (!view.labels.length) return null;
-    const endPrev = new Date(view.labels[0] + "T00:00:00Z").getTime() - 86400000;
-    const prev = new Set<string>();
-    for (let k = 0; k < n; k++) {
-      prev.add(new Date(endPrev - k * 86400000).toISOString().slice(0, 10));
-    }
-    // ★ 只有当上一窗口**真的有观测**时才比 —— 否则那是"我们还没看过"，不是"降到 0"。
-    const cur = new Set(view.labels);
-    if ([...prev].some((d) => cur.has(d))) return null;      // 与当前窗口重叠 ⇒ 不比
-    // ★★ 上一窗口必须**整段落在观测范围内**。
-    //    补零之后"某天没有行"有两种含义：**观测过、当天为 0**，与**根本没观测过**。
-    //    前者可以入分母，后者不行 —— 拿没观测过的日子当 0 去比，得到的涨幅是凭空的。
-    //    只挡"整段早于观测"不够：部分重叠时（本机夹具 14d 档实测 6/14 天有观测）
-    //    仍会算出 ↑522.2%。判据是 `prev` 的**最早一天** ≥ 我们最早的观测。
-    const sorted = [...all].sort();
-    const prevFirst = [...prev].sort()[0];
-    if (!sorted.length || prevFirst < sorted[0]) return null;
-    let ptok = 0, pcost = 0;
-    for (const r of rows) {
-      for (const d of r.u.data?.daily ?? []) {
-        if (!prev.has(d.date)) continue;
-        ptok += d.total_tokens || 0; pcost += d.actual_cost || 0;
-      }
-    }
-    const mk = (now: number, before: number) => {
-      if (!before) return null;
-      const pct = ((now - before) / before) * 100;
-      return { up: pct >= 0, txt: `${pct >= 0 ? "↑" : "↓"}${Math.abs(pct).toFixed(1)}%` };
-    };
-    return { tok: mk(view.grandTok, ptok), cost: mk(view.grandCost, pcost) };
-  }, [rows, range, view]);
+  const delta = useMemo(
+    () => (range === "today" ? null : ringRatio(rows.map((r) => r.u), view.labels, range as number)),
+    [rows, range, view]);
 
-  const balance = rows.reduce<number | null>((a, r) => {
-    const b = r.u.data?.balance;
-    return typeof b === "number" ? (a ?? 0) + b : a;
-  }, null);
+  // ★ 余额合计与详情页同一个口径（`relayView.sumOf`）：任一家读不到 ⇒ —，不把读得到的那几家加起来冒充总额
+  //   （全方面评审 §4：原来跳过读不到的站，与上方「任一读不到 ⇒ —」矛盾，§7.0b）。
+  const balance = sumOf(rows.map((r) => r.u.data?.balance), rows.map((r) => r.u.data?.unit)).v;
   const tightest = rows.reduce<RU | undefined>((a, r) => {
     const d = r.u.data;
     if (!d?.runway || d.runway.days === null) return a;
@@ -371,8 +327,8 @@ export default function RelayUsage({ t }: { t: Theme }): React.ReactElement {
 
       {/* ── KPI 条（设计稿 §4）────────────────────────────────────────────── */}
       <div data-kpi-bar style={{ display: "flex", alignItems: "center", gap: 30,
-                    padding: "11px 18px", background: "#0e1319",
-                    border: "1px solid rgba(255,255,255,.08)", borderRadius: 12,
+                    padding: "11px 18px", background: t.isDark ? "#0e1319" : t.cardBg,
+                    border: `1px solid ${t.isDark ? "rgba(255,255,255,.08)" : t.cardBorder}`, borderRadius: 12,
                     marginBottom: 12, fontFamily: MONO, flexWrap: "wrap", rowGap: 10 }}>
         <Cell k="总 token" v={fmtTok(view.grandTok)}
               sub={delta?.tok ? delta.tok.txt : "环比 —"}
@@ -451,7 +407,7 @@ export default function RelayUsage({ t }: { t: Theme }): React.ReactElement {
         <div data-model-grid data-model-window={String(range)} style={{ display: "grid",
                       gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
           {cards.map((c) => (
-            <ModelSparkCard key={c.model} d={c}
+            <ModelSparkCard key={c.model} t={t} d={c}
                             focused={activeFocus === c.model}
                             dimmed={!!activeFocus && activeFocus !== c.model}
                             onPick={() => setFocus((f) => (f === c.model ? null : c.model))} />

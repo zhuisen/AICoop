@@ -24,7 +24,14 @@ export function useLive(): { live: LiveSnapshot | null; error: string | null } {
       const s = parseLive(ev.payload);
       if (s) { setLive(s); setError(null); }
     });
-    return () => { alive = false; un.then((f) => f()).catch(() => undefined); };
+    // ★ Rust 跑 `--live` 失败 / 超时时广播它（全方面评审 §8：原来没人听，面板照画旧 t/s，与托盘的「—」对不上）。
+    //   旧数留着（§7.0b），只记原因；下一份 `tps-live` 到了就清
+    const unErr = listen<string>("tps-live-error", (ev) => { setError(String(ev.payload || "读不到实时速度")); });
+    return () => {
+      alive = false;
+      un.then((f) => f()).catch(() => undefined);
+      unErr.then((f) => f()).catch(() => undefined);
+    };
   }, []);
 
   return { live, error };

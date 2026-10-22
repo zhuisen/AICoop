@@ -1,5 +1,6 @@
 import type { Theme } from "../../theme";
 import type { Account } from "../../helpers";
+import { winSlot } from "../../helpers";
 import { MONO, tkPal } from "../tk/tkPal";
 import { hm, int, tok } from "../../relayView";
 
@@ -18,7 +19,7 @@ export default function PoolDetail({ t, isExit, accounts, inUse, next, burstMin,
   const bad = dark ? "#FF8A73" : "#c23f3a";
   const muted = "#6b7480";
   const inner = dark ? "#0e1319" : "#f6f8fb";
-  const win = (a: Account, long: boolean) => a.windows.find((w) => (long ? w.mins >= 1440 : w.mins > 0 && w.mins < 1440)) ?? null;
+  const win = (a: Account, long: boolean) => a.windows.find((w) => winSlot(w.mins) === (long ? "w" : "5h")) ?? null;
   const stat = (a: Account): { s: string; c: string } => {
     if (a.status === "dead") return { s: "失效", c: bad };
     if (a.node === inUse) return { s: "在用", c: acc };

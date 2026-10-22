@@ -194,7 +194,10 @@ class TestUpstreamIsolation:
         src = inspect.getsource(px.Handler._finish)
         assert "if aid:" in src and "_record_quota" in src
         assert "if conv and aid:" in src, "粘性也必须跳过"
-        assert "if aid and not got:" in src, "affinity 表存 None 会被 _pick 读成一个叫 None 的号"
+        # 全方面评审 §5（2026-10-22）：中转站档照写 affinity 归属行（请求账本要分清 relay 与直连），
+        # 但**粘性表**仍不许存 None。
+        assert "if aid:\n                        with _lock:\n                            _affinity[rid] = aid" in src, \
+            "affinity 表存 None 会被 _pick 读成一个叫 None 的号"
 
 
 class TestTheCacheIsRaceSafe:

@@ -44,6 +44,8 @@ LOCK = ".sampler.lock"
 POLL_SECS = int(os.environ.get("GROK_SAMPLER_POLL", "15"))
 # 第一次读数前略快。不要降到 agy 那种 2s：那是 loopback，这条是外网账单。
 POLL_FAST_SECS = int(os.environ.get("GROK_SAMPLER_POLL_FAST", "5"))
+#: 跨过重置点之后最多快轮询多久（秒）。
+RESET_FAST_SECS = int(os.environ.get("GROK_SAMPLER_RESET_FAST", "120"))
 FAST_PHASE_SECS = int(os.environ.get("GROK_SAMPLER_FAST_PHASE", "45"))
 HEARTBEAT_SECS = int(os.environ.get("GROK_SAMPLER_HEARTBEAT", "1800"))
 #: ★★ sidecar 的心跳，与上面**账本**的心跳分开（2026-10-14）。
@@ -213,11 +215,14 @@ def _on_term(_sig, _frm):
     raise SystemExit(0)
 
 
-for _s in (signal.SIGTERM, signal.SIGINT):
-    try:
-        signal.signal(_s, _on_term)
-    except (ValueError, OSError):        # 非主线程 / 平台不支持 —— 不装也不能让脚本起不来
-        pass
+def _install_term():
+    """★ 只在当脚本跑时装（`__main__` 里调）。原来写在模块顶层：测试按路径加载这个文件时，处理器装进了
+    **测试进程**，之后测试进程收到 SIGTERM 就在随便哪条用例里抛 `SystemExit`（2026-10-22 全套测试实测）。"""
+    for _s in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_s, _on_term)
+        except (ValueError, OSError):        # 非主线程 / 平台不支持 —— 不装也不能让脚本起不来
+            pass
 
 
 def main():
@@ -257,6 +262,9 @@ def main():
             nxt = last_flat["reset"] if last_flat else None
             crossed = (isinstance(nxt, (int, float)) and nxt > 0
                        and now >= nxt and last_write < nxt)
+            # ★ 只在重置点之后 `RESET_FAST_SECS` 内快轮询（全方面评审 §10，同 B46）：读数不变 / 读失败时 `last_write`
+            #   不前进，原来会按快节拍一直打到下一次心跳（最长 30 分钟、每 5 s 一次）。
+            crossed = crossed and now - nxt < RESET_FAST_SECS
             fast = (not got_one) and (now - started < FAST_PHASE_SECS)
             time.sleep(POLL_FAST_SECS if (fast or crossed) else POLL_SECS)
     finally:
@@ -270,4 +278,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _install_term()
     sys.exit(main())

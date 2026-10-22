@@ -202,6 +202,12 @@ body {
 .ni-ring { position: absolute; }
 .ni-logo { position: absolute; display: flex; width: 20px; height: 20px; }
 .ni-reset { position: absolute; right: 7.5px; top: 5px; font-size: 10.5px; color: var(--tx2); }
+/* 周额度 < 10% 的小红牌、「已隐藏 · 撤销」行（同悬停面板 `.ig-wk` / `.ig-note`；刘海恒深色）。 */
+.ni-wk { position: absolute; left: 5px; top: 4.5px; display: inline-flex; align-items: center; height: 15px; padding: 0 4px;
+  border-radius: 7px; font-size: 9.5px; font-weight: 700; white-space: nowrap; color: #FF8A73;
+  background: color-mix(in srgb, color-mix(in srgb, #FF4D2E 16%, #161c25) 92%, transparent); box-shadow: inset 0 0 0 1px rgba(255,77,46,.45); }
+.ni-note { position: absolute; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--tx2); white-space: nowrap; }
+.ni-undo { color: #2dd4bf; cursor: pointer; }
 .ni-main { position: absolute; left: 0; right: 0; top: 73.5px; text-align: center; font-size: 15px; font-weight: 700; }
 
 /* 飞入的 logo（覆盖层，刘海坐标）：落地后交给行自己画。 */

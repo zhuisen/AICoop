@@ -317,8 +317,8 @@ def _scan_claude_file(path):
     """-> {message_id: row}。整文件解析(冷路径/守卫失败时的回退)。"""
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         return _scan_claude_lines(fh)
 
@@ -370,7 +370,7 @@ def _scan_otel_file(path):
         return _scan_otel_lines(fh)
 
 
-def _claude_otel_rows(tr_rows, cached, fresh, cut):
+def _claude_otel_rows(tr_rows, cached, fresh, cut, read_failed=None):
     """只在 OTel 账本、不在 transcript 里的 Claude 调用 -> ([row], 新解析/增量的文件数)。
 
     ★★ 用户 2026-10-19 定的口径：Claude 用量**按实际 API 调用算**。transcript 漏掉的是
@@ -391,15 +391,22 @@ def _claude_otel_rows(tr_rows, cached, fresh, cut):
         return [], 0
     seen = {r[9] for r in tr_rows.values() if len(r) > 9 and r[9]}
     spans, changed = {}, 0
+    rf = read_failed if read_failed is not None else []
     for f in sorted(root.glob("*.jsonl")):
+        ck = str(f)
+        hit = cached.get(ck)
         try:
             st = f.stat()
-        except OSError:
+        except OSError as e:
+            rf.append("%s: %s: %s" % (ck, type(e).__name__, e))
+            if hit is not None:
+                fresh[ck] = dict(hit)
+                if isinstance(hit.get("r"), dict):
+                    spans.update(hit["r"])
             continue
         if st.st_mtime < cut:
             continue
-        ck, sig = str(f), _sig(st)
-        hit = cached.get(ck)
+        sig = _sig(st)
         if hit and hit.get("sig") == sig:
             data = hit.get("r")
             fresh[ck] = {"sig": sig, "r": data, "off": hit.get("off"), "a": hit.get("a")}
@@ -410,7 +417,8 @@ def _claude_otel_rows(tr_rows, cached, fresh, cut):
             else:
                 try:
                     data = _scan_otel_file(f)
-                except ScanReadError:
+                except ScanReadError as e:
+                    rf.append("%s: %s" % (ck, e))
                     if hit is None:
                         continue
                     fresh[ck] = dict(hit)
@@ -529,8 +537,8 @@ def _scan_grok_file(path):
     rows = []
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         for line in fh:
             if '"usage"' not in line:
@@ -588,8 +596,8 @@ def _scan_kimi_file(path):
     rows = []
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         for line in fh:
             if '"usage.record"' not in line:
@@ -686,8 +694,8 @@ def _scan_openclaw_file(path):
     rows = {}
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
 
     def walk(o, model=None, provider=None, ts=None):
         if isinstance(o, dict):
@@ -737,8 +745,8 @@ def _scan_reasonix_file(path):
     rows = []
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         for line in fh:
             if '"prompt"' not in line:
@@ -956,8 +964,8 @@ def _scan_agy_file(path):
     rows = []
     try:
         fh = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    except OSError as e:
+        raise ScanReadError("打不开 %s: %s: %s" % (path, type(e).__name__, e)) from e
     with fh:
         for line in fh:
             if '"conv"' not in line:
@@ -1654,9 +1662,25 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                     rejected.append(f)
                     continue
                 kept.add(f)
+                ck = str(f)
                 try:
                     st = f.stat()
-                except OSError:
+                except OSError as e:
+                    # ★ stat 失败与 parse 失败同一份降级契约：计 `read_failed`，有旧值连旧签名沿用。
+                    #   直接 `continue` 会让旧缓存随这一轮的 `fresh` 一起消失 —— 下一轮从零重读。
+                    read_failed.append("%s: %s: %s" % (ck, type(e).__name__, e))
+                    hit = cached.get(ck)
+                    if hit is None:
+                        continue
+                    fresh[ck] = dict(hit)
+                    data = hit.get("r")
+                    if dedup and isinstance(data, dict):
+                        for mid, row in data.items():
+                            prev = merged.get(mid)
+                            if prev is None or sum(row[IDX_IN:IDX_OUT + 1]) > sum(prev[IDX_IN:IDX_OUT + 1]):
+                                merged[mid] = row
+                    elif not dedup and isinstance(data, list):
+                        seq.extend(data)
                     continue
                 # ★★ 有的源的"这个文件变了没"不能只看它自己。SQLite 走 **WAL** 时
                 #    写入落在 `<db>-wal`，主库的 mtime **原地不动** ⇒ 既会被 `cut` 误跳过、
@@ -1666,7 +1690,6 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 eff_mtime, sig = sig_fn(f, st) if sig_fn else (st.st_mtime, _sig(st))
                 if eff_mtime < cut:
                     continue
-                ck = str(f)
                 hit = cached.get(ck)
                 if hit and hit.get("sig") == sig:
                     # 文件一个字节都没变:连守卫都不用查,直接沿用。`off`/`a` 原样带走,
@@ -1715,6 +1738,14 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 elif isinstance(data, list):
                     seq.extend(data)
 
+        # ★ `extra` 钩子：别处的账本补进本源（目前只有 Claude ← OTel，见 `_claude_otel_rows`）。
+        #   必须拿**全局去重后的** rows 当对账集合，所以放在文件循环之后；又必须在 `sources[key]`
+        #   之前 —— 它读失败也要计进本源的 `read_failed`，否则数据源状态照报 ok。
+        extra = src.get("extra")
+        more = None
+        if extra is not None:
+            more, n_more = extra(merged, cached, fresh, cut, read_failed)
+            scanned += n_more
         unp = _unparsed(root, pattern, kept, rejected) if root.is_dir() else {}
         sources[key] = {"state": _source_state(root.is_dir(), len(kept), len(read_failed) - rf0, unp),
                         "root": _tilde(root), "files": len(kept),
@@ -1725,14 +1756,8 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
         #   放在这里而不是 parse 里,是因为 parse 的粒度是**单文件**,而缓存也按单文件存:
         #   把差分做进 parse,换一个文件集合就会得到另一套增量,且缓存还会把错的固化下来。
         rows_iter = merged.values() if dedup else seq
-        # ★ `extra` 钩子：别处的账本补进本源（目前只有 Claude ← OTel，见 `_claude_otel_rows`）。
-        #   必须拿**全局去重后的** rows 当对账集合，所以放在文件循环之后。
-        extra = src.get("extra")
-        if extra is not None:
-            more, n_more = extra(merged, cached, fresh, cut)
-            if more:
-                rows_iter = list(rows_iter) + more
-            scanned += n_more
+        if more:
+            rows_iter = list(rows_iter) + more
         cov_fn = src.get("coverage")
         if cov_fn is not None:
             # 覆盖率用**差分前**的原始记录数:一次调用 = 一轮。差分后重复记录会被抹掉,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate + (re)load the six codex-rotate launchd agents.
+# Generate + (re)load the seven codex-rotate launchd agents.
 #
 # Generated rather than committed as files because every plist embeds absolute paths ($HOME, the repo
 # location, the interpreter) — a committed copy would be wrong on any other machine and would drift

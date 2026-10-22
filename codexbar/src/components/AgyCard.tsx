@@ -180,7 +180,7 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
       )}
       {state !== "dead" && <RotIb off={off} onToggle={onToggleRotate ? (wasOff) => onToggleRotate(wasOff) : undefined} unsupported={!onToggleRotate} />}
       <CardMenu onOpenChange={setMenuOpen} items={[
-        ...(onProbe && state !== "dead" ? [{ key: "probe", label: "探针 · 计费", icon: <IcBolt />, warn: true, narrow: true, onClick: fire }] : []),
+        ...(onProbe && state !== "dead" ? [{ key: "probe", label: probing ? "探针中…" : "探针 · 计费", icon: <IcBolt />, warn: true, narrow: true, disabled: !!probing, onClick: fire }] : []),
         ...(onShowDetail ? [{ key: "detail", label: "详情", icon: <IcInfo />, onClick: onShowDetail }] : []),
         ...(onRemove ? [{ key: "remove", label: "删除", icon: <IcTrash />, bad: true, onClick: onRemove }] : []),
       ]} />

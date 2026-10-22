@@ -22,7 +22,7 @@ import { grokLastGoodRemPct, grokQuotaVisible, grokRemPct, type GrokSnapshot } f
 import { applyCacheMode, applyPlatformPrefs, colorOf, fmtTok, todayView, type TrafficData } from "./traffic";
 import { fmtUSD } from "./rates";
 import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER as REQ_ORDER } from "./requests";
-import { IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
+import { claudeRem, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
 import * as NI from "./notchIdle";
 import NotchIdleGrid from "./components/NotchIdleGrid";
 import "./notch.css";
@@ -78,8 +78,11 @@ function winsFromSegs(segs: NotchSeg[], prefix: string): { w5: C.QWin; ww: C.QWi
 }
 
 function claudeWin(w: ClaudeWin | null, stale: boolean): C.QWin {
-  return w ? { pct: w.rem, refill: w.idle ? "未启动" : w.resetsAt ? fmtEta(w.resetsAt) : "—", stale }
-           : { pct: null, refill: "—", title: "这一格读不到 —— 跑一次 Claude Code 后会补上" };
+  if (!w) return { pct: null, refill: "—", title: "这一格读不到 —— 跑一次 Claude Code 后会补上" };
+  // ★ 过了重置点 ⇒ 那个读数属于旧窗口，写「—」不写旧数（同空闲托盘 `claudeRem`）
+  const rem = claudeRem(w, Date.now());
+  if (rem === null && w.rem !== null) return { pct: null, refill: "—", title: "重置点已过，等下一次读数" };
+  return { pct: rem, refill: w.idle ? "未启动" : w.resetsAt ? fmtEta(w.resetsAt) : "—", stale };
 }
 
 export default function NotchHud() {
@@ -204,6 +207,15 @@ export default function NotchHud() {
   // Claude 额度（状态栏转写；没有时 Claude.app 的 plan-usage-history）：展开时读，60 s 节流。读不到保留上一份（§7.0b）。
   const [claudeQ, setClaudeQ] = useState<ClaudeQuota | null>(null);
   const claudeAt = useRef(0);
+  /** 读一次 Claude 额度（节流 `REFETCH_MS`）。读不到保留上一份；一次都没读到 ⇒ 两格写 —。 */
+  const readClaude = useCallback(() => {
+    const now = Date.now();
+    if (now - claudeAt.current <= REFETCH_MS) return;
+    claudeAt.current = now;
+    invoke<string>("read_statusline_quota")
+      .then((raw) => { const q = parseClaudeQuota(raw); if (q) setClaudeQ(q); })
+      .catch(noop);
+  }, []);
   // 各家今日均速（`requests.ts::dayMetrics`，与请求页 / 菜单栏今日 Tab 同一个算法）：今日 Tab 展开时读，60 s 节流
   const [tpsBy, setTpsBy] = useState<Record<string, number | null>>({});
   const reqAt = useRef(0);
@@ -218,6 +230,11 @@ export default function NotchHud() {
     const un = listen<NotchActivity>("notch-activity", (e) => setAct(e.payload));
     return () => { void un.then((f) => f()); };
   }, []);
+  // ★ 收起态也要知道 Claude 的额度（全方面评审 §9 存疑，核实成立：原来只在展开时读 ⇒ 没展开过时
+  //   Claude <10% 光晕不变红）。不加定时器（`PushNotPoll`）：挂载读一次；Claude 在跑时每来一份 `tps-live`
+  //   推送顺手补读，节流到 `REFETCH_MS` 一次。
+  useEffect(() => { readClaude(); }, [readClaude]);
+  useEffect(() => { if (act.claude) readClaude(); }, [act.claude, live, readClaude]);
 
   // ★ 下一个「数据没变、但该重画」的时间点：在用号各窗口的重置点、agy 各窗口的重置点、
   //   任一号冷却结束。只定这一个闹钟，到点重算；空闲时没有任何周期性工作。
@@ -228,11 +245,13 @@ export default function NotchHud() {
     for (const w of [q?.primary, q?.secondary]) if (w?.resets_at) times.push(w.resets_at);
     for (const sl of Object.values(state.slots ?? {})) if (sl.cooling_until) times.push(sl.cooling_until);
     for (const r of agyWinRows(agyShown(agyShownSnap)?.quota)) if (r.reset_at) times.push(r.reset_at);
+    // ★ Claude 的重置点也要叫醒（阶段 D 评审两方：没它时过了重置点，旧的 <10% 告警要等下一次读数才灭）
+    for (const w of [claudeQ?.fiveH, claudeQ?.week]) if (w && !w.idle && w.resetsAt) times.push(w.resetsAt);
     const next = Math.min(...times.filter((t) => t > now));
     const ms = Number.isFinite(next) ? Math.min((next - now) * 1000 + 1000, MAX_WAKE_MS) : MAX_WAKE_MS;
     const id = setTimeout(() => setTick((n) => n + 1), ms);
     return () => clearTimeout(id);
-  }, [state, agyShownSnap, tick]);
+  }, [state, agyShownSnap, claudeQ, tick]);
 
   // 空闲那种展开也要按当下的「减弱动态效果」画（4e 卡片在自己的展开流程里读）
   // ★ 系统设置随时可能改：只在展开时重读的话，开着 app 时打开「减弱动态效果」，下次靠近照样亮光晕
@@ -325,12 +344,7 @@ export default function NotchHud() {
       const v = C.defaultView(cur.rows.length);
       setChosen(v);
       const now = Date.now();
-      if (now - claudeAt.current > REFETCH_MS) {
-        claudeAt.current = now;
-        invoke<string>("read_statusline_quota")
-          .then((raw) => { const q = parseClaudeQuota(raw); if (q) setClaudeQ(q); })
-          .catch(noop);   // 读不到保留上一份；一次都没读到 ⇒ 两格写 —
-      }
+      readClaude();
       if (now - trafficAt.current > REFETCH_MS) readTraffic();
       // logo 从各自那段光晕飞进自己那一行（只在「在跑」Tab；减弱动态效果时不飞）
       const pl0 = C.layoutCard({ alert: !!alert, view: "run", run: cur.rows.map(() => ({ multi: false, open: false, nSess: 0 })), todayRows: 0, quotaRows: 0 });
@@ -429,11 +443,12 @@ export default function NotchHud() {
   // ★ 空闲格子的高度单独报一份（Rust 两种展开各存一份）：换种类那一下 Rust 已经有对的高度，不等网页收到 `notch-mode`。
   //   格子面板没有高度动画 ⇒ 立刻报；还没收到格子（0 格）不报 —— 报上去会被钳成 80，是一块看不见的命中区。
   const idleCells = idleData?.cells ?? [];
-  const idleH = NI.notchGrid(idleCells.length).h;
+  const idleSnoozed = idleData?.snoozed ?? [];
+  const idleH = NI.notchGrid(idleCells.length, idleSnoozed.length).h;
   useEffect(() => { if (idleH > 0) invoke("notch_card_resize", { h: idleH, mode: "idle" }).catch(noop); }, [idleH]);
   // 展开着格子变空（设置改成「只看菜单栏」、数据刷新）⇒ 收起，不留一块空白展开态
-  useEffect(() => { if (open && mode === "idle" && idleData && !idleCells.length) invoke("notch_dismiss").catch(noop); },
-            [open, mode, idleData, idleCells.length]);
+  useEffect(() => { if (open && mode === "idle" && idleData && !idleCells.length && !idleSnoozed.length) invoke("notch_dismiss").catch(noop); },
+            [open, mode, idleData, idleCells.length, idleSnoozed.length]);
 
   const pickIdle = (key: string) => {
     emit("open-main-page", NI.cellTarget(key)).catch(noop);
@@ -715,7 +730,7 @@ export default function NotchHud() {
           </div>
         </div>
 
-        <NotchIdleGrid cells={idleCells} open={idleOpen} reduce={reduce} onPick={pickIdle} />
+        <NotchIdleGrid cells={idleCells} snoozed={idleSnoozed} warns={idleData?.warns ?? []} open={idleOpen} reduce={reduce} onPick={pickIdle} />
 
         <div className="nh-island" />
         <div className="nh-drip" data-notch-drip={drip.on ? drip.h.toFixed(1) : "0"}

@@ -427,7 +427,18 @@ def main(argv):
     entries, load_reason = load_auth()
 
     accounts = []
-    if load_reason:
+    if load_reason and carried:
+        # ★ 读不到 auth 也带上上一次的读数（全方面评审 §10：原来这里写 `last_good: None`，采样器整份覆盖
+        #   sidecar ⇒ 旧读数丢了，而 `carried` 早就算好了）。一家一条，原因照实写
+        for key, lg in carried.items():
+            accounts.append({
+                "account_key": key, "user_id": None, "email": None,
+                "token_expires_at": None, "available": False,
+                "reason": load_reason, "detail": None, "http_status": None,
+                "quota": None, "last_good": lg,
+                "plan": (extras.get(key) or {}).get("plan"),
+            })
+    elif load_reason:
         # 连账号都列不出来时,仍然产出一条**可展示**的记录,而不是空数组 ——
         # 空数组会被 UI 读成"没有 grok 账号",与"读不到 auth 文件"是两回事。
         accounts.append({

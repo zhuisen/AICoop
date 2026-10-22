@@ -118,7 +118,7 @@ export default function RotTod({ t, rot, lanes, lay, color, num, focus, onFocus,
                 color: t.isDark ? "#0e1117" : "#eef2f7", fontSize: 11.5, fontWeight: 500, whiteSpace: "nowrap",
                 boxShadow: "0 8px 20px rgba(0,0,0,.4)", opacity: colO,
                 transition: `left .12s ${EASE}, top .12s ${EASE}, opacity .1s` }}>
-                {r.acc} · {slotClock(hb)}–{slotClock(hb + 1)} · {r.days[hb]}/{nDays} 天在岗 · 断流 {r.errs[hb]}
+                {r.acc} · {slotClock(hb)}–{slotClock(hb + 1)} · {r.days[hb]}/{nDays} 天在岗{isAgy ? "" : ` · 断流 ${r.errs[hb]}`}
               </span>
             )}
           </div>

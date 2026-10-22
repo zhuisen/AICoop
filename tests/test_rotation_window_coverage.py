@@ -209,7 +209,8 @@ class TheAttributionRatioIsExplainedByTheRightCause(unittest.TestCase):
         raw = (ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx").read_text(encoding="utf-8")
         self.code = re.sub(r"(?<![:/])//.*", "", re.sub(r"\{?/\*[\s\S]*?\*/\}?", "", raw))
         i = self.code.index("const covNote")
-        self.seg = self.code[i:i + 900]
+        # 到这条语句的结尾为止（不用定长切片：covNote 变长后 900 字会截在半路，verification.md「定长切片」那条）
+        self.seg = self.code[i:self.code.index(";\n", i)]
 
     def test_the_ratio_is_no_longer_blamed_on_direct_connections(self):
         """★★★ 「直连」那句可以留，但**不许紧跟在比例后面当它的解释**。"""

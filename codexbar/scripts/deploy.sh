@@ -28,7 +28,18 @@ fi
 #   见 CLAUDE.md §3.7。这里刻意什么都不做，别把计数器加回来。
 
 echo "==> building…"
-npx tauri build --bundles app 2>&1 | tail -3
+# ★ 每次部署都让 build.rs 重跑（全方面评审 §11）：它原来只在 `.git/HEAD` / `refs` 变时重跑 ——
+#   干净时构建过一次（B=0 进了缓存），之后改文件再构建，cargo 只重编 crate、不重跑 build.rs，产物照样报 B=0。
+export CODEXBAR_BUILD_STAMP="$(date +%s)-$$"
+# ★ 完整日志落盘，失败时打最后 40 行 + 路径（原来 `| tail -3` 把编译报错截得只剩「error: could not compile」）。
+_buildlog="$ROOT/../scratch/deploy-build.log"
+mkdir -p "$(dirname "$_buildlog")"
+if ! npx tauri build --bundles app > "$_buildlog" 2>&1; then
+    tail -40 "$_buildlog"
+    echo "🛑 构建失败 —— 完整日志：$_buildlog"
+    exit 1
+fi
+tail -3 "$_buildlog"
 
 # ★ 必须**优雅**退出,不能直接 SIGKILL。窗口尺寸/位置由 tauri-plugin-window-state 保存,而它只在
 #   `CloseRequested` / `RunEvent::Exit` 时写盘 —— `pkill -9` 不给退出处理任何机会,于是
@@ -123,9 +134,14 @@ sleep 3
 #   后面的版本号与 B≠0 告警一行都不打，而看上去和成功一模一样（新包其实已经装好并启动了）。
 #   是竞态：`ps` 写得比 awk 退出快就不触发，所以时好时坏。闸：tests/test_deploy_script_sigpipe.py。
 _running="$(ps -Ao pid=,comm= | awk '$2 ~ /codexbar$/ && !f {print $1; f=1}')"
+# ★ 后验失败要以非 0 退出（全方面评审 §11）：原来只打一行警告、照样 exit 0，调用方（与我）读到的是「部署成功」。
+#   放到最后才退：版本号与 B≠0 告警照常打完。
+_verify_fail=0
 if [ -z "$_running" ]; then
+    _verify_fail=1
     echo "⚠️  启动后没看到 codexbar 进程 —— 它可能被单实例闸挡住了，或者崩了。"
 elif [ "$(ps -o comm= -p "$_running")" != "$APP/Contents/MacOS/codexbar" ]; then
+    _verify_fail=1
     echo "🛑 **跑起来的不是刚装的那一份！**"
     echo "   期望: $APP/Contents/MacOS/codexbar"
     echo "   实际: $(ps -o comm= -p "$_running")  (pid $_running)"
@@ -145,11 +161,26 @@ fi
 #   再拿 `$0` 推相对路径会解析失败，实测当场把版本打成 `?`。
 VER=$(node -p "require('$ROOT/src-tauri/tauri.conf.json').version" 2>/dev/null || echo "?")
 TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+# ★ 最近的 tag 是这个版本的预发布 ⇒ 版本带上预发布段（同 build.rs::prerelease），别说成「就是 release vX.Y.Z」
+case "$TAG" in "v${VER}-"*) VER="${TAG#v}" ;; esac
 if [ -n "$TAG" ]; then
     B=$(git rev-list --count "$TAG..HEAD" 2>/dev/null || echo 0)
     [ -n "$(git status --porcelain 2>/dev/null)" ] && B=$((B + 1))
 else
     B=0
+fi
+# ★ 核二进制里实际烤进去的 B（build.rs 写在 OUT_DIR/build_number，取最新那份）。对不上 = build.rs 没重跑、
+#   产物报的版本与工作区不符 —— 界面会说假话，所以算部署失败。
+_baked_f=""
+for _f in "$ROOT"/src-tauri/target/release/build/codexbar-*/out/build_number; do   # 取最新的一份（不走管道：pipefail 下提前退出的管道尾会 SIGPIPE）
+    [ -f "$_f" ] || continue
+    if [ -z "$_baked_f" ] || [ "$_f" -nt "$_baked_f" ]; then _baked_f="$_f"; fi
+done
+if [ -z "$_baked_f" ]; then
+    echo "⚠️  找不到 build.rs 写的 build_number，核不了二进制里的 B"
+elif [ "$(cat "$_baked_f")" != "$B" ]; then
+    echo "🛑 二进制里烤的 B=$(cat "$_baked_f")，工作区现算 B=${B} —— build.rs 没重跑（界面上的版本是旧的），或构建途中改了文件（常见：\`Cargo.lock\`）"
+    _verify_fail=1
 fi
 if [ "$B" = "0" ]; then
     echo "✓ deployed — v${VER}（B=0：你跑的这份**就是** release）"
@@ -172,4 +203,8 @@ else
     else
         echo "      · 工作区干净 ⇒ B 全部来自 commit 数：在 \`git tag\` **之后**再跑本脚本（CLAUDE.md §3 4.5）。"
     fi
+fi
+if [ "$_verify_fail" != "0" ]; then
+    echo "🛑 部署后验失败（见上）—— 新包已装好，但跑起来的不是它。"
+    exit 1
 fi

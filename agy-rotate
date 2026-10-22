@@ -131,15 +131,15 @@ def _adopt(label=None, quiet=False):
     sub, email = cl.get("sub"), cl.get("email")
     if not sub:
         sys.exit("当前凭证里没有 id_token.sub —— 认不出这是哪个号，拒绝收编")
-    pool = P.load()
-    accs = _accounts(pool)
-    fresh = sub not in accs
-    label = label or accs.get(sub, {}).get("label") or (email or sub).split("@")[0]
     P.write_cred(sub, live)
-    accs[sub] = {**accs.get(sub, {}), "label": label, "email": email,
-                 "adopted_at": accs.get(sub, {}).get("adopted_at") or int(time.time()),
-                 "updated_at": int(time.time())}
-    with P._lock(P.POOL):
+    with P._lock(P.POOL):                 # ★ 锁内读→改→存（阶段 E 评审 gemini：原来读在锁外、整份 save 在锁内）
+        pool = P.load()
+        accs = _accounts(pool)
+        fresh = sub not in accs
+        label = label or accs.get(sub, {}).get("label") or (email or sub).split("@")[0]
+        accs[sub] = {**accs.get(sub, {}), "label": label, "email": email,
+                     "adopted_at": accs.get(sub, {}).get("adopted_at") or int(time.time()),
+                     "updated_at": int(time.time())}
         P.save(pool)
     if not quiet:
         print("%s [%s] %s" % ("已收编" if fresh else "已更新", label, email or sub[:12]))
@@ -437,8 +437,11 @@ def cmd_quota(args):
     # ★ 「我们试过了」是一条独立的事实，就该独立写下来，不从别的字段反推
     #   （同 §7.1「先列出那一刻我们已经知道但没写下来的事」）。
     pool["quota_ran_at"] = int(time.time())
+    # ★ 不写回 `live_seen`（阶段 E/F 评审两方）：开头读的那份跑了十几秒，期间别人 switch 过，写回会把盘上的新值盖回旧号
+    #   ⇒ 前端看到钥匙串 ≠ live_seen，误报「被别的 agy 抢回去了」。末尾现读也还有空档；它只是诊断用的种子，
+    #   「现在是谁」由 `agy-rotate live` 现读钥匙串回答，switch / auto / probe 才写它。
     pool = P.merge_back(pool, before, ("quota_ran_at", "usage_report_off_until", "usage_report",
-                                       "live_seen", "oauth_client"))
+                                       "oauth_client"))
     for _s, _a in _accounts(pool).items():
         _log("quota [%s] %s" % (_a.get("label"),
              ("✓ " + "、".join("%s %s" % (k, _fmt_pct(v["remaining"]))
@@ -522,43 +525,45 @@ def cmd_pin(args):
     默认容量最高优先；点亮哪个号才优先用哪个，可多个、按点击先后排队。
     ★ 真源在池里（wrapper 在 app 没开时也要读），存 **sub** 不存 label。
     """
-    pool = P.load()
-    accs = _accounts(pool)
-    pinned = [x for x in (pool.get("pinned") or []) if x in accs]
-    if "--json" in args:
-        print(json.dumps({"pinned": [accs[x].get("label") for x in pinned]}, ensure_ascii=False))
-        return
-    if "--clear" in args:
-        pool.pop("pinned", None)
-    elif "--toggle" in args:
-        i = args.index("--toggle")
-        name = args[i + 1] if i + 1 < len(args) else ""
-        sub = _by_label(pool, name)
-        if not sub:
-            sys.exit("池里没有 '%s'" % name)
-        if sub in pinned:
-            pinned.remove(sub)
-        else:
-            pinned.append(sub)
-        pool["pinned"] = pinned
-        if not pinned:
+    # ★ 读→校验→改→存整段持池锁（阶段 E 评审 codex：字段合并保住了各自的更新，却保不住跨号约束 ——
+    #   两个 `rotate --off` 能把全池关完、两个 rename 能撞名）。这条命令不联网，持锁只有几毫秒。
+    with P._lock(P.POOL):
+        pool = P.load()
+        accs = _accounts(pool)
+        pinned = [x for x in (pool.get("pinned") or []) if x in accs]
+        if "--json" in args:
+            print(json.dumps({"pinned": [accs[x].get("label") for x in pinned]}, ensure_ascii=False))
+            return
+        if "--clear" in args:
             pool.pop("pinned", None)
-    elif args:
-        subs = []
-        for name in args:
+        elif "--toggle" in args:
+            i = args.index("--toggle")
+            name = args[i + 1] if i + 1 < len(args) else ""
             sub = _by_label(pool, name)
             if not sub:
                 sys.exit("池里没有 '%s'" % name)
-            subs.append(sub)
-        pool["pinned"] = subs
-    else:
-        print("置顶：%s" % ("、".join(accs[x].get("label") for x in pinned) or "（无 —— 容量最高优先）"))
-        return
-    with P._lock(P.POOL):
+            if sub in pinned:
+                pinned.remove(sub)
+            else:
+                pinned.append(sub)
+            pool["pinned"] = pinned
+            if not pinned:
+                pool.pop("pinned", None)
+        elif args:
+            subs = []
+            for name in args:
+                sub = _by_label(pool, name)
+                if not sub:
+                    sys.exit("池里没有 '%s'" % name)
+                subs.append(sub)
+            pool["pinned"] = subs
+        else:
+            print("置顶：%s" % ("、".join(accs[x].get("label") for x in pinned) or "（无 —— 容量最高优先）"))
+            return
         P.save(pool)
-    now_p = pool.get("pinned") or []
-    _log("pin → %s" % ("、".join(accs[x].get("label") for x in now_p) or "（清空）"))
-    print("置顶：%s" % ("、".join(accs[x].get("label") for x in now_p) or "（无 —— 容量最高优先）"))
+        now_p = pool.get("pinned") or []
+        _log("pin → %s" % ("、".join(accs[x].get("label") for x in now_p) or "（清空）"))
+        print("置顶：%s" % ("、".join(accs[x].get("label") for x in now_p) or "（无 —— 容量最高优先）"))
 
 
 def cmd_borrow(args):
@@ -567,58 +572,70 @@ def cmd_borrow(args):
     ★ 存**反向**（`borrow_off`）：缺省（无键）= 允许借用 = 既有行为；恢复默认是**删键**。
       与 `codex-rotate borrow` 同一条理由。
     """
-    pool = P.load()
-    if "--on" in args:
-        pool.pop("borrow_off", None)
-    elif "--off" in args:
-        pool["borrow_off"] = True
-    if "--on" in args or "--off" in args:
-        with P._lock(P.POOL):
+    # ★ 读→校验→改→存整段持池锁（阶段 E 评审 codex：字段合并保住了各自的更新，却保不住跨号约束 ——
+    #   两个 `rotate --off` 能把全池关完、两个 rename 能撞名）。这条命令不联网，持锁只有几毫秒。
+    with P._lock(P.POOL):
+        pool = P.load()
+        if "--on" in args:
+            pool.pop("borrow_off", None)
+        elif "--off" in args:
+            pool["borrow_off"] = True
+        if "--on" in args or "--off" in args:
             P.save(pool)
-        _log("borrow → %s" % ("关" if pool.get("borrow_off") else "开"))
-    st = {"borrow": not pool.get("borrow_off")}
-    if "--json" in args:
-        print(json.dumps(st))
-    else:
-        print("池子空时借用已停用的号：%s" % ("开" if st["borrow"] else "关"))
+            _log("borrow → %s" % ("关" if pool.get("borrow_off") else "开"))
+        st = {"borrow": not pool.get("borrow_off")}
+        if "--json" in args:
+            print(json.dumps(st))
+        else:
+            print("池子空时借用已停用的号：%s" % ("开" if st["borrow"] else "关"))
 
 
 def cmd_switch(args):
     if not args:
         sys.exit("usage: agy-rotate switch <label>")
     pool = P.load()
+    before = copy.deepcopy(pool.get("accounts") or {})
     sub = _by_label(pool, args[0])
     if not sub:
         sys.exit("池里没有 '%s'" % args[0])
-    cred, err = _refresh_one(sub, _accounts(pool)[sub], pool)
-    if err:
-        sys.exit("✗ %s" % err)
-    live_sub = _mark_live(pool)
-    if live_sub == sub:
-        print("[%s] 已经是当前号，没动" % _accounts(pool)[sub].get("label"))
-        return
-    where = P.install_live(cred)
-    _mark_live(pool)
-    if "--for-this-run" not in args:
-        # ★★★ 记下**用户显式要的那个号**。`live_seen` 回答"钥匙串里现在是谁"，
-        #   而这个回答"用户要的是谁" —— 两件事，合并就没法发现被劫持。
-        #   `auto` 据此在钥匙串被别的 agy 进程写回之后**把用户的选择装回去**，
-        #   而不是看到"当前号额度还够"就 return（那等于静默撤销用户的操作）。
-        #   `bin/agy` 的 `--as` 传 `--for-this-run`：那是一次性指定，不是长期偏好。
-        pool["live_wanted"] = sub
-    with P._lock(P.POOL):
-        P.save(pool)
-    lab = _accounts(pool)[sub].get("label")
-    _log("switch → [%s]（落点 %s）" % (lab, where))
-    print("已切到 [%s] —— ★ 只对**下一次启动的** agy 生效，已经开着的会话不受影响" % lab)
-    if where != "keyring":
-        # ★★ 不许静默。2026-09-13 之前这条路**一直**只写文件，而 agy 只读钥匙串 ——
-        #   换号是空操作，命令却照常打印「已切到」。宁可多说一句，也不能再让
-        #   「我们写成功了」冒充「agy 真的换了号」。
-        _log("✗ switch [%s] 只写到兜底文件 —— agy 很可能仍在用原来那个号" % lab)
-        print("  ⚠️ 没能写进钥匙串（agy 的主存储），只写了兜底文件 —— "
-              "agy 很可能仍在用原来那个号。\n"
-              "     钥匙串被锁住时会这样：解锁登录钥匙串后重试一次。")
+    # ★ 探针会临时把别的号装进钥匙串、结束时装回原来的号（阶段 E，全方面评审 §10）：这时切号，
+    #   探针的 finally 会把你刚切的号冲掉；你切的号又会让探针把账记到错的号上。占着探针锁切，占不到就拒绝。
+    lk = _probe_lock()
+    if lk is None:
+        sys.exit("✗ Gemini 探针正在跑（它会临时切号）—— 等它结束再切")
+    try:
+        cred, err = _refresh_one(sub, _accounts(pool)[sub], pool)
+        if err:
+            sys.exit("✗ %s" % err)
+        live_sub = _mark_live(pool)
+        if live_sub == sub:
+            print("[%s] 已经是当前号，没动" % _accounts(pool)[sub].get("label"))
+            return
+        where = P.install_live(cred)
+        _mark_live(pool)
+        if "--for-this-run" not in args:
+            # ★★★ 记下**用户显式要的那个号**。`live_seen` 回答"钥匙串里现在是谁"，
+            #   而这个回答"用户要的是谁" —— 两件事，合并就没法发现被劫持。
+            #   `auto` 据此在钥匙串被别的 agy 进程写回之后**把用户的选择装回去**，
+            #   而不是看到"当前号额度还够"就 return（那等于静默撤销用户的操作）。
+            #   `bin/agy` 的 `--as` 传 `--for-this-run`：那是一次性指定，不是长期偏好。
+            pool["live_wanted"] = sub
+        # ★ 刷 token 是联网的：不整份 save（见 merge_back），否则期间 `quota` 写的读数被回滚
+        P.merge_back(pool, before, ("live_seen", "oauth_client")
+                     + (("live_wanted",) if "--for-this-run" not in args else ()))
+        lab = _accounts(pool)[sub].get("label")
+        _log("switch → [%s]（落点 %s）" % (lab, where))
+        print("已切到 [%s] —— ★ 只对**下一次启动的** agy 生效，已经开着的会话不受影响" % lab)
+        if where != "keyring":
+            # ★★ 不许静默。2026-09-13 之前这条路**一直**只写文件，而 agy 只读钥匙串 ——
+            #   换号是空操作，命令却照常打印「已切到」。宁可多说一句，也不能再让
+            #   「我们写成功了」冒充「agy 真的换了号」。
+            _log("✗ switch [%s] 只写到兜底文件 —— agy 很可能仍在用原来那个号" % lab)
+            print("  ⚠️ 没能写进钥匙串（agy 的主存储），只写了兜底文件 —— "
+                  "agy 很可能仍在用原来那个号。\n"
+                  "     钥匙串被锁住时会这样：解锁登录钥匙串后重试一次。")
+    finally:
+        lk.close()
 
 
 def cmd_auto(args):
@@ -643,14 +660,21 @@ def cmd_auto(args):
         sub, why = P.pick(pool, live_sub)
         if not sub or sub == live_sub:
             return
-        a = _accounts(pool)[sub]
-        cred, err = _refresh_one(sub, a, pool)
-        if err:
+        lk = _probe_lock()
+        if lk is None:
+            _log("auto 跳过：Gemini 探针正在跑（它会临时切号）")
             return
-        where = P.install_live(cred)
-        _mark_live(pool)
-        with P._lock(P.POOL):
-            P.save(pool)
+        try:
+            before = copy.deepcopy(pool.get("accounts") or {})
+            a = _accounts(pool)[sub]
+            cred, err = _refresh_one(sub, a, pool)
+            if err:
+                return
+            where = P.install_live(cred)
+            _mark_live(pool)
+            P.merge_back(pool, before, ("live_seen", "oauth_client"))
+        finally:
+            lk.close()
         # ★ 落点写进这一行：只写了文件的话这次自动切**没有生效**，
         #   而 agy 照跑、用户看到的一切都正常 —— 那正是要避免的那种"成功"。
         verb = {"wanted": "恢复成你选的", "borrow": "借用已停用的"}.get(why, "自动切到")
@@ -667,41 +691,56 @@ def cmd_auto(args):
 def cmd_rename(args):
     if len(args) < 2:
         sys.exit("usage: agy-rotate rename <old> <new>")
-    pool = P.load()
-    sub = _by_label(pool, args[0])
-    if not sub:
-        sys.exit("池里没有 '%s'" % args[0])
-    new = args[1].strip()
-    if not new or any(c.isspace() for c in new):
-        sys.exit("新名字不能为空、不能含空格（它要当命令行参数用）")
-    accs = _accounts(pool)
-    if any(s != sub and a.get("label") == new for s, a in accs.items()):
-        sys.exit("'%s' 已经被别的号占了" % new)
-    accs[sub]["label"] = new
+    # ★ 读→校验→改→存整段持池锁（阶段 E 评审 codex：字段合并保住了各自的更新，却保不住跨号约束 ——
+    #   两个 `rotate --off` 能把全池关完、两个 rename 能撞名）。这条命令不联网，持锁只有几毫秒。
     with P._lock(P.POOL):
+        pool = P.load()
+        sub = _by_label(pool, args[0])
+        if not sub:
+            sys.exit("池里没有 '%s'" % args[0])
+        new = args[1].strip()
+        if not new or any(c.isspace() for c in new):
+            sys.exit("新名字不能为空、不能含空格（它要当命令行参数用）")
+        accs = _accounts(pool)
+        if any(s != sub and a.get("label") == new for s, a in accs.items()):
+            sys.exit("'%s' 已经被别的号占了" % new)
+        accs[sub]["label"] = new
         P.save(pool)
-    print("renamed → %s" % new)
+        print("renamed → %s" % new)
 
 
 def cmd_remove(args):
     if not args:
         sys.exit("usage: agy-rotate remove <label>")
-    pool = P.load()
-    sub = _by_label(pool, args[0])
-    if not sub:
-        sys.exit("池里没有 '%s'" % args[0])
-    lbl = _accounts(pool)[sub].get("label")
+    # ★ 读→改→存整段持池锁，并把它从置顶里一起摘掉（阶段 A 评审：同 codex `cmd_remove`）。
+    #   钥匙串读在锁外：它可能慢，且与池文件无关。
+    # ★ 占着探针锁删（阶段 E 评审 codex）：探针把原号 A 临时换成 B 时，「A 不是当前号」这条检查会放行，
+    #   删掉 A 的凭证之后探针的 finally 就装不回去了。占不到 ⇒ 拒绝；占到了再读钥匙串，读到的才是真的当前号。
+    lk = _probe_lock()
+    if lk is None:
+        sys.exit("✗ Gemini 探针正在跑（它会临时切号）—— 等它结束再删")
     live_sub = (P.claims(P.read_live()) or {}).get("sub")
-    if sub == live_sub:
-        sys.exit("[%s] 正是当前登录的号 —— 先 switch 到别的号再移除，"
-                 "否则你会既不在池里、也没有别的登录态可回。" % lbl)
-    del _accounts(pool)[sub]
     with P._lock(P.POOL):
+        pool = P.load()
+        sub = _by_label(pool, args[0])
+        if not sub:
+            sys.exit("池里没有 '%s'" % args[0])
+        lbl = _accounts(pool)[sub].get("label")
+        if sub == live_sub:
+            sys.exit("[%s] 正是当前登录的号 —— 先 switch 到别的号再移除，"
+                     "否则你会既不在池里、也没有别的登录态可回。" % lbl)
+        del _accounts(pool)[sub]
+        if sub in (pool.get("pinned") or []):
+            pool["pinned"] = [x for x in pool["pinned"] if x != sub]
+            if not pool["pinned"]:
+                pool.pop("pinned", None)
         P.save(pool)
     try:
         P.cred_path(sub).unlink()
     except OSError:
         pass
+    finally:
+        lk.close()
     print("已移除 [%s]" % lbl)
 
 
@@ -760,17 +799,15 @@ def cmd_health(args):
         P.write_cred(sub, cred)
         q, qerr = P.fetch_quota(cred["token"]["access_token"])
         rows.append((sub, a, "ok" if not qerr else "api_error", qerr or ""))
-        if not qerr:
-            q = P.carry_missing_groups(a.get("quota_summary"), a.get("quota_at"), q, now=time.time())
-            a["quota_summary"] = q
-            a["quota"] = P.quota_by_group(q)
-            a["quota_at"] = int(time.time())
+        # ★ 走与 `quota` 同一个落盘口（全方面评审 §10：原来手写三行，成功时不清 `quota_err`、不记锚点；
+        #   失败时什么也不记）。失败只标陈旧，不碰上次的读数。
+        _store_quota(sub, a, q if not qerr else None, qerr or None)
     a_now = int(time.time())
     for sub, a, kind, _d in rows:
         # ★ 独立兄弟键，与 `quota` 分开：`quota` 会被别的路径整体替换，
         #   健康结论跟着它走就会在下一次刷新后凭空消失（同 codex 的 `last_probe`）。
         a["last_health"] = {"at": a_now, "ok": kind == "ok", "kind": kind}
-    pool = P.merge_back(pool, before, ("live_seen", "oauth_client"))   # ★ 联网之后不整份 save（见 merge_back）
+    pool = P.merge_back(pool, before, ("oauth_client",))   # ★ 联网之后不整份 save；不写 live_seen（同 cmd_quota）
     if want_json:
         print(json.dumps([{"sub": s, "label": a.get("label"), "kind": k, "detail": d}
                           for s, a, k, d in rows], ensure_ascii=False))
@@ -1081,6 +1118,28 @@ def _q5_text(q5):
     return " · 5h 仍 %.1f%%（未见下降：这次消耗还没计进 5h，稍后 ↻ 再看）" % a
 
 
+def _probe_lock():
+    """占**全局** Gemini 探针锁 → 文件句柄；别的进程正在探 ⇒ `None`（调用方跳过，不排队、不计费）。
+
+    ★★ 跨进程互斥（阶段 A 评审，同 codex `_probe_claims`）：菜单栏、总览、⌘K、`dawn-probe` 各起一个进程。
+      codex 按号锁；agy 必须**全局**锁 —— 探非当值号要先把它装进钥匙串，两个探针同时跑会互相把钥匙串冲掉，
+      即便探的是不同的号，也会把一次计费记到错的号上（归属核对只能事后发现，钱已经花了）。"""
+    try:
+        import fcntl
+    except ModuleNotFoundError:                      # Windows
+        import portalock as fcntl                    # noqa: N813
+    pool = getattr(P, "POOL", None)
+    d = Path(pool).parent if pool else Path(tempfile.gettempdir())
+    d.mkdir(parents=True, exist_ok=True)
+    lk = open(d / ".agy-probe.lock", "w")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        lk.close()
+        return None
+    return lk
+
+
 def cmd_probe(args):
     """计费探针。★★★ **这是 Gemini 档唯一会花钱的动作，花的是 agy 自己的额度。**
 
@@ -1093,6 +1152,16 @@ def cmd_probe(args):
       中途异常也不能把用户留在别的号上。
     """
     want_json = "--json" in args
+    # ★ 先占锁，再读池与「当前号」（阶段 E 评审 codex）：原来先记下原号 A 再拿锁 —— 中间别人 switch 到 B，
+    #   探针结束时照样把 A 装回去，撤销了一次已经成功的切号。拿到锁之后读的 live 才是要还原的那个。
+    lk = _probe_lock()
+    if lk is None:
+        if want_json:
+            # 显式的「跳过」，不是空列表：前端要能说「跳过了、没计费」，而不是「0/0 可用」（阶段 B 评审）
+            print(json.dumps({"skipped": True, "note": "另一个进程正在跑 Gemini 探针"}, ensure_ascii=False))
+        print("⏭ 另一个进程正在跑 Gemini 探针 —— 跳过，不重复计费", file=sys.stderr if want_json else sys.stdout)
+        _log("跳过 probe：另一个进程正在探")
+        return None
     pool = P.load()
     acc_before = copy.deepcopy(pool.get("accounts") or {})
     accs = _accounts(pool)
@@ -1105,6 +1174,7 @@ def cmd_probe(args):
     else:
         subs = [live] if live in accs else []
     if not subs:
+        lk.close()
         sys.exit("没指定要探哪个号 —— `agy-rotate probe <label>` 或 `--all`")
 
     out = []
@@ -1164,6 +1234,7 @@ def cmd_probe(args):
         # ★ 一个号要探 ~30s；联网之后不整份 save（见 `P.merge_back`）—— 期间 `dawn-probe` 写的 `dawn_probe`、
         #   终端改的置顶 / 停轮换都在盘上，整份写回就没了。
         P.merge_back(pool, acc_before, ("live_seen", "oauth_client"))
+        lk.close()
 
     if want_json:
         print(json.dumps([{"label": a.get("label"), "ok": ok, "note": n, "usage": u, "q5h": q}
@@ -1298,12 +1369,17 @@ def cmd_dawn_probe(args):
     try:
         os.environ["CODEX_ROTATE_CALLER"] = "dawn"      # ★ 这一路的计费必须认得出来
         # ★ 传 sub 不传 label：`_by_label` 先认 sub，label 撞名/叫 `--all` 都不会扩成全池。
-        out = cmd_probe(list(targets)) or []
+        out = cmd_probe(list(targets))
     except BaseException as e:
         # ★ 释放成 failed 而不是抹掉：「今天跑过但崩了」可能已经花过钱，抹掉会让重跑二次计费。
         _dawn_save({"date": today, "at": int(time.time()), "state": "failed",
                     "note": ("%s: %s" % (type(e).__name__, e))[:200]})
         raise
+    if out is None:
+        # 另一个探针进程正在跑（多半就是手动全池探针）⇒ 今天不再探，避免同一批号二次计费
+        _dawn_save({"date": today, "at": int(time.time()), "state": "done", "ok": 0, "total": 0,
+                    "started": 0, "note": "跳过：另一个进程正在跑 Gemini 探针"})
+        return
     ok_n = sum(1 for r in out if r[1])
     started = sum(1 for r in out if r[4] and r[4].get("started"))
     _dawn_save({"date": today, "at": int(time.time()), "state": "done",
@@ -1322,24 +1398,26 @@ def cmd_rotate(args):
     """
     if len(args) < 2 or args[1] not in ("--on", "--off"):
         sys.exit("usage: agy-rotate rotate <label> --on|--off")
-    pool = P.load()
-    sub = _by_label(pool, args[0])
-    if not sub:
-        sys.exit("池里没有 '%s'" % args[0])
-    accs = _accounts(pool)
-    on = args[1] == "--on"
-    if not on:
-        # ★ 拒绝关掉最后一个：全关 = 自动切号无号可挑。
-        live_n = sum(1 for s, a in accs.items() if not a.get("rotate_off") and s != sub)
-        if live_n == 0:
-            sys.exit("✗ 这是最后一个还参与轮换的号 —— 全关掉的话自动切号就没号可挑了")
-    if on:
-        accs[sub].pop("rotate_off", None)
-    else:
-        accs[sub]["rotate_off"] = True
+    # ★ 读→校验→改→存整段持池锁（阶段 E 评审 codex：字段合并保住了各自的更新，却保不住跨号约束 ——
+    #   两个 `rotate --off` 能把全池关完、两个 rename 能撞名）。这条命令不联网，持锁只有几毫秒。
     with P._lock(P.POOL):
+        pool = P.load()
+        sub = _by_label(pool, args[0])
+        if not sub:
+            sys.exit("池里没有 '%s'" % args[0])
+        accs = _accounts(pool)
+        on = args[1] == "--on"
+        if not on:
+            # ★ 拒绝关掉最后一个：全关 = 自动切号无号可挑。
+            live_n = sum(1 for s, a in accs.items() if not a.get("rotate_off") and s != sub)
+            if live_n == 0:
+                sys.exit("✗ 这是最后一个还参与轮换的号 —— 全关掉的话自动切号就没号可挑了")
+        if on:
+            accs[sub].pop("rotate_off", None)
+        else:
+            accs[sub]["rotate_off"] = True
         P.save(pool)
-    print("[%s] 自动轮换已%s" % (accs[sub].get("label"), "开启" if on else "关闭"))
+        print("[%s] 自动轮换已%s" % (accs[sub].get("label"), "开启" if on else "关闭"))
 
 
 def cmd_autoswitch(args):
@@ -1352,20 +1430,22 @@ def cmd_autoswitch(args):
       wrapper 在 app 没开时也要读它，两个真源迟早分叉成
       「界面说关着、wrapper 照切」。
     """
-    pool = P.load()
-    if "--on" in args or "--off" in args:
-        off = "--off" in args
-        if off:
-            pool["auto_off"] = True
-        else:
-            pool.pop("auto_off", None)      # 删键，不写 False —— 缺省只能有一种表示
-        with P._lock(P.POOL):
+    # ★ 读→校验→改→存整段持池锁（阶段 E 评审 codex：字段合并保住了各自的更新，却保不住跨号约束 ——
+    #   两个 `rotate --off` 能把全池关完、两个 rename 能撞名）。这条命令不联网，持锁只有几毫秒。
+    with P._lock(P.POOL):
+        pool = P.load()
+        if "--on" in args or "--off" in args:
+            off = "--off" in args
+            if off:
+                pool["auto_off"] = True
+            else:
+                pool.pop("auto_off", None)      # 删键，不写 False —— 缺省只能有一种表示
             P.save(pool)
-    on = not pool.get("auto_off")
-    if "--json" in args:
-        print(json.dumps({"enabled": on}))
-    else:
-        print("自动切号：%s" % ("开" if on else "关"))
+        on = not pool.get("auto_off")
+        if "--json" in args:
+            print(json.dumps({"enabled": on}))
+        else:
+            print("自动切号：%s" % ("开" if on else "关"))
 
 
 def cmd_live(args):
@@ -1412,7 +1492,11 @@ def main(argv):
     fn = CMDS.get(argv[0])
     if not fn:
         sys.exit("未知命令 '%s' —— 可用: %s" % (argv[0], " ".join(sorted(CMDS))))
-    fn(argv[1:])
+    try:
+        fn(argv[1:])
+    except P.PoolUnreadable as e:
+        _log("X 拒绝写池：%s" % e)
+        sys.exit("✗ %s" % e)
     return 0
 
 

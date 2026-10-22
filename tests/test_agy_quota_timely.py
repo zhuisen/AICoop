@@ -186,8 +186,6 @@ class TheSamplerBacksOffWhenCsrfIsRequired(unittest.TestCase):
         self.assertLess(body.index("if _csrf_backoff():"), body.index("take_lock("))
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class TheQuotaSummaryGoesToTheHostAgyActuallyUses(unittest.TestCase):
@@ -228,3 +226,7 @@ class TheQuotaSummaryGoesToTheHostAgyActuallyUses(unittest.TestCase):
         self.assertEqual(seen, ["daily-cloudcode-pa.googleapis.com"],
                          "★★★ 额度摘要没打 agy 1.2 的真后端 —— 会读到一个恒满的空账本")
         self.assertFalse(err)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -1,4 +1,4 @@
-import { type Account } from "../helpers";
+import { type Account, fmtAgeSec, winSlot } from "../helpers";
 import { isLow, tightestOf } from "../mbLogic";
 import QuotaRow, { type WinCell } from "./mb/QuotaRow";
 
@@ -27,23 +27,25 @@ export default function AccountRow({ a, isCurrent, isBest, bestPct, isDark, onSe
   const known = a.tightest >= 0 && !isDead && a.windows.length > 0;
   const delta = known && bestPct >= 0 ? a.tightest - bestPct : null;
 
+  // ★ 陈旧读数降不透明度 + 标龄（2026-10-22 评审：另外三家都有，codex 行几天前的数看起来和新的一样）
+  const staleTitle = a.quotaStale && a.quotaAgeSec != null ? `这是 ${fmtAgeSec(a.quotaAgeSec)}前的读数 —— 之后没再读到这个号` : undefined;
   const slot = (mins: (m: number) => boolean, label: string): WinCell | null => {
     const w = a.windows.find((x) => mins(x.mins));
-    return w ? { label, pct: w.pct, refill: w.reset, refillTitle: w.resetAt } : null;
+    return w ? { label, pct: w.pct, refill: w.reset, refillTitle: w.resetAt, dim: a.quotaStale, title: staleTitle } : null;
   };
   const wins: [WinCell | null, WinCell | null] = [
-    slot((m) => m > 0 && m < 1440, "5h"),
-    slot((m) => m >= 1440, "周"),
+    slot((m) => winSlot(m) === "5h", "5h"),
+    slot((m) => winSlot(m) === "w", "周"),
   ];
   // 一个窗口都对不上时长档（上游多出来一种窗口）：照原样按顺序放，不丢数。
   if (!wins[0] && !wins[1] && a.windows.length) {
     const [w0, w1] = a.windows;
-    wins[0] = { label: "5h", pct: w0.pct, refill: w0.reset, refillTitle: w0.resetAt };
-    if (w1) wins[1] = { label: "周", pct: w1.pct, refill: w1.reset, refillTitle: w1.resetAt };
+    wins[0] = { label: "5h", pct: w0.pct, refill: w0.reset, refillTitle: w0.resetAt, dim: a.quotaStale, title: staleTitle };
+    if (w1) wins[1] = { label: "周", pct: w1.pct, refill: w1.reset, refillTitle: w1.resetAt, dim: a.quotaStale, title: staleTitle };
   }
   const low = known && isLow(tightestOf(a.windows.map((w) => w.pct)));
 
-  const sub = isCurrent
+  const sub0 = isCurrent
     ? <span style={{ display: "flex", alignItems: "center", gap: 2, color: "var(--acc)" }}
             title="代理最近一次请求用的就是这个号"><Check />在用</span>
     : isBest ? <span style={{ color: "var(--acc)" }} title="代理下一个请求会挑这个号">下一个</span>
@@ -54,6 +56,13 @@ export default function AccountRow({ a, isCurrent, isBest, bestPct, isDark, onSe
     : delta != null ? <span style={{ fontFamily: "'JetBrains Mono', monospace", color: low ? "var(--bad)" : "var(--tx3)" }}>
         {delta === 0 ? "最优" : `${delta}%`}</span>
     : null;
+  // ★ 陈旧时号名下一行**看得见**读数年龄（同 Claude 行「N 小时前读数」）：只靠降透明度 + 悬停，
+  //   不悬停看不出是几天前的数（阶段 A 评审）。
+  const sub = known && a.quotaStale && a.quotaAgeSec != null
+    ? <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        {sub0}<span data-mb-acct-stale="" style={{ color: "var(--warn)" }} title={staleTitle}>
+          {fmtAgeSec(a.quotaAgeSec).replace(" ", "")}前</span></span>
+    : sub0;
 
   return (
     <QuotaRow platform="codex" isDark={isDark} name={a.node} sub={sub}

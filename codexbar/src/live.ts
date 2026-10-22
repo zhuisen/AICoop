@@ -17,7 +17,7 @@ export const PLATFORM_NAME: Record<PlatformKey, string> = {
 
 /** 交接包 README「平台顺序与颜色」。main = 主色 / 光晕；num = 数字色（按底色深浅）。 */
 export const PLATFORM_HUE: Record<PlatformKey, { main: string; numDark: string; numLight: string }> = {
-  codex: { main: "#2DD4BF", numDark: "#5EEAD4", numLight: "#0E9F8E" },
+  codex: { main: "#2DD4BF", numDark: "#5EEAD4", numLight: "#0E7A6E" },  // ★ 浅色 #0E9F8E 白底只有 3.30:1（全方面评审 §8）
   claude: { main: "#E0784F", numDark: "#F09A76", numLight: "#C2562F" },
   agy: { main: "#4D9FFF", numDark: "#7AB8FF", numLight: "#2B6FD6" },
   grok: { main: "#8B7CF6", numDark: "#B9AEFB", numLight: "#6B5BD6" },

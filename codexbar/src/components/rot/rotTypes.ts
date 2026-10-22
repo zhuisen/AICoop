@@ -65,6 +65,10 @@ export interface Rotation {
     tail_truncated: boolean; window_covered: boolean; tail_bytes: number;
     covers_from: number | null;
     log_begins_at: number | null; log_begins_reason: "ok" | "undated_head" | "unreadable";
+    /** 读不了 / 解压不了的会话文件（codex rollout · agy 日志 · agy 会话库）份数。缺 = 老后端，当 0。 */
+    rollouts_unreadable?: number; logs_unreadable?: number; dbs_unreadable?: number;
+    /** state.json 读不出的原因（null = 读到了）：读不到时「已移除」是未知，不是每个号都移除了。 */
+    state_error?: string | null;
   };
 }
 

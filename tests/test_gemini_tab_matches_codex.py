@@ -203,8 +203,6 @@ class TheHarnessCanReachTheExpandedCard(unittest.TestCase):
         self.assertIn("[data-cards-grid] > div", h, "★ 点的不是卡片本体")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ClickingARowGoesToTheOverviewNotTheUsagePage(unittest.TestCase):
@@ -272,3 +270,5 @@ class ClickingARowGoesToTheOverviewNotTheUsagePage(unittest.TestCase):
 #   新契约与闸在 `tests/test_overview_shortcut_switches_tab.py`。
 
 
+if __name__ == "__main__":
+    unittest.main()

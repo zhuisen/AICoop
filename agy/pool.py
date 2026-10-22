@@ -166,20 +166,37 @@ def _lock(path):
     return _L()
 
 
+#: `load()` 读不出池文件时在返回值里留的标记（值 = 原因）。带着它的池 `save` 一律拒写。
+UNREADABLE = "_unreadable"
+
+
+class PoolUnreadable(Exception):
+    """池文件在、却读不出来（坏 JSON / 权限 / 形状不对）时拒绝写入。"""
+
+
 def load():
-    """→ `{"accounts": {sub: {...}}, ...}`。读不到/坏了一律返回空池，**不抛**。"""
+    """→ `{"accounts": {sub: {...}}, ...}`。**不抛**。
+
+    ★ 「没有」与「读不出」分开（全方面评审 §10）：文件不存在 ⇒ 空池（确实没有）；文件在却读不出 ⇒
+      空池 + `UNREADABLE` 原因 —— 原来两者都是空池，之后任何一次 `save` 都会把整池登记抹掉。
+      带标记的池 `save` 拒写（`PoolUnreadable`）。读的一侧照常拿到空池，不至于整个命令起不来。"""
     try:
         with open(POOL, encoding="utf-8") as fh:
             d = json.load(fh)
-        if isinstance(d, dict) and isinstance(d.get("accounts"), dict):
-            return d
-    except (OSError, ValueError):
-        pass
-    return {"accounts": {}}
+    except FileNotFoundError:
+        return {"accounts": {}}
+    except (OSError, ValueError) as e:
+        return {"accounts": {}, UNREADABLE: "%s: %s" % (type(e).__name__, e)}
+    if isinstance(d, dict) and isinstance(d.get("accounts"), dict):
+        return d
+    return {"accounts": {}, UNREADABLE: "形状不对：没有 accounts 字典"}
 
 
 def save(pool):
     """原子落盘。★ 带 pid 的临时名：多个进程可能同时写，共用一个临时名会互相截断。"""
+    if pool.get(UNREADABLE):
+        raise PoolUnreadable("读不出 %s（%s）—— 为了不把整池登记抹掉，这次不写。修好或移走这个文件后重试"
+                             % (POOL, pool[UNREADABLE]))
     POOL.parent.mkdir(parents=True, exist_ok=True)
     tmp = "%s.tmp%d" % (POOL, os.getpid())
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -1020,7 +1037,7 @@ def board(pool, live_sub, now=None):
     """
     now = time.time() if now is None else now
     accs = pool.get("accounts") or {}
-    pinned = list(pool.get("pinned") or [])
+    pinned = [x for x in (pool.get("pinned") or []) if x in accs]   # 池里已没有的号不算，否则序号整体错一位
 
     def ent(sub):
         a = accs.get(sub) or {}
@@ -1064,4 +1081,6 @@ def board(pool, live_sub, now=None):
         "burn_pp_per_hour": None, "runway_hours": None, "rate_span_h": None, "burst": None,
         "first_reset_h": None, "outlasts_reset": False,
         "samples": 0, "last_sample_min": None,
+        # 池文件读不出来时的原因（None = 读到了）。★ 空队列可能是「读不出」不是「没有号」
+        "pool_error": pool.get(UNREADABLE),
     }

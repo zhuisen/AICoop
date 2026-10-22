@@ -54,6 +54,8 @@ export interface ReqPayload {
   ok: boolean;
   error: string | null;
   stale_since: number | null;
+  /** 读失败的是哪几家（`"*"` = 全部 / 账本本身）。只有这几家的行降透明度，别家照常。 */
+  failed: string[];
   generated_at: number | null;
   requests: ReqRow[];
   days: { today: DayInfo; yesterday: DayInfo };
@@ -110,6 +112,8 @@ export function parsePayload(raw: unknown): ReqPayload {
     ok: v.ok !== false,
     error: str(v.error),
     stale_since: num(v.stale_since),
+    failed: Array.isArray(v.failed) ? v.failed.filter((x): x is string => typeof x === "string")
+      : v.ok === false ? ["*"] : [],
     generated_at: num(v.generated_at),
     requests: rows,
     days: { today: parseDay(days.today), yesterday: parseDay(days.yesterday) },
@@ -364,4 +368,9 @@ export function selectedIndex(list: readonly ReqRow[], selKey: string | null): n
   if (!list.length) return -1;
   const i = selKey == null ? -1 : list.findIndex((r) => r.key === selKey);
   return i >= 0 ? i : 0;
+}
+
+/** 这一行要不要按「读失败」降透明度：只看这一行所属的那一家（全方面评审 §5：一家报错，四家整表一起变灰）。 */
+export function rowStale(failed: readonly string[] | null, platform: string): boolean {
+  return !!failed && (failed.includes("*") || failed.includes(platform));
 }

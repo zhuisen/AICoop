@@ -38,6 +38,7 @@ import {
   SUB_WARN_DAYS, blockTitle, daysUntil, isLow, lowNotice, mergeNotices, nameColWidth, poolDry, poolDryNotice,
   reopenResets, sortByAvailability, subNotice, tightestOf, type Notice, type SortKey,
 } from "./mbLogic";
+import { getSettings } from "./pages/SettingsPage";
 import "./App.css";
 import "./menubar.css";
 
@@ -75,8 +76,10 @@ const PANEL_W = 352;          // ★ 三处必须一致，由 tests/test_menubar
 const PANEL_H_MAX = 640;
 /** 下限。低于此值 Tab 条 + 摘要 + 底栏就开始互相挤,而那种状态只会出现在数据还没到齐时。 */
 const PANEL_H_MIN = 320;
-/** 上次量到的「今日」Tab 高度。★ 必须持久化 —— 冷启动停在账号页时那一页量不到。 */
-const H_KEY = "codexbar_mb_h";
+/** 上次量到的「今日」Tab 高度（**不含「在跑」条**）。★ 必须持久化 —— 冷启动停在账号页时那一页量不到。
+ *  ★ 键名带版本：旧键 `codexbar_mb_h` 存的是**含**在跑条的高度，换了含义沿用旧键会把在跑条加两次（阶段 B 评审）。
+ *    旧值不迁移：分不出当时在跑条是开是合，宁可先用缺省值，第一次进「今日」页就量准。 */
+const H_KEY = "codexbar_mb_h_base";
 /** 首次运行、还没量过时用的值。就是 2026-09-06 之前写死的那个常量。 */
 const PANEL_H_FALLBACK = 580;
 
@@ -180,6 +183,18 @@ export default function MenuBar() {
   const [stripOpen, setStripOpen] = useState<boolean>(loadStrip);
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // ⋯ 菜单点外面 / Esc 收起（2026-10-22 评审：原来只能再点一次 ⋯）
+  useEffect(() => {
+    if (!menuOpen) return;
+    const down = (e: MouseEvent) => {
+      const el = e.target as Element | null;
+      if (!el?.closest?.("[data-mb-menu], [data-mb-more]")) setMenuOpen(false);
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [menuOpen]);
   const setPlat = useCallback((v: MbPlat) => {
     setPlatState((cur) => { setPrevPlat(cur); return v; });
     setNoticeOpen(false);
@@ -275,6 +290,7 @@ export default function MenuBar() {
       if (main) {
         try { await main.center(); } catch { /* 居中失败不该影响已发出的跳转 */ }
       }
+      hiddenAt.current = Date.now();   // 不赌 hide() 一定先发失焦（「1 分钟内重开保持原样」靠它）
       getCurrentWindow().hide();
     } catch (e) { console.error(e); }
   }, []);
@@ -300,7 +316,16 @@ export default function MenuBar() {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    let h = loadPanelH();
+    // ★ 记住的是**不含「在跑」条**的高度（全方面评审 §7.4）：在跑条两个 Tab 都画，展开时量到的高度
+    //   原来连它一起记进 localStorage ⇒ 收起后（尤其在账号页，那里不重量）面板一直多出那一截。
+    //   现在窗口高 = 记住的底高 + 在跑条此刻的高，两页都跟着它伸缩。
+    let base = loadPanelH();
+    const stripH = () => {
+      const s = el.querySelector<HTMLElement>("[data-mb-strip]");
+      return s ? Math.round(s.getBoundingClientRect().height) : 0;
+    };
+    const clampH = (v: number) => Math.max(PANEL_H_MIN, Math.min(PANEL_H_MAX, v));
+    let h = clampH(base + stripH());
     // ★ 把当前高度喂给 CSS,让 `.mb-root` 的 max-height 与 `setSize` 的钳位**同源**。
     //   写死在 CSS 里就成了第二个真源,改一处忘一处 = 裁切或留白。
     el.style.setProperty("--mb-max-h", `${h}px`);
@@ -328,15 +353,20 @@ export default function MenuBar() {
       //    装不下时被 `--mb-max-h` 钳住、由 `.mb-today` 自己滚 —— 所以
       //    `自然高 = root 当前高 + 今日页溢出的那一截`,两种情形一个式子。
       const inner = el.querySelector<HTMLElement>(".mb-today");
+      const sh = stripH();
       if (tab === "today" && today && inner) {
         const overflow = Math.max(0, inner.scrollHeight - inner.clientHeight);
         const want = Math.round(el.getBoundingClientRect().height) + overflow;
-        const clamped = Math.max(PANEL_H_MIN, Math.min(PANEL_H_MAX, want));
-        if (Math.abs(clamped - h) >= 4) {        // 死区:躲开亚像素抖动造成的来回缩放
-          h = clamped;
-          el.style.setProperty("--mb-max-h", `${h}px`);
-          try { localStorage.setItem(H_KEY, String(h)); } catch { /* ignore */ }
+        const b = clampH(want - sh);
+        if (Math.abs(b - base) >= 4) {           // 死区:躲开亚像素抖动造成的来回缩放
+          base = b;
+          try { localStorage.setItem(H_KEY, String(base)); } catch { /* ignore */ }
         }
+      }
+      const nh = clampH(base + sh);
+      if (Math.abs(nh - h) >= 2) {
+        h = nh;
+        el.style.setProperty("--mb-max-h", `${h}px`);
       }
       if (Math.abs(h - last) < 2) return;
       // ★ **成功之后才记账**。原来是先 `last = h` 再 `setSize(...).catch(() => {})` ——
@@ -350,6 +380,9 @@ export default function MenuBar() {
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
+    // 在跑条在账号页伸缩时根节点被 max-height 钳住、尺寸不变 ⇒ 只观察根节点收不到，要单独观察它。
+    const strip = el.querySelector<HTMLElement>("[data-mb-strip]");
+    if (strip) ro.observe(strip);
     // ★ **弹出时必量一次**。这是唯一能保证窗口可见、且尺寸真正被用户看到的时刻 ——
     //   不依赖 RO 有没有触发、也不依赖隐藏态的 setSize 是否成功。
     //   `menubar-shown` 是 Rust 在 `win.show()` 之后发的(见 lib.rs 的 `toggle_menubar`)。
@@ -363,7 +396,7 @@ export default function MenuBar() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.metaKey) return;
-      if (e.key === "w") { e.preventDefault(); getCurrentWindow().hide(); }
+      if (e.key === "w") { e.preventDefault(); hiddenAt.current = Date.now(); getCurrentWindow().hide(); }
       if (e.key === "r" && !e.shiftKey) { e.preventDefault(); refresh(); }
     };
     window.addEventListener("keydown", handler);
@@ -429,6 +462,8 @@ export default function MenuBar() {
    * ★ 重置卡是 **codex** 专属的；挂在别家档上说的是另一家的事。
    */
   const notices: Notice[] = [];
+  // 订阅到期提醒天数跟设置页走（与总览、系统通知同一个数）
+  const subWarnDays = getSettings().subExpiryWarnDays ?? SUB_WARN_DAYS;
   if (plat === "codex" && cardAlert && bannerVisible(cardAlert)) {
     notices.push({ id: "card", tone: "warn", urgency: cardAlert.cardDays ?? 0, dismissible: true,
                    text: `${cardAlert.node} ${cardAlert.cardsExpiring || 1} 张重置卡 ${cardLeftText(cardAlert.cardDays ?? 0)}后作废` });
@@ -437,7 +472,7 @@ export default function MenuBar() {
     for (const a of alive) {
       for (const w of a.windows) if (isLow(w.pct)) notices.push(lowNotice(a.aid, a.node, w.label, w.pct, w.reset));
       const left = a.expStale ? null : daysUntil(a.exp, Date.now());
-      if (left != null && left >= 0 && left <= SUB_WARN_DAYS) notices.push(subNotice(a.aid, a.node, left, a.exp));
+      if (left != null && left >= 0 && left <= subWarnDays) notices.push(subNotice(a.aid, a.node, left, a.exp));
     }
   } else if (plat === "gemini") {
     for (const r of agyRows) {
@@ -478,9 +513,16 @@ export default function MenuBar() {
    *   Claude 只重读本机的状态栏转写 —— 所以「免费」那个徽章四档都成立。
    */
   const refreshPool = () => {
-    if (plat === "gemini") { agyPool.refresh(); showToast("已刷新 Gemini · 免费"); return; }
-    if (plat === "grok") { refreshGrok(); showToast("已刷新 Grok · 免费"); return; }
-    if (plat === "claude") { refreshClaude(); showToast("已重读 Claude 额度 · 本机"); return; }
+    // ★ 等结果出来再说「已刷新」（2026-10-22 评审：原来子进程还没跑完就报成功，失败了也说刷新了）
+    if (plat === "gemini") {
+      void agyPool.refresh().then((ok) => showToast(ok === null ? "Gemini 正在刷新" : ok ? "已刷新 Gemini · 免费" : "✗ Gemini 刷新失败"));
+      return;
+    }
+    if (plat === "grok") { void refreshGrok().then((ok) => showToast(ok ? "已刷新 Grok · 免费" : "✗ Grok 刷新失败")); return; }
+    if (plat === "claude") {
+      void refreshClaude().then((ok) => showToast(ok === null ? "Claude 正在重读" : ok ? "已重读 Claude 额度 · 本机" : "✗ Claude 额度读不到"));
+      return;
+    }
     run("refresh-all", ["refresh-all", "--notify"], "已刷新全池");
   };
 
@@ -507,7 +549,8 @@ export default function MenuBar() {
   const nameW = nameColWidth(plat === "codex" ? alive.map((a) => a.node)
     : plat === "gemini" ? agyRows.map((r) => r.a.label) : plat === "claude" ? ["本机"] : ["grok"]);
   const blockHead = plat === "grok" ? "当前号 · 只读" : plat === "claude" ? "本机 · 状态栏转写" : blockTitle(sortKeys);
-  const refreshing = loadingAction === "refresh-all";
+  // 进行态跟着当前这一档走：Gemini / Grok 的刷新不经 `loadingAction`，只认它会让按钮几秒内毫无反应、诱发连点（阶段 A 评审）
+  const refreshing = plat === "gemini" ? agyPool.busy : plat === "grok" ? grokBusy : loadingAction === "refresh-all";
 
   return (
     <div ref={rootRef} className={`mb-root ${isDark ? "th-dark" : "th-light"}`}
@@ -644,8 +687,8 @@ export default function MenuBar() {
                       isCurrent={a.sub === agyPool.liveSub}
                       isBest={mbAgyBoard?.next?.aid === a.sub && a.sub !== agyPool.liveSub}
                       onSwitch={a.sub === agyPool.liveSub ? undefined
-                        : () => { agyPool.switchTo(a.label);
-                                  showToast(`已切到 ${a.label} · 下次启动 agy 生效`); }}
+                        : () => { void agyPool.switchTo(a.label).then((ok) =>
+                                    showToast(ok ? `已切到 ${a.label} · 下次启动 agy 生效` : `✗ 没切过去：${a.label}`)); }}
                       switching={agyPool.switching === a.label}
                       disabled={!!prefs.by?.agy?.off} busy={agyBusy}
                       onOpen={() => openOverview("agy")} />

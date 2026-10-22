@@ -171,8 +171,6 @@ class NoTestSpawnsClaudeByAbsolutePath(unittest.TestCase):
             "重定向指回了仓库目录 —— 等于没重定向")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class EveryScriptSpawningTestImportsTheIsolation(unittest.TestCase):
@@ -222,3 +220,7 @@ class TheRealKeychainRefusesFixtureCredentials(unittest.TestCase):
         finally:
             P.subprocess.run, P._keyring_on = orig_run, orig_on
         self.assertEqual(calls, [], "★★★ 夹具凭证走到了 `security` —— 真钥匙串会被覆盖")
+
+
+if __name__ == "__main__":
+    unittest.main()

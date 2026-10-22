@@ -106,6 +106,25 @@ export function pickIdleSlots(ps: IdlePlatform[], o: IdleOptions): IdleSlot[] {
   return rest.length ? [...out, mk(rest[0].key, "dynamic")] : out;
 }
 
+/**
+ * 今天冻结的常驻位，在「常驻换了人」时怎么更新。
+ * ★ 藏着的（`hidden`）**留在原来的位置**（全方面评审 §8：原来整份换成此刻的常驻 ⇒ 藏到期回来时顺序变了）；
+ *   顶上来的排在后面。藏着的回来后 `pickIdleSlots` 按这个顺序取前两位，它就回到原位。
+ */
+export function mergeFrozen(keep: readonly string[], resident: readonly string[], hidden: readonly string[]): string[] {
+  const h = new Set(hidden);
+  return [...keep.filter((k) => resident.includes(k) || h.has(k)), ...resident.filter((k) => !keep.includes(k))];
+}
+
+/**
+ * Claude 的一个窗口此刻的剩余：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口 ⇒ 未知（读数 5 分钟才更新一次）。
+ * ★ 空闲托盘与刘海共用这一个判据（全方面评审 §9：刘海原来直接用 `rem`，过了重置点仍显示旧窗口、旧的 5% 还会告警）。
+ */
+export function claudeRem(w: { idle?: boolean; resetsAt: number | null; rem: number | null } | null | undefined, now: number): number | null {
+  if (!w) return null;
+  return !w.idle && w.resetsAt !== null && w.resetsAt * 1000 <= now ? null : w.rem;
+}
+
 /** 托盘认得的六家（顺序 = Rust `tray_idle::KEYS`）。别的平台没有托盘 logo，不参与。 */
 export const TRAY_KEYS = ["codex", "claude", "agy", "grok", "kimi", "deepseek"] as const;
 

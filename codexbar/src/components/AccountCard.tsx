@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Account } from "../helpers";
-import { QUOTA_STALE_SEC, fmtAgeSec, maskId } from "../helpers";
+import { QUOTA_STALE_SEC, fmtAgeSec, maskId, winSlot } from "../helpers";
 import type { Theme } from "../theme";
 import type { OvState } from "../overview";
 import { deltaText, fmtClock, fmtDur } from "../overview";
@@ -63,8 +63,8 @@ export default function AccountCard({ a, state, isDirect, borrowOff, bestPct, pr
   const [creditOpen, setCreditOpen] = useState(false);
   const off = !a.rotates && state !== "dead";
   const pct = a.windows.length ? a.tightest : null;
-  const five = a.windows.find((w) => w.mins > 0 && w.mins < 1000) ?? null;
-  const week = a.windows.find((w) => w.mins >= 10000) ?? null;
+  const five = a.windows.find((w) => winSlot(w.mins) === "5h") ?? null;
+  const week = a.windows.find((w) => winSlot(w.mins) === "w") ?? null;
   const toWin = (w: Account["windows"][number] | null, kind: "5h" | "w"): OvWin => {
     const label = kind === "5h" ? "5h" : "周";
     if (!w) return { label, pct: null, reset: "", kind, absent: true,
@@ -133,7 +133,7 @@ export default function AccountCard({ a, state, isDirect, borrowOff, bestPct, pr
   const fire = useProbeFire(onProbe, probing);
   const menu = (
     <CardMenu onOpenChange={setMenuOpen} items={[
-      ...(state === "dead" ? [] : [{ key: "probe", label: "探针 · 计费", icon: <IcBolt />, warn: true, narrow: true, onClick: fire }]),
+      ...(state === "dead" ? [] : [{ key: "probe", label: probing ? "探针中…" : "探针 · 计费", icon: <IcBolt />, warn: true, narrow: true, disabled: probing, onClick: fire }]),
       { key: "detail", label: "详情", icon: <IcInfo />, onClick: onShowDetail },
       { key: "remove", label: "删除", icon: <IcTrash />, bad: true, onClick: onRemove },
     ]} />

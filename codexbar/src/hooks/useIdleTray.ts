@@ -5,12 +5,12 @@ import { fmtEta, type Account } from "../helpers";
 import type { PlatformPrefs, TrafficData } from "../traffic";
 import { agyResetText, agyShown, agyWinRows, type AgySnapshot } from "../agy";
 import { grokLastGoodRemPct, grokRemPct, type GrokSnapshot } from "../grok";
-import { parseClaudeQuota, type ClaudeQuota, type ClaudeWin } from "../mbLogic";
+import { parseClaudeQuota, type ClaudeQuota } from "../mbLogic";
 import { useAgyPool } from "./useAgyPool";
 import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
 import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
-         weeklyWarns, IDLE_SNOOZE_EVENT, SNOOZE_KEY, liveSnoozes, snoozeUntil,
-         type IdlePanelData, type IdleWarn, type PanelIn, type Snoozed } from "../idleTray";
+         weeklyWarns, IDLE_SNOOZE_EVENT, SNOOZE_KEY, liveSnoozes, snoozeUntil, claudeRem,
+         mergeFrozen, type IdlePanelData, type IdleWarn, type PanelIn, type Snoozed } from "../idleTray";
 
 /** Claude 额度转写只在 Claude Code 刷新状态栏时才变：与总览 `useClaudeQuota` 同一个间隔（60 s）。
  *  ★ 原来 5 分钟：刚停手就悬停，面板比总览旧最多 5 分钟（2026-10-21 复查 B1）。另在托盘弹出 / 光标靠近托盘时读。 */
@@ -55,11 +55,6 @@ function loadHello(): number | null {
  * ★ 排名每天冻结一次（P11 §2「顺序与稳定」）：跨了本地午夜、空闲、鼠标不在托盘上时才换上新常驻。
  *   固定 / 位数 / 排序依据 / 统计窗口是用户的动作，改了立刻生效。
  */
-/** Claude 的一个窗口此刻的剩余：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口 ⇒ 未知（读数 5 分钟才更新一次）。 */
-function claudeRem(w: ClaudeWin | null | undefined, now: number): number | null {
-  if (!w) return null;
-  return !w.idle && w.resetsAt !== null && w.resetsAt * 1000 <= now ? null : w.rem;
-}
 
 export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | null, prefs: PlatformPrefs,
                             running: boolean): void {
@@ -185,7 +180,8 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     // 这一次没读到、拿的是上一次的读数（agy `last_good` / grok 上一次成功）⇒ 面板上降一级灰
     // agy 的 5h 行是沿用的旧读数（`seen_at`：这次没返回这个桶）⇒ 同样降一级灰（同刘海 / AgyCard，复查 B7）
     const stale: Record<string, boolean> = { agy: agyStale || a5?.seen_at != null, grok: gNow === null && gRem !== null };
-    mainReset.current = { codex: null, claude: claude?.fiveH && !claude.fiveH.idle ? claude.fiveH.resetsAt : null,
+    // ★ Codex 也按真实重置时刻藏（全方面评审 §8，三方一致：原来恒 null ⇒ 一律 5 h）；窗口没锚定 ⇒ null ⇒ 5 h
+    mainReset.current = { codex: w5?.resetsAtSec ?? null, claude: claude?.fiveH && !claude.fiveH.idle ? claude.fiveH.resetsAt : null,
                           agy: a5?.reset_at ?? null, grok: gPeriodEnd ?? null };
     return TRAY_KEYS.filter((k) => !!traffic?.platforms[k] || !prefs.by[k]?.off).map((k) => {
       const [m, r] = main[k] ?? [null, ""];
@@ -235,7 +231,12 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const resident = slots.filter((s) => s.kind === "resident").map((s) => s.key);
     // 冻结的常驻只增不换：今天新用了一家、补进了空着的常驻位 ⇒ 记进去（日期不变），之后它也不在白天被挤走
     if (!keep) { frozen.current = { day: dayKey(now), keep: resident, sig }; saveFrozen(frozen.current); }
-    else if (resident.some((k) => !keep.includes(k))) { frozen.current = { day: f!.day, keep: resident, sig }; saveFrozen(frozen.current); }
+    // ★ 藏着的那家**留在冻结表里原来的位置**（全方面评审 §8：原来整份换成此刻的常驻，藏到期回来时顺序变了）。
+    //   顶上来的那家排在后面；藏着的回来后 `pickIdleSlots` 按冻结表顺序取前两位，它就回到原位。
+    else if (resident.some((k) => !keep.includes(k))) {
+      frozen.current = { day: f!.day, keep: mergeFrozen(keep, resident, snoozed.map((z) => z.key)), sig };
+      saveFrozen(frozen.current);
+    }
     // 选「文字标题」时托盘里没有 logo ⇒ 面板没有「菜单栏里的那几家」，按排名排；「只看菜单栏」在这时没有对象 ⇒ 按「用过的」
     const bar = cfg.idleIcons ? slots : [];
     const scope = !cfg.idleIcons && cfg.idleHoverScope === "bar" ? "used" : cfg.idleHoverScope;
@@ -246,8 +247,9 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
       warns,
       snoozed,
     };
-    // 同一份就不再发：Rust 每收一次都会重画一张 NSImage。`cells` = 面板有几格（0 格时 Rust 不弹空面板）
-    const tray = JSON.stringify({ enabled: cfg.idleIcons, slots: trayPayload(slots), cells: next.cells.length });
+    // 同一份就不再发：Rust 每收一次都会重画一张 NSImage。`cells` = 面板有几行内容（格子 + 「已隐藏」行；
+    // 0 时 Rust 不弹空面板）。★ 「已隐藏」行也算：全藏了以后它是唯一的撤销入口（全方面评审 §8）
+    const tray = JSON.stringify({ enabled: cfg.idleIcons, slots: trayPayload(slots), cells: next.cells.length + (next.snoozed?.length ?? 0) });
     if (tray !== lastTray.current) {
       lastTray.current = tray;
       invoke("set_idle_tray", JSON.parse(tray) as Record<string, unknown>).catch(() => { lastTray.current = ""; });

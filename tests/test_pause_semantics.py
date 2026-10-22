@@ -259,8 +259,6 @@ class TheLastUsableAccountIsStillProtected(_Cli):
         self.assertIn("仍是 active", out)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheUiNeverProposesAPausedAccount(unittest.TestCase):
@@ -315,3 +313,7 @@ class TheUiNeverProposesAPausedAccount(unittest.TestCase):
         body = cli[cli.index("def cmd_switch"):cli.index("def cmd_switch") + 2000]
         self.assertIn("paused(", body, "cmd_switch 不再检查暂停状态")
         self.assertIn("拒绝", body)
+
+
+if __name__ == "__main__":
+    unittest.main()

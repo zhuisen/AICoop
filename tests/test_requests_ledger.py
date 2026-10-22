@@ -519,9 +519,11 @@ class LiveShowsTheLastMeasuredSpeed(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="requests-live-test-")
         self.addCleanup(shutil.rmtree, tmp, True)
         rs = {}
-        for i, (dt, tps, est, sess) in enumerate(recs):
+        for i, rec in enumerate(recs):
+            dt, tps, est, sess = rec[:4]
             rs["claude:r%d" % i] = {"key": "claude:r%d" % i, "platform": "claude", "session": sess,
-                                    "t_end": now - dt, "tps": tps, "est": est, "input": 1, "output": 1}
+                                    "t_end": now - dt, "tps": tps, "est": est, "input": 1, "output": 1,
+                                    "model": rec[4] if len(rec) > 4 else "m"}
         with mock.patch.object(RQ, "update", return_value=(rs, {"files": {}}, {})):
             out = RQ.build_live(now, rt={"ledger": tmp})
         return {s["id"]: s for s in out["platforms"]["claude"]["sessions"]}
@@ -536,9 +538,33 @@ class LiveShowsTheLastMeasuredSpeed(unittest.TestCase):
 
     def test_a_session_with_only_estimates_shows_a_dash(self):
         """★ 2026-10-22 三方评审一致（用户在 PLAN 上拍板）：托盘只用实测。原来退回估值，不加「估」字地显示
-        5.2 / 31.7 t/s，会被读成「模型变慢了」。"""
+        5.2 / 31.7 t/s，会被读成「模型变慢了」。同模型也没有实测 ⇒ 仍是 —。"""
         by = self.live([(30, 20.0, True, "S"), (5, 35.0, True, "S")])
         self.assertIsNone(by["S"]["tps"], "一条实测都没有 ⇒ null（托盘写 —），不退回估值")
+
+    def test_only_estimates_falls_back_to_the_models_measured_median(self):
+        """★ 用户 2026-10-23「整包下发……或者取平均」：argon 约 89% 是整包，会话里常常一条实测都没有。
+        用同一模型的实测中位数，不用整包自己的估值（中位 31 vs 实测 116，同模型忽快忽慢）。"""
+        by = self.live([(300, 100.0, False, "O", "argon"), (200, 120.0, False, "O", "argon"),
+                        (100, 140.0, False, "P", "argon"), (50, 999.0, False, "F", "flash"),
+                        (5, 31.0, True, "S", "argon")])
+        self.assertEqual(by["S"]["tps"], 120.0, "★ 同模型实测中位数（不混别的模型、不用整包估值）")
+        self.assertTrue(by["S"].get("tps_model_avg"))
+        self.assertNotIn("tps_model_avg", by["O"], "有自己实测的会话不标")
+
+    def test_a_measured_value_from_before_midnight_still_counts(self):
+        """★ 用户 2026-10-23「Gemini 经常 — t/s」：只看今天时，过了午夜、今天几条恰好全是整包估值的会话一律 —。"""
+        now = time.time()
+        before = now - RQ._local_midnight(now, 0) + 600          # 昨天 23:50
+        by = self.live([(before, 116.0, False, "S"), (5, 31.0, True, "S")])
+        self.assertEqual(by["S"]["tps"], 116.0, "★ 午夜之前的实测也算这个会话最近一条实测")
+        self.assertEqual(by["S"]["tokens"], 2, "token 仍只算今天")
+
+    def test_a_session_seen_only_yesterday_is_not_listed(self):
+        now = time.time()
+        before = now - RQ._local_midnight(now, 0) + 600
+        by = self.live([(before, 116.0, False, "Y"), (5, 31.0, True, "S")])
+        self.assertNotIn("Y", by, "昨天的实测只给今天出现过的会话补速度，不把昨天的会话列出来")
 
     def test_last_t_end_still_follows_the_newest_record(self):
         by = self.live([(30, 118.0, False, "S"), (5, 5.1, True, "S")])

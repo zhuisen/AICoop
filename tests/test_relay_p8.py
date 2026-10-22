@@ -212,8 +212,18 @@ class Rendered(unittest.TestCase):
         pg.close()
         self.assertEqual([x[0] for x in r], ["codex", "cxp exec · omc", "\\codex", "cxd", "VS Code"])
         by = dict(r)
-        self.assertEqual(by["\\codex"], "走代理", "★★ `\\codex` 也走代理（PATH wrapper），稿画成直连是错的")
+        # 默认夹具 `conn=mixed`：wrapper 是别人的（external）
+        self.assertEqual(by["\\codex"], "看你的 wrapper")
         self.assertEqual(by["VS Code"], "不经过代理")
+
+    def test_backslash_codex_follows_the_wrapper_state(self):
+        """★★ `\\codex` 走不走代理取决于 PATH wrapper（全方面评审 §4：原来无条件写「走代理」）。"""
+        for conn, want in (("ready", "走代理"), ("fresh", "不经过代理"), ("mixed", "看你的 wrapper")):
+            with self.subTest(conn=conn):
+                pg = self._page(f"conn={conn}")
+                r = pg.evaluate("""() => [...document.querySelectorAll('[data-route-entry]')].map(e => [e.dataset.routeEntry, e.lastElementChild.textContent])""")
+                pg.close()
+                self.assertEqual(dict(r)["\\codex"], want)
 
     def test_hover_card_opens_after_delay_and_slides(self):
         pg = self._page()

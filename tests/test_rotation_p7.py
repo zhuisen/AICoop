@@ -89,8 +89,6 @@ class CoolingUntil(unittest.TestCase):
         self.assertIsNone(R._cooling_until(None, now))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # ── 前端（AICoop P7）：纯逻辑 `rotationView.ts` + 真 bundle 渲染 ─────────────────
@@ -260,3 +258,7 @@ class Rendered(unittest.TestCase):
         self.assertEqual(after[0], 0, "原始日志没有替换记录列表")
         self.assertGreater(after[1], 0)
         self.assertEqual(after[2], ["all", "refresh", "switch", "cool"], "★ 旧运行日志的筛选丢了")
+
+
+if __name__ == "__main__":
+    unittest.main()

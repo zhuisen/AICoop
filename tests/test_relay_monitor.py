@@ -287,8 +287,6 @@ class CollectNeverLeaksKeys(unittest.TestCase):
         self.assertIn(out["route"]["state"], known)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheSnapshotOnlyGrows(unittest.TestCase):
@@ -420,3 +418,7 @@ class ACrashNeverBurnsTheHistory(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "relay-ctl").read_text(encoding="utf-8")
         body = src[src.index("def cmd_usage"):src.index("def cmd_test")]
         self.assertIn('{"relays": [], "route": store.route_status()}', body)
+
+
+if __name__ == "__main__":
+    unittest.main()

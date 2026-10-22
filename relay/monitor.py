@@ -228,7 +228,9 @@ def normalize(raw):
     「余额读不到」和「余额是 0」在这里是两件事:前者该显示「—」,后者该报警。
     本仓在额度那边栽过同一个坑（`_headroom` 读不到返回 None 而不是 0）。
     """
-    g = lambda *ks: next((raw[k] for k in ks if isinstance(raw.get(k), (int, float))), None)
+    # ★ bool 是 int 的子类：`{"balance": true}` 会被读成余额 1（全方面评审 §4 存疑；上游没出现过，但口子要堵上）
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
+    g = lambda *ks: next((raw[k] for k in ks if num(raw.get(k))), None)  # noqa: E731
     usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
     total = usage.get("total") if isinstance(usage.get("total"), dict) else {}
     today = usage.get("today") if isinstance(usage.get("today"), dict) else {}
@@ -238,7 +240,7 @@ def normalize(raw):
 
     def money(d, k):
         v = d.get(k)
-        return v if isinstance(v, (int, float)) else None
+        return v if num(v) else None
 
     return {
         "balance": g("balance", "remaining"),

@@ -75,6 +75,13 @@ static LIVE_BUSY: AtomicBool = AtomicBool::new(false);
 static LIVE_ANY: AtomicBool = AtomicBool::new(false);
 /// 最近一次 `--live` 的各家「在跑」。None = 还没成功过 / 最近一次失败了（⇒ 光晕退回 FSEvents）。
 static LIVE_ACT: Mutex<Option<Activity>> = Mutex::new(None);
+/// 订阅代次：最后一个订阅者走时 +1。★ 阶段 D 评审 codex：退订清掉 `LIVE_ACT` 之后，还在路上的那次 `--live`
+///   回来又把旧结论写回去 ⇒ 重新订阅时照样先按旧的「在跑」亮。开跑时记下代次，回来时对不上就丢。
+static LIVE_GEN: AtomicU64 = AtomicU64::new(0);
+/// 发布锁：一次 live 结果的「核代次 → 写回 → 推光晕 → 广播 → 喂托盘」整段持有，`unsubscribe` 先拿它。
+/// ★ 阶段 F 评审 codex：只在 `LIVE_ACT` 锁里核代次，解锁后退订仍能插进来，旧结果照样 emit / `on_live`。
+///   锁内只做非阻塞的事（`emit` 投递到事件循环、`feed` 只拿托盘状态锁），不回主线程等待 ⇒ 不会死锁。
+static LIVE_PUB: Mutex<()> = Mutex::new(());
 /// 正在跑的那次 `--live` 是几时开跑的（秒，0 = 没在跑）。超过 `LIVE_HUNG_SECS` = 卡住。
 static LIVE_SINCE: AtomicU64 = AtomicU64::new(0);
 
@@ -230,7 +237,17 @@ pub fn subscribe(app: &AppHandle, who: u8) {
 
 /// 退订。最后一个退订后，检测线程在下一 tick 退出。
 pub fn unsubscribe(who: u8) {
-    CONSUMERS.fetch_and(!who, Ordering::SeqCst);
+    // ★ 最后一个订阅者走了 ⇒ 清掉最近一份 live 的结论（全方面评审 §8 存疑：原来留着，重新订阅时光晕先按
+    //   很久以前那份「在跑」亮一下，直到下一次 live 回来）
+    if CONSUMERS.fetch_and(!who, Ordering::SeqCst) & !who == 0 {
+        // ★ 与 `run_live_soon` 的「核代次 + 写回」同一把锁（阶段 E 评审 codex：检查与提交不原子，
+        //   检查通过 → 这里清空 → 旧线程照样写回）。
+        let _pub = LIVE_PUB.lock().unwrap();
+        let mut g = LIVE_ACT.lock().unwrap();
+        LIVE_GEN.fetch_add(1, Ordering::SeqCst);
+        *g = None;
+        LIVE_ANY.store(false, Ordering::SeqCst);
+    }
 }
 
 /// 活动检测线程。只在状态**变了**才推 `notch-activity`。
@@ -309,11 +326,24 @@ fn run_live_soon(app: &AppHandle, a: Activity) {
     if LIVE_BUSY.swap(true, Ordering::SeqCst) { return; }
     LIVE_SINCE.store(now_secs().max(1), Ordering::SeqCst);
     let app = app.clone();
+    let gen = LIVE_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
         let res = crate::run_live_blocking();
         let act = res.as_ref().ok().and_then(|b| live_activity(b));
-        *LIVE_ACT.lock().unwrap() = act;
-        LIVE_ANY.store(act.map(|x| x.any()).unwrap_or(a.any()), Ordering::SeqCst);
+        // 持到本次发布结束（见 `LIVE_PUB`）：退订要么整段在前（这里核代次就对不上），要么整段在后
+        let _pub = LIVE_PUB.lock().unwrap();
+        {
+            // ★ 核代次与写回在同一把锁里（`unsubscribe` 也拿它）：对不上 ⇒ 这份结果属于已经退订的那一轮，丢掉
+            let mut g = LIVE_ACT.lock().unwrap();
+            if LIVE_GEN.load(Ordering::SeqCst) != gen {
+                drop(g);
+                LIVE_SINCE.store(0, Ordering::SeqCst);
+                LIVE_BUSY.store(false, Ordering::SeqCst);
+                return;
+            }
+            *g = act;
+            LIVE_ANY.store(act.map(|x| x.any()).unwrap_or(a.any()), Ordering::SeqCst);
+        }
         LIVE_SINCE.store(0, Ordering::SeqCst);
         publish(&app);
         match res {

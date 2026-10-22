@@ -1,8 +1,8 @@
 name: release
 
-# 打 v* tag 时构建两个平台的产物并挂到 Release。
-# ★ 这是 Windows 端唯一的真实验证手段 —— 开发机只有 macOS,交叉编译只能证明"编译得过",
-#   证明不了打包、安装、WebView2 与托盘行为。CI 的 Windows leg 是真机构建。
+# 打 v* tag 时构建 macOS 产物并挂到 Release。
+# ★ Windows 已于 2026-10-19 取消（用户「取消 windows 版本的设计与发布」）：原来这里也是 Windows 端唯一的真实验证，
+#   现在矩阵只剩 macos-latest。
 on:
   push:
     tags: ['v*']

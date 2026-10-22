@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { coalesce } from "../coalesce";
 
 /**
  * 装机链路总闸 —— 「这台机器敲 `codex` / `cxp` 到底会不会走轮换」。
@@ -65,16 +66,16 @@ export function useIntegration(): {
 } {
   const [integration, setIntegration] = useState<Integration | null>(null);
 
-  const reload = useCallback(() => {
-    void (async () => {
-      try {
-        const raw = await invoke<string>("read_integration");
-        setIntegration(JSON.parse(raw) as Integration);
-      } catch (e: unknown) {
-        setIntegration(unknownFrom(String(e).slice(0, 80)));
-      }
-    })();
-  }, []);
+  // ★ 合流（全方面评审 §6）：每条 `state-changed` 都会叫它，而一次是一个 python。在途只许一个，
+  //   期间的事件合成一次尾随读取；结果按发起顺序回来，慢的旧结果盖不掉新的。
+  const reload = useMemo(() => coalesce(async () => {
+    try {
+      const raw = await invoke<string>("read_integration");
+      setIntegration(JSON.parse(raw) as Integration);
+    } catch (e: unknown) {
+      setIntegration(unknownFrom(String(e).slice(0, 80)));
+    }
+  }), []);
 
   useEffect(() => {
     reload();

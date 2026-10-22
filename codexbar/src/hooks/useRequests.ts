@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../pages/SettingsPage";
-import { parsePayload, toMs, type ReqPayload } from "../requests";
+import { parsePayload, type ReqPayload } from "../requests";
 
 /**
  * 「请求」页取数：`invoke("read_requests")` → `traffic/requests.py --json`（PLAN §2.3 / §2.1）。
@@ -29,6 +29,8 @@ export interface RequestsState {
   readAt: number | null;
   /** 最近一次读取失败的原因；null = 最近一次成功。 */
   err: string | null;
+  /** 读失败的是哪几家（`"*"` = 全部）；null = 最近一次成功。 */
+  failed: string[] | null;
   busy: boolean;
   retry: () => void;
 }
@@ -37,6 +39,7 @@ export function useRequests(enabled: boolean): RequestsState {
   const [payload, setPayload] = useState<ReqPayload | null>(null);
   const [readAt, setReadAt] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const inflight = useRef(false);
   const alive = useRef(true);
@@ -55,7 +58,7 @@ export function useRequests(enabled: boolean): RequestsState {
       const sig = raw.replace(/"generated_at":\s*[\d.]+/, "");
       if (sig === lastRaw.current) {
         setReadAt(Date.now());
-        setErr(null);
+        setErr(null); setFailed(null);
         return;
       }
       const p = parsePayload(raw);
@@ -63,16 +66,20 @@ export function useRequests(enabled: boolean): RequestsState {
         lastRaw.current = sig;
         setPayload(p);
         setReadAt(Date.now());
-        setErr(null);
+        setErr(null); setFailed(null);
       } else {
-        setPayload((prev) => (p.requests.length || !prev ? p : prev));
-        if (p.stale_since != null) setReadAt(toMs(p.stale_since));
+        // ★ 第一次就失败且一条都没有 ⇒ 留 null（页面写「读不到请求账本」），不塞空表冒充「今天还没有请求」（全方面评审 §5）
+        setPayload((prev) => (p.requests.length ? p : prev));
+        // ★ `readAt` 只在读成功时前进（阶段 B 评审）：`stale_since` 是「从什么时候开始读不到」，不是「数据是什么时候的」——
+        //   拿它当读取时刻会把 09:00 的旧数说成 10:05 读到的，第一次就失败时还会写出一个根本不存在的「读到时刻」。
         setErr(p.error ?? "请求账本读取失败");
+        setFailed(p.failed.length ? p.failed : ["*"]);
       }
     } catch (e: unknown) {
       if (!alive.current) return;
       // ★ 不动 payload / readAt —— 上次的列表与它的时间原样留着。
       setErr(e instanceof Error ? e.message : String(e));
+      setFailed(["*"]);
     } finally {
       inflight.current = false;
       if (alive.current) setBusy(false);
@@ -92,5 +99,5 @@ export function useRequests(enabled: boolean): RequestsState {
   }, [enabled, load]);
 
   const retry = useCallback(() => { void load(); }, [load]);
-  return { payload, readAt, err, busy, retry };
+  return { payload, readAt, err, failed, busy, retry };
 }

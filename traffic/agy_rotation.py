@@ -90,17 +90,25 @@ def _pool():
         return {}
 
 
-def sessions(start, end, log_dir=None, conv_files=None):
+def sessions(start, end, log_dir=None, conv_files=None, errs=None):
     """→ (segments, unattributed, earliest)。每段 `{email, start, end, file}`，已按身份变化切开。
 
     `conv_files`（可选 dict）顺手填 `{会话 id: {日志文件名…}}` —— token 归属用，省一遍读盘。
+    `errs`（可选 list）收读不了的日志（★ 读不了 ≠ 没运行过，全方面评审 §3）。文件在列目录之后被删不算。
     """
+    errs = errs if errs is not None else []
     d = log_dir or LOG_DIR
     segs, unattr, earliest = [], 0, None
+    # ★ `Path.glob()` 会把目录本身的权限错误吞成「一个都没有」（阶段 C 评审 codex）⇒ 先显式列目录。
+    #   目录不存在 = agy 没装 / 没跑过，那是「确实没有」，不算读错。
     try:
-        files = list(d.glob("cli-*.log"))
-    except OSError:
+        names = os.listdir(d)
+    except FileNotFoundError:
         return [], 0, None
+    except OSError as e:
+        errs.append("%s: %s" % (d, e))
+        return [], 0, None
+    files = [d / n for n in names if n.startswith("cli-") and n.endswith(".log")]
     for f in files:
         m = _NAME.search(f.name)
         if not m:
@@ -108,14 +116,22 @@ def sessions(start, end, log_dir=None, conv_files=None):
         try:
             t0 = time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S"))
             t1 = f.stat().st_mtime
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            errs.append("%s: %s" % (f.name, e))
+            continue
+        except ValueError:
             continue
         earliest = t0 if earliest is None else min(earliest, t0)
         if t1 < start or t0 > end:
             continue
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            errs.append("%s: %s" % (f.name, e))
             continue
         if conv_files is not None:
             for cid in set(_UUID.findall(text)):
@@ -221,13 +237,24 @@ def _union(spans):
 def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=None):
     now = time.time() if now is None else now
     end, start = now, now - hours * 3600
-    pool = _pool() if store is None else json.loads((store / ".agy-pool.json").read_text(encoding="utf-8"))
+    if store is None:
+        pool = _pool()
+    else:
+        try:
+            pool = json.loads((store / ".agy-pool.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pool = {}                             # 同 `_pool()`：池读不到 ⇒ 按邮箱前缀命名，不让整页没数
     accs = pool.get("accounts") or {}
     by_email = {(a.get("email") or "").lower(): (sub, a) for sub, a in accs.items()}
-    conv_files = {}
-    raw, unattr, earliest = sessions(start, end, log_dir, conv_files)
+    conv_files, log_errs = {}, []
+    raw, unattr, earliest = sessions(start, end, log_dir, conv_files, log_errs)
+    db_bad = 0
     if gens is None:
-        gens, _unreadable = generations(start, end, db_root)
+        gens, db_bad = generations(start, end, db_root)
+    if log_errs and not raw:
+        # ★ 一段都没读到、又有日志读不了 ⇒ 是「没看到」不是「没运行过」，不许画成空泳道
+        return {"ok": False, "platform": "agy", "reason": "unreadable",
+                "detail": "读不了 %d 份 agy 日志（%s）" % (len(log_errs), log_errs[0][:160])}
     evs_raw = switch_events(start, end, store)
 
     def label_of(email):
@@ -235,14 +262,31 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
         return hit[1].get("label") if hit else email.split("@")[0]
 
     segs = []
+    froms = []                                    # 每段「从谁变过来」：同一份日志里的变化取那份日志的上一段
     for i, s in enumerate(raw):
         acc = label_of(s["email"])
         prev = segs[-1]["acc"] if segs else None
         reason = "window_start" if prev is None else "same"
-        if prev is not None and prev != acc:
+        same_file = [k for k in range(i) if raw[k]["file"] == s["file"]]
+        moved = bool(same_file) and segs[same_file[-1]]["acc"] != acc
+        # ★ 同一份日志里身份变了，哪怕全局上一段恰好是同号的另一个进程，也是变化（阶段 D 评审两方：
+        #   A→B 中间另有进程以 B 起来，原来被外层 `prev != acc` 吞成 same、换号数 0）。
+        if prev is not None and (prev != acc or moved):
             logged = [e for e in evs_raw if s["start"] - 180 <= e[0] <= s["start"] + 5 and e[2] == acc]
+            # ★ 另一个 agy 进程此刻还在跑 ⇒ 是并行，不是「身份变了」（全方面评审 §3 存疑 3.9：本机 7 天 75 次 drift
+            #   里 13 次是这种）。常驻 agy 各自带着自己的身份，这是结构性的（memory.md §0e）。
+            #   ★ 同一份日志里身份变了 ⇒ 一定是那个进程自己换了身份，哪怕别处还有进程在跑（阶段 C 评审 codex：
+            #     原来只看「有没有异号段重叠」，会把真漂移吞成并行）。
+            #   ★ 看全部更早的段，不只最近 8 段（长时间并发会漏）；同号的旧进程还在跑也算（评审 gemini：
+            #     A 长会话中途 B 短暂并行，之后 A 再开一个进程，不是换号）。
+            #   本机 7 天实测（220 段、75 次身份变化）：旧判据（最近 8 段异号重叠）drift 62 · 看全部段 15 ·
+            #   现行 3（其中同一份日志内的变化 2）。⚠️ 这批数据分不清「新进程启动时钥匙串被常驻进程洗过」与
+            #   「本来就是这个身份」；「开头时另有进程在跑 ⇒ 不是交接」在两种情况下都成立，所以不叫 drift。
+            parallel = not moved and any(raw[k]["file"] != s["file"] and segs[k]["end"] > s["start"] + 1
+                                         for k in range(i))
             reason = ("borrow" if logged and logged[-1][1] == "borrow"
-                      else "switch" if logged else "drift")
+                      else "switch" if logged else "parallel" if parallel else "drift")
+        froms.append(segs[same_file[-1]]["acc"] if moved else prev)
         segs.append({"acc": acc, "start": s["start"], "end": s["end"], "requests": 1, "tokens": 0,
                      "by_model": {}, "enter_reason": reason,
                      "current": s["end"] >= now - 90})
@@ -304,11 +348,11 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
               for (t, k, lab, _b) in evs_raw]
     for i, s in enumerate(segs):
         if i and s["enter_reason"] == "drift":
-            events.append({"t": s["start"], "type": "failover", "from": segs[i - 1]["acc"], "to": s["acc"],
+            events.append({"t": s["start"], "type": "failover", "from": froms[i], "to": s["acc"],
                            "reason": "drift",
-                           "text": f"{segs[i - 1]['acc']} → {s['acc']} · 没有换号记录 —— "
+                           "text": f"{froms[i]} → {s['acc']} · 没有换号记录 —— "
                                    f"多半是某个仍在跑的 agy 把钥匙串写回了自己的身份",
-                           "accs": [segs[i - 1]["acc"], s["acc"]]})
+                           "accs": [froms[i], s["acc"]]})
     events.sort(key=lambda e: -e["t"])
 
     days = R._day_bounds(start, end)
@@ -335,7 +379,9 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
                      "rotate_off": any(a.get("rotate_off") for a in accs.values() if a.get("label") == lab),
                      "cells": cells})
 
-    changes = sum(1 for i in range(1, len(segs)) if segs[i]["acc"] != segs[i - 1]["acc"])
+    # 并行进程不算一次换号
+    changes = sum(1 for i in range(1, len(segs))
+                  if segs[i]["enter_reason"] not in ("window_start", "same", "parallel"))
     dwell = [s["end"] - s["start"] for s in segs]
     covered = earliest is not None and earliest <= start
     tot_tok = sum(t for (_k, _ts, _m, t) in placed)
@@ -356,7 +402,9 @@ def collect(hours=24.0, now=None, log_dir=None, store=None, db_root=None, gens=N
                      "attributed_pct": (len(placed) / len(gens)) if gens else None, "undated_lines": 0, "in_window_lines": len(raw),
                      "tail_truncated": False, "window_covered": covered, "tail_bytes": 0,
                      "covers_from": earliest, "log_begins_at": earliest,
-                     "log_begins_reason": "ok" if earliest else "unreadable"},
+                     "log_begins_reason": "ok" if earliest else "unreadable",
+                     # 读不了的日志 / 会话库份数：>0 ⇒ 泳道与 token 都是下界，原因是「没读到」
+                     "logs_unreadable": len(log_errs), "dbs_unreadable": db_bad},
     }
 
 

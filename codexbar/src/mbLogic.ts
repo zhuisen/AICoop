@@ -252,7 +252,8 @@ export function parseClaudeQuota(raw: unknown): ClaudeQuota | null {
   };
 }
 
-/** 读数陈旧阈值（秒）。与 `helpers.ts::QUOTA_STALE_SEC` 同值（30 分钟）。 */
+/** Claude 状态栏读数的陈旧阈值（秒，30 分钟）。★ 与 `helpers.ts::QUOTA_STALE_SEC`（90 分钟）**不是**同一件事：
+ *  那个跟着 quotad 的扫描周期走；这份读数由 Claude CLI 每次刷新状态栏时写，与 quotad 无关。 */
 export const STALE_SEC = 30 * 60;
 
 export function isStale(capturedAt: number | null, nowSec: number): boolean {

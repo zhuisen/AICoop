@@ -161,9 +161,16 @@ class TheRuntimeShipsEverySiblingItLoads(unittest.TestCase):
         """★ 从运行时文件的源码**现解析**它们按路径加载的兄弟 `.py`，不抄一份清单。"""
         refs = set()
         for rel in connector.RUNTIME_FILES:
-            src = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-            refs |= {m for m in re.findall(r'"([\w/]+\.py)"', src) if (ROOT / m).is_file()}
+            p = ROOT / rel
+            src = p.read_text(encoding="utf-8", errors="replace")
+            # ★ 也按引用方自己的目录解析（全方面评审 §11）：`scan.py` 写的是 `parent / "agy_quota_series.py"`，
+            #   只按仓根判存在会把子目录里的兄弟模块全漏掉。
+            for m in re.findall(r'"([\w/]+\.py)"', src):
+                for c in (ROOT / m, p.parent / m):
+                    if c.is_file():
+                        refs.add(c.resolve().relative_to(ROOT.resolve()).as_posix())
         self.assertIn("dawn_sched.py", refs, "解析没抓到已知引用 —— 断言打空了")
+        self.assertIn("traffic/agy_quota_series.py", refs, "子目录里的兄弟模块没解析出来 —— 断言打空了")
         self.assertEqual(sorted(refs - set(connector.RUNTIME_FILES)), [],
                          "★★ 这些文件运行时会加载，却不在 RUNTIME_FILES —— .dmg 机器上直接崩")
 

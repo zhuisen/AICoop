@@ -38,7 +38,12 @@ import glob
 import json
 import os
 import re
+import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scan as S       # noqa: E402 —— `_codex_keep` / `_zstd_text`：.jsonl.zst 的认法只有一份
 
 # ── 常量 ───────────────────────────────────────────────────────────────
 TAIL_BYTES = 6 * 1024 * 1024      # proxy.log 尾读上限(全量 5.5MB,窗口最长 7d)
@@ -249,8 +254,11 @@ def _tail(path, max_bytes):
     return text, truncated
 
 
-def scan_proxy_log(text, now, start, end, resolve=None):
+def scan_proxy_log(text, now, start, end, resolve=None, relay_owner=None):
     """返回 (requests, resp_owner, markers, log_lines, undated, in_window)。
+
+    * `relay_owner`（可选 dict）：顺带收集**中转站**响应的 `{response_id: 中转站名}`。
+      ★ 不进 `resp_owner`：那是账号泳道的归属键，中转站不是账号（见下面 `kind != "acct"`）。
 
     * requests: [(ts, acc, billed)] —— 只有 billed=True 的用来切在岗段
     * resp_owner: {response_id: acc} —— token 归属的 join 键
@@ -296,6 +304,8 @@ def scan_proxy_log(text, now, start, end, resolve=None):
             # `#` 后面是完整 response_id,消息里那个是截断的 —— 用前者。
             if rid and rid.startswith("resp_") and acc:
                 resp_owner[rid] = acc
+            elif rid and rid.startswith("resp_") and kind == "relay" and relay_owner is not None:
+                relay_owner[rid] = name
         elif body.startswith("← "):
             pass                            # 状态码这里用不到,泳道只关心时间与归属
         else:
@@ -457,21 +467,47 @@ def _save_json(path, obj):
 
 
 # ── 第二段:rollout → response_id → (tokens, model, ts) ─────────────────
-def scan_rollouts(start, end, want_ids, cache=None, now=None):
+class _nullctx:
+    def __init__(self, v):
+        self.v = v
+
+    def __enter__(self):
+        return self.v
+
+    def __exit__(self, *a):
+        return False
+
+
+def _rollout_paths():
+    """`rollout-*.jsonl` 与 `rollout-*.jsonl.zst`（codex 会把旧会话压成 zst）。认法与 scan.py / requests.py 同一份
+    （`scan._codex_keep`：两者并存只收 `.jsonl`）。★ 原来只 glob `.jsonl` ⇒ 压缩过的会话从泳道里静默消失（全方面评审 §3）。"""
+    base = os.path.join(codex_home(), "sessions", "**")
+    for pat in ("rollout-*.jsonl", "rollout-*.jsonl.zst"):
+        for path in glob.iglob(os.path.join(base, pat), recursive=True):
+            if S._codex_keep(Path(path)):
+                yield path
+
+
+def scan_rollouts(start, end, want_ids, cache=None, now=None, unreadable=None):
     """只解析 mtime 落在窗口内的 rollout,且只取 `want_ids` 里的响应。
 
     ★ 两层剪枝都必要:全量是 4183 个文件,而 24h 窗口通常只碰得到几十个。
     ★ `usage` 是**该次响应**的量,不是累计 —— rollout 里同时有 `turn_token_usage` 与
       `thread_token_usage` 两个**累计**字段,取错会让 token 随轮次平方级虚高。
+    ★ 读不了 / 解压不了的文件记进 `unreadable`（不写缓存，下一轮再试），进 `coverage`：
+      「这个号这段没 token」与「我们没读到」不是一回事。
     """
     out = {}
     files = cache.setdefault("files", {}) if cache is not None else {}
     now = now or time.time()
-    pat = os.path.join(codex_home(), "sessions", "**", "rollout-*.jsonl")
-    for path in glob.iglob(pat, recursive=True):
+    for path in _rollout_paths():
         try:
             st = os.stat(path)
+        except FileNotFoundError:
+            continue
         except OSError:
+            if unreadable is not None:
+                unreadable.append(path)
             continue
         # 会话文件在窗口结束前就没再写过 ⇒ 里面不可能有窗口内的响应。
         if st.st_mtime < start:
@@ -489,7 +525,11 @@ def scan_rollouts(start, end, want_ids, cache=None, now=None):
         parsed = {}
         models = {}          # turn_id → model
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
+            if path.endswith(".zst"):
+                fh = S._zstd_text(path).splitlines(True)
+            else:
+                fh = open(path, encoding="utf-8", errors="replace")
+            with (fh if hasattr(fh, "__enter__") else _nullctx(fh)) as fh:
                 for line in fh:
                     if '"turn_context"' in line:
                         try:
@@ -517,7 +557,9 @@ def scan_rollouts(start, end, want_ids, cache=None, now=None):
                             "tokens": int(u.get("total_tokens") or 0),
                             "model": models.get(p.get("turn_id")) or "unknown",
                         }
-        except OSError:
+        except (OSError, S.ScanReadError):
+            if unreadable is not None:
+                unreadable.append(path)
             continue
         if cache is not None:
             files[path] = {"sig": sig, "seen": now, "resp": parsed}
@@ -720,8 +762,10 @@ def _day_bounds(start, end):
     return out
 
 
-#: 中转站 POST 行。★ 标签形态 `name@relay` 由 `proxy.py::_relay_tag` 写出。
-_RELAY_POST_RE = re.compile(r"→ POST /responses \[[^\]]+@relay\]")
+#: 中转站 POST 行。★ 标签形态 `name@relay` 由 `proxy.py::_relay_tag` 写出；2026-09-12 之前的历史行是
+#: `[name] relay conv=…`（同 `_first_tag` 认历史行的那条判据），两种都认（全方面评审 §3 存疑：本机 proxy.log 里确有旧行）。
+#: ★ 旧格式只认**裸名字**：账号行（`[Yu#03b40e2e]`）的 reason 也可能是 `relay`，带 `#aid8` 的一律是账号。
+_RELAY_POST_RE = re.compile(r"→ POST /responses \[(?:[^\]]+@relay\]|(?![^\]]*#[0-9a-f]{8}\])[^\]]+\] relay\b)")
 
 
 def _relay_by_day(text, days, now):
@@ -748,7 +792,7 @@ def _relay_by_day(text, days, now):
     return hits
 
 
-def _daily(segs, start, end, by_aid, tail, text=None, now=None):
+def _daily(segs, start, end, by_aid, tail, text=None, now=None, store=None):
     """**每号 × 每天**的在岗时长（用户 2026-09-21 选的口径：「优先级到底生效没」）。
 
     总览把拖拽顺序标成「轮换优先级」，而这张表是**它到底有没有被执行**的唯一证据。
@@ -767,7 +811,8 @@ def _daily(segs, start, end, by_aid, tail, text=None, now=None):
     rank_of, off = {}, {}
     order = []
     try:
-        order = list(_load_json(os.path.join(store_dir(), "state.json"), {}).get("pick_order") or [])
+        # ★ 读 `collect` 拿到的那个 store，不是全局默认（阶段 C 评审 codex：测试传临时 store 时这里仍读真 state.json）
+        order = list(_load_json(os.path.join(store or store_dir(), "state.json"), {}).get("pick_order") or [])
     except Exception:                                     # noqa: BLE001 — 读不到顺序不该拖垮整张表
         order = []
     for aid, sl in (by_aid or {}).items():
@@ -829,12 +874,13 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
         return {"ok": False, "reason": "no_log", "detail": "读不到 proxy/proxy.log"}
 
     # 账号 → 套餐。★ 必须在切段**之前**读:切入原因要靠它区分「Pro 保底」与普通轮换。
-    by_aid = {}
+    by_aid, state_err = {}, None
     try:
         with open(os.path.join(store, "state.json"), encoding="utf-8") as fh:
             by_aid = dict((json.load(fh).get("slots") or {}))
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as e:
+        # ★ 读不到池 ≠ 池是空的：否则每个号都被画成「已移除」（全方面评审 §3）。`retired` 改给 None（不知道）。
+        state_err = "%s: %s" % (type(e).__name__, e)
     # ★ 解析器把日志里的历史名字归一成**当前** label,所以下面这些按当前 label 建的表
     #   照旧可用 —— 改名不再把一个号劈成两条泳道。
     resolve = make_resolver(by_aid)
@@ -844,7 +890,9 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
     requests, resp_owner, markers, log_lines, undated, in_window = scan_proxy_log(
         text, now, start, end, resolve=resolve)
     segs = classify_enter(build_segments(requests, now), markers, plans)
-    usage = scan_rollouts(start, end, set(resp_owner), cache if use_cache else None, now) if resp_owner else {}
+    unreadable = []
+    usage = scan_rollouts(start, end, set(resp_owner), cache if use_cache else None, now,
+                          unreadable) if resp_owner else {}
     matched, orphan = attribute(segs, resp_owner, usage)
 
     # 账号汇总
@@ -897,7 +945,7 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
             # ★ 不在当前池里 = 已移除的号（或改名后没被认领的旧名）。
             #   前端据此把名字画成中性色 —— **只换颜色不加徽章**：泳道名字列宽写死 152px
             #   且刻意不加省略号，多一个徽章会把名字截成 `Pr…`，而那种缺陷 harness 抓不到。
-            "retired": a["acc"] not in live,
+            "retired": None if state_err else a["acc"] not in live,
         })
     accounts.sort(key=lambda x: -x["tokens"])
 
@@ -914,7 +962,7 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
     tot_req = sum(a["requests"] for a in accounts)
     dwell = [s["end"] - s["start"] for s in segs]
     out = {
-        "daily": _daily(segs, start, end, by_aid, tail, text, now),
+        "daily": _daily(segs, start, end, by_aid, tail, text, now, store),
         "ok": True,
         "generated_at": now,
         "window": {"start": start, "end": end, "hours": hours},
@@ -945,6 +993,10 @@ def collect(hours=24.0, now=None, store=None, use_cache=True):
             "responses_seen": len(resp_owner),
             "responses_with_tokens": matched,
             "responses_unplaced": orphan,
+            # 读不了 / 解压不了的会话文件数：>0 ⇒ 归属的 token 是下界，且下界的原因是「没读到」
+            "rollouts_unreadable": len(unreadable),
+            # state.json 读不出的原因（None = 读到了）。读不到时套餐 / 额度 / 「已移除」都是未知，不是空
+            "state_error": state_err,
             "attributed_pct": (matched / len(resp_owner)) if resp_owner else None,
             "undated_lines": undated,
             "in_window_lines": in_window,

@@ -113,6 +113,14 @@ export function useTraffic(opts: {
   const { remote: remoteBusy, announce } = useBusyMirror();
   const [err, setErr] = useState<string | null>(null);
   const running = useRef(false);
+  // ★ 扫描与小时补扫共用一盏灯 ⇒ 按在途数计（2026-10-22 评审：补扫先结束会把还在跑的扫描的灯熄掉）
+  const inflight = useRef(0);
+  const begin = useCallback(() => { inflight.current++; setBusy(true); announce("traffic-scan"); }, [announce]);
+  const end = useCallback(() => { inflight.current = Math.max(0, inflight.current - 1); if (!inflight.current) { setBusy(false); announce(null); } }, [announce]);
+  // 扫描在跑时又要扫（多半是换了窗口）⇒ 跑完补一次，用那时的窗口。0 = 不补 · 1 = 普通 · 2 = 强刷
+  //   （阶段 B 评审：原来是 bool，手动 ↻ 撞上在途扫描时补跑丢了 `force`，被新鲜度挡回）
+  const rerun = useRef<0 | 1 | 2>(0);
+  const scanRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   // ★ 声明提到这里:下面「换窗口清空」那个 effect 要复位它,而它原本声明在更靠后的位置。
   const primed = useRef(false);
 
@@ -167,20 +175,27 @@ export function useTraffic(opts: {
    * 其余路径都先读一次盘 —— **另一个 webview 可能刚扫完**,那就省掉一次 1.4s 的重复扫描。
    */
   const scan = useCallback(async (force = false) => {
-    if (running.current) return;
+    if (running.current) { rerun.current = force ? 2 : Math.max(rerun.current, 1) as 0 | 1 | 2; return; }
     running.current = true;
-    setBusy(true);
-    // ★ 与账号池动作同一条纪律:进行态也要广播,否则另一个窗口在整个扫描期间
+    // ★★ 结果只归它出发时的那个窗口（2026-10-22 评审，三方一致）：扫到一半换了窗口，
+    //    旧窗口的结果原来被 `adopt` 进新窗口、还写进新窗口的缓存 ⇒「年度」档画出 90 天的数。
+    const forDays = days;
+    const take = (d: TrafficData | null) => {
+      if (!d) return;
+      if (lastDays.current === forDays) adopt(d);
+      else byWindow.current.set(forDays, d);
+    };
+    begin();
+    // ★ 与账号池动作同一条纪律:进行态也要广播（`begin`）,否则另一个窗口在整个扫描期间
     //   (冷路径 ~23s)看起来什么都没发生。用户 2026-09-06 在「刷新全池」上报过同款。
-    announce("traffic-scan");
     setErr(null);
     try {
       if (!force) {
         const snap = parse(await readSnap());
-        if (snap && Date.now() - snap.generated_at * 1000 <= FRESH_MS) { adopt(snap); return; }
+        if (snap && Date.now() - snap.generated_at * 1000 <= FRESH_MS) { take(snap); return; }
       }
-      const raw = await invoke<string>("run_traffic", { args: ["--days", String(days), "--json"] });
-      adopt(parse(raw));
+      const raw = await invoke<string>("run_traffic", { args: ["--days", String(forDays), "--json"] });
+      take(parse(raw));
       // ★ 告诉另一个 webview:数据更新了,**去读盘,别自己再扫一遍**。
       //   两个窗口是独立 JS 上下文,localStorage 都不互通,只能走 Tauri 事件(同 usePrivacy 的范式)。
       // ★ 只有默认窗口才广播。非默认窗口写的是另一份快照文件,广播出去只会让对方
@@ -190,21 +205,26 @@ export function useTraffic(opts: {
       setErr(String(e).slice(0, 200));
     } finally {
       running.current = false;
-      setBusy(false);
-      announce(null);
+      end();
+      if (rerun.current) { const f = rerun.current === 2; rerun.current = 0; void scanRef.current?.(f); }
     }
     // ★★ `days` / `readSnap` / `isDefault` 都必须在依赖里。漏掉的后果**不是不刷新**，
     //    是**刷了错的那个窗口**:这个闭包会一直拿着切换之前的 `days` 去调 `run_traffic`，
     //    然后把结果写进那个窗口的快照 —— 年度视图永远等不到自己的数据，
     //    而页面只是安静地显示 0。
-  }, [adopt, announce, days, readSnap, isDefault]);
+  }, [adopt, begin, end, days, readSnap, isDefault]);
+  scanRef.current = scan;
 
   // 对方扫完 → 读盘采纳。一次 ~1ms 的文件读,不起 python。
   useEffect(() => {
     if (!enabled) return;
     if (!isDefault) return;          // 别拿默认窗口的数据去填年度视图
     const un = listen("traffic-updated", () => {
-      void invoke<string | null>("read_traffic_snapshot").then((raw) => { adopt(parse(raw)); });
+      // 回来时已经换到别的窗口 ⇒ 不采纳（阶段 B 评审：迟到的 90 天快照被采纳进年度档）
+      void invoke<string | null>("read_traffic_snapshot").then((raw) => {
+        if (lastDays.current === DEFAULT_DAYS) adopt(parse(raw));
+        else { const d = parse(raw); if (d) byWindow.current.set(DEFAULT_DAYS, d); }
+      });
     });
     return () => { void un.then((f) => f()); };
   }, [enabled, adopt, isDefault]);
@@ -246,21 +266,29 @@ export function useTraffic(opts: {
   /** 已经为哪些日期补过小时桶。★ 见 `requestHoursFor` 的注释：不记就是每帧起一次 python。 */
   const askedHours = useRef<Set<string>>(new Set());
   const requestHoursFor = useCallback((day: string) => {
-    if (!day || askedHours.current.has(day)) return;
-    askedHours.current.add(day);
-    announce("traffic-scan");
-    setBusy(true);
+    // 键带窗口：换了窗口要重新补（2026-10-22 评审：原来只按日期记，换窗口后同一天不再补）
+    const key = `${days}:${day}`;
+    if (!day || askedHours.current.has(key)) return;
+    askedHours.current.add(key);
+    begin();
     void invoke<string>("run_traffic",
                         { args: ["--days", String(days), "--hours-day", day, "--json"] })
-      .then((raw) => { adopt(parse(raw)); if (isDefault) void emit("traffic-updated"); })
+      .then((raw) => {
+        // 回来时已换了窗口 ⇒ 记进它自己那个窗口的缓存（阶段 B 评审：原来直接丢掉、键又留着，切回去这一天永不再补）
+        const d = parse(raw);
+        if (lastDays.current === days) adopt(d);
+        else if (d) byWindow.current.set(days, d);
+        else askedHours.current.delete(key);
+        if (isDefault) void emit("traffic-updated");
+      })
       .catch((e: unknown) => {
         // ★ 失败就把这一天从"问过了"里拿掉 —— 否则用户再点也不会重试，
         //   而界面上"补过但没有数据"和"补失败了"长得一模一样。
-        askedHours.current.delete(day);
+        askedHours.current.delete(key);
         setErr(String(e).slice(0, 200));
       })
-      .finally(() => { setBusy(false); announce(null); });
-  }, [days, adopt, isDefault, announce]);
+      .finally(end);
+  }, [days, adopt, isDefault, begin, end]);
 
   const refreshIfStale = useCallback((maxAgeMs: number = FRESH_MS) => {
     const g = dataRef.current?.generated_at;

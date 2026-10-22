@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { Theme } from "../theme";
 import RelayUsage from "../components/RelayUsage";
 import GhostButton from "../components/GhostButton";
@@ -55,6 +56,19 @@ export default function RelayPage({ t, onOpenOverview }: { t: Theme; onOpenOverv
   const [toast, setToast] = useState<string | null>(null);
   const [delAsk, setDelAsk] = useState<RelayRow | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
+  /** `\codex`（跳过别名）走不走代理，取决于 PATH 上那个 codex wrapper —— Connector 的**可选**一步（`connector.py`）。
+   *  ★ 原来无条件写「走代理」，没装 wrapper 的机器上是一句假话（全方面评审 §4）。读不到 ⇒ null（写「未知」）。 */
+  const [wrapper, setWrapper] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    invoke<string>("connector_plan")
+      .then((raw) => {
+        const st = (JSON.parse(raw) as { steps?: { id: string; state: string }[] }).steps?.find((x) => x.id === "wrapper")?.state;
+        if (alive) setWrapper(st ?? null);
+      })
+      .catch(() => { if (alive) setWrapper(null); });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -104,13 +118,13 @@ export default function RelayPage({ t, onOpenOverview }: { t: Theme; onOpenOverv
       tokN += inp + out;
       cost += costOf({ uncached_in: Math.max(0, inp - cached), cache_read: cached, cache_write: 0, output: out }, r.model ?? "", "codex");
     }
-    // ★ 出口是中转站时，代理不给这些响应写账号归属（`affinity` 只记池子里的号），账本把它们记成「直连」——
-    //   与真直连分不开（评审 gemini 阶段 5）。所以那时按来源整数、直连写「—」，不拿一个混了中转站的数冒充。
-    const relayOn = exitId != null;
+    // ★ 走中转站的响应记「中转站·名字」，与「直连」分得开（代理从 2026-10-22 起给中转站也写归属行，全方面评审 §5）。
+    //   原来按「出口此刻是不是中转站」整体绕开 —— 中转站关掉之后，窗口里之前走中转站的请求又被算回直连。
+    //   ⚠️ 修复之前落进账本的中转站请求仍是「直连」（当时的日志里没有归属行，补不回来），会随两天窗口滑出。
     return {
-      inter: cx.filter((r) => r.source === "交互" && (relayOn || r.account !== "直连")).length,
-      exec: cx.filter((r) => r.source === "exec" && (relayOn || r.account !== "直连")).length,
-      direct: relayOn ? null : cx.filter((r) => r.source === "交互" && r.account === "直连").length,
+      inter: cx.filter((r) => r.source === "交互" && r.account !== "直连").length,
+      exec: cx.filter((r) => r.source === "exec" && r.account !== "直连").length,
+      direct: cx.filter((r) => r.source === "交互" && r.account === "直连").length,
       pool: { requests: reqOk ? viaPool.length : null, tokens: reqOk ? tokN : null, cost: reqOk ? cost : null },
     };
   }, [reqs, reqOk, store.accounts, exitId]);
@@ -127,8 +141,18 @@ export default function RelayPage({ t, onOpenOverview }: { t: Theme; onOpenOverv
     { cmd: "cxp exec · omc", tag: "走代理", direct: false,
       rows: [{ k: "走向", v: "代理 · 非交互", c: "acc" }, { k: "今日", v: n(today.exec) },
              { k: "含", v: "omc ask codex（分不开）", c: "muted" }, { k: "出口", v: exitName }] },
-    { cmd: "\\codex", tag: "走代理", direct: false,
-      rows: [{ k: "走向", v: "代理 · 跳过别名", c: "acc" }, { k: "今日", v: "计入 codex", c: "muted" }, { k: "出口", v: exitName }] },
+    wrapper === "done"
+      ? { cmd: "\\codex", tag: "走代理", direct: false,
+          rows: [{ k: "走向", v: "代理 · 跳过别名", c: "acc" }, { k: "今日", v: "计入 codex", c: "muted" }, { k: "出口", v: exitName }] }
+      : wrapper === "external"
+        ? { cmd: "\\codex", tag: "看你的 wrapper", direct: true,
+            rows: [{ k: "走向", v: "取决于 ~/.local/bin/codex", c: "warn" }, { k: "原因", v: "那个文件不是本运行时装的" },
+                   { k: "出口", v: "—", c: "muted" }] }
+        : { cmd: "\\codex", tag: wrapper == null ? "未知" : "不经过代理", direct: true,
+            rows: wrapper == null
+              ? [{ k: "走向", v: "读不到接入状态", c: "muted" }]
+              : [{ k: "走向", v: "原生 · 没装 wrapper", c: "warn" }, { k: "装上", v: "设置 → 账号池接入" },
+                 { k: "轮换", v: "不参与", c: "muted" }] },
     { cmd: "cxd", tag: "单号直连", direct: true,
       rows: [{ k: "走向", v: "单号直连", c: "warn" }, { k: "常用于", v: "/usage · 重置卡" },
              { k: "用哪个号", v: `auth.json · ${activeLabel}` }, { k: "今日直连", v: n(today.direct) }] },
@@ -150,7 +174,12 @@ export default function RelayPage({ t, onOpenOverview }: { t: Theme; onOpenOverv
   const stale = usage.find((u) => u.stale);
   const fetchedAt = usage.map((u) => u.data?.fetched_at).filter((x): x is number => x != null).reduce((a, b) => Math.max(a, b), 0) || null;
   const nowSec = Date.now() / 1000;
-  const fresh = stale ? `⚠ ${agoText(stale.stale_since ?? fetchedAt, nowSec)} · 取数失败` : fetchedAt ? `余额 ${agoText(fetchedAt, nowSec)}` : "余额未取过";
+  // ★ 旧快照没带时刻 ⇒ 只说失败，不拿别家的取数时刻冒充（原来会写「⚠ 刚刚 · 取数失败」）；
+  //   第一次就失败（没有旧数据、也就没有 stale）⇒「从未取到」（全方面评审 §4）。
+  const never = usage.find((u) => u.ok === false && !u.data && u.state !== "disabled");
+  const fresh = stale ? (stale.stale_since != null ? `⚠ ${agoText(stale.stale_since, nowSec)} · 取数失败` : "⚠ 取数失败")
+    : never ? "⚠ 从未取到 · 取数失败"
+      : fetchedAt ? `余额 ${agoText(fetchedAt, nowSec)}` : "余额未取过";
 
   // ★★★ 路由异常态必须在这里出声（稿没画）：`orphan` / `relay_disabled` / `route_corrupt` 下代理会退回账号池，
   //   `profile_missing` 下 codex 不报错、直接退回 base 配置。健康两态不显示（常亮告警会被训练成噪音）。

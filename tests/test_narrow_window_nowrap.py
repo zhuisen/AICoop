@@ -188,8 +188,9 @@ class ButtonsNeverBreakMidWord(unittest.TestCase):
         self.assertTrue(dark, "深色主题的滚动条拇指没有配色")
         self.assertTrue(light, "浅色主题的滚动条拇指没有配色 —— 白拇指在白底上等于隐形")
         if ".cb-light ::-webkit-scrollbar" in css:
-            self.assertIn('className={theme === "light" ? "cb-light" : undefined}', self.app,
-                          "写了 .cb-light 的滚动条规则,但根节点没有这个 class —— 死规则")
+            # 根节点 2026-10-22 起还带 `cb-root`（拖窗口 / 抓手的作用域）；判据是浅色时那个 class 真的在根上
+            self.assertRegex(self.app, r'className=\{theme === "light" \? "(?:cb-root )?cb-light" : (?:undefined|"cb-root")\}',
+                             "写了 .cb-light 的滚动条规则,但根节点没有这个 class —— 死规则")
 
     def test_grid_columns_can_actually_shrink(self):
         """★★ CSS Grid 里裸 `1fr` = `minmax(auto, 1fr)`,最小值是 **min-content 不是 0**。

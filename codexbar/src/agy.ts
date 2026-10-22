@@ -179,6 +179,7 @@ export function agyProbeToast(rs: AgyProbeResult[]): string {
     if (q.started) return `✓ ${r.label} · 5h ${q.before.toFixed(1)}% → ${q.after.toFixed(1)}% · 窗口已启动，${hm(q.reset)} 重置`;
     return `✓ ${r.label} · 5h 仍 ${q.after.toFixed(1)}%，未见下降（稍后 ↻ 再看）`;
   };
+  if (!rs.length) return "⏭ 另一个进程正在跑 Gemini 探针 —— 这次已跳过，没有计费";
   if (rs.length === 1) return one(rs[0]);
   const ok = rs.filter(r => r.ok);
   const started = ok.filter(r => r.q5h?.started).length;

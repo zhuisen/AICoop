@@ -239,7 +239,8 @@ export function useAgyPool(enabled: boolean, opts?: {
   snapshotOf: (a: AgyPoolAccount, liveSnap: AgySnapshot | null) => AgySnapshot;
   busy: boolean;
   err: string | null;
-  refresh: () => void;
+  /** 成功与否；已经在刷 ⇒ `null`（toast 要等结果出来再说「已刷新」）。 */
+  refresh: () => Promise<boolean | null>;
   /** 成功与否（总览的 toast 要分开说）。 */
   switchTo: (label: string) => Promise<boolean>;
   /** 改显示名。★ 与 codex 同款：label 只是昵称，身份始终是 `sub`。 */
@@ -259,7 +260,7 @@ export function useAgyPool(enabled: boolean, opts?: {
   setPins: (labels: string[]) => Promise<boolean>;
   /** 全局自动切号开关。`null` = 还没读到。 */
   autoOn: boolean | null;
-  setAuto: (on: boolean) => void;
+  setAuto: (on: boolean) => Promise<boolean>;
   /** 正在跑的那条写操作的 id（`probe:<label>` / `health` / …），给按钮转圈用。 */
   running: string | null;
   switching: string | null;
@@ -306,6 +307,10 @@ export function useAgyPool(enabled: boolean, opts?: {
         return;
       }
       const p = JSON.parse(raw) as PoolFile;
+      // ★ 形状不对 ≠ 空池（同 `agy/pool.load()` 的 `UNREADABLE`，全方面评审 §10）：落进 catch，留着已画出来的号
+      if (!p || typeof p !== "object" || !p.accounts || typeof p.accounts !== "object" || Array.isArray(p.accounts)) {
+        throw new Error("池文件形状不对：没有 accounts 字典（CLI 会拒绝写，先修好或删掉这个文件）");
+      }
       // ★ 现读「上次尝试过」的时刻。另一个 webview 刚跑完时，我们靠这一行知道，
       //   于是两边不会各跑一次同样的 18.6s 子进程。
       quotaRanAt.current = (p.quota_ran_at ?? 0) * 1000;
@@ -415,21 +420,22 @@ export function useAgyPool(enabled: boolean, opts?: {
    *   用户会以为自己碰了什么；而手动点 ↻ 必须立刻有反馈。
    *   ⚠️ 但**失败仍然照常写 `err`** —— 静默的是"忙"，不是"坏了"。
    */
-  const runQuota = useCallback((silent: boolean) => {
-    if (running.current) return;
+  const runQuota = useCallback((silent: boolean): Promise<boolean | null> => {
+    if (running.current) return Promise.resolve(null);
     running.current = true;
     if (!silent) setBusy(true);
     setErr(null);
-    void invoke<string>("run_agy_rotate", { args: ["quota"] })
+    return invoke<string>("run_agy_rotate", { args: ["quota"] })
       .then(() => read(true))
       // ★ 广播「池文件变了」：另一个 webview 收到后**只读盘**（~1ms），
       //   而不是也起一个 18.6s 的子进程。同 `useTraffic` 的 `traffic-updated`。
       .then(() => emit(POOL_EVT))
-      .catch((e: unknown) => setErr(String(e).slice(0, 200)))
+      .then(() => true)
+      .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return false; })
       .finally(() => { running.current = false; if (!silent) setBusy(false); });
   }, [read]);
 
-  const refresh = useCallback(() => { runQuota(false); }, [runQuota]);
+  const refresh = useCallback(() => runQuota(false), [runQuota]);
 
   /**
    * 过期才取。**判据是盘上的 `quota_ran_at`（尝试过没有），不是各号的 `quota_at`（取成没有）** ——
@@ -518,7 +524,9 @@ export function useAgyPool(enabled: boolean, opts?: {
     setSwitching(label);
     return invoke<string>("run_agy_rotate", { args: ["switch", label] })
       .then(() => read(true))
-      .then(() => true)
+      // ★ 切号也改池（`live_wanted` / `live_seen`）：广播给另一个 webview（全方面评审 §10 存疑：switch / health /
+      //   probe 三处原来不广播，菜单栏要等下次轮询才变）。广播失败不算命令失败。
+      .then(() => { void emit(POOL_EVT).catch(() => { /* 另一边下次轮询会读到 */ }); return true; })
       .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return false; })
       .finally(() => setSwitching(null));
   }, [read]);
@@ -538,7 +546,11 @@ export function useAgyPool(enabled: boolean, opts?: {
   const runTagged = useCallback((id: string, args: string[]): Promise<string | null> => {
     setRunningId(id);
     return invoke<string>("run_agy_rotate", { args })
-      .then(async (out) => { await read(true); return out; })
+      .then(async (out) => {
+        await read(true);
+        void emit(POOL_EVT).catch(() => { /* 另一边下次轮询会读到 */ });
+        return out;
+      })
       .catch((e: unknown) => { setErr(String(e).slice(0, 200)); return null; })
       .finally(() => setRunningId(null));
   }, [read]);
@@ -548,15 +560,28 @@ export function useAgyPool(enabled: boolean, opts?: {
     const out = await runTagged(`probe:${label ?? ""}`,
       label ? ["probe", label, "--json"] : ["probe", "--all", "--json"]);
     if (!out) return null;
-    try { return JSON.parse(out.trim().split("\n").pop() ?? "") as AgyProbeResult[]; }
+    try {
+      const v: unknown = JSON.parse(out.trim().split("\n").pop() ?? "");
+      // `{skipped:true}` = 另一个进程正在探（全局探针锁），这次没计费 ⇒ 空列表，`agyProbeToast` 说「已跳过」
+      if (!Array.isArray(v)) return (v as { skipped?: boolean } | null)?.skipped ? [] : null;
+      return v as AgyProbeResult[];
+    }
     catch (e: unknown) { setErr(`探针输出读不懂：${String(e).slice(0, 80)}`); return null; }
   }, [runTagged]);
   const setRotate = useCallback((label: string, on: boolean) =>
     runThen(["rotate", label, on ? "--on" : "--off"]), [runThen]);
-  const setAuto = useCallback((on: boolean) => {
+  const setAuto = useCallback((on: boolean): Promise<boolean> => {
     setAutoOn(on);                       // 乐观更新：开关点下去要立刻有反馈
-    void runThen(["auto-switch", on ? "--on" : "--off"]);
-  }, [runThen]);
+    // ★ 只有**命令本身**失败才拨回去（阶段 B 评审：原来回读 / 广播失败也算失败 ⇒ 实际已开、界面拨回关、还报「没改成」）。
+    //   命令成功后回读一次落盘的真值，广播失败不影响这一边。
+    return invoke<string>("run_agy_rotate", { args: ["auto-switch", on ? "--on" : "--off"] })
+      .then(async () => {
+        try { await read(true); } catch { /* 回读失败：保持乐观值（命令已成功） */ }
+        void emit(POOL_EVT).catch(() => { /* 另一边下次轮询会读到 */ });
+        return true;
+      })
+      .catch((e: unknown) => { setErr(String(e).slice(0, 200)); setAutoOn(!on); return false; });
+  }, [read]);
   const removeIt = useCallback((label: string) => runThen(["remove", label]), [runThen]);
   /** 置顶 / 取消置顶（2026-09-24 与 codex 对齐）。真源在池里 —— wrapper 在 app 没开时也要读。 */
   const togglePin = useCallback((label: string) => runThen(["pin", "--toggle", label]), [runThen]);

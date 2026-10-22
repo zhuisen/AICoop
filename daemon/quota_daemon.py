@@ -226,8 +226,7 @@ def refresh_one(aid, slot, is_active):
     -> (got_reading, msg)."""
     q, msg = cli._probe_quota(aid, slot, is_active)
     if q:
-        cli._mutate_state(lambda st, a=aid, qq=q: st["slots"].setdefault(a, {}).update(
-            {"quota": qq, "quota_status": "ok"}))
+        cli._mutate_state(lambda st, a=aid, qq=q: cli._patch_slot(st, a, {"quota": qq, "quota_status": "ok"}))
     return q is not None, msg
 
 

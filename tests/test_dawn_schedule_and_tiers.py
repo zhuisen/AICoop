@@ -412,8 +412,8 @@ class TheUi(unittest.TestCase):
 
     def test_the_chip_is_on_both_tabs_and_left_settings(self):
         app = code(SRC / "components" / "ov" / "Overview.tsx")   # 2026-10-19 起头部在总览组件里
-        self.assertIn('<DawnChip t={p.t} kind="codex"', app)
-        self.assertIn('<DawnChip t={p.t} kind="agy"', app)
+        self.assertIn('<DawnChip key="codex" t={p.t} kind="codex"', app)
+        self.assertIn('<DawnChip key="agy" t={p.t} kind="agy"', app)
         settings = code(SRC / "pages" / "SettingsPage.tsx")
         for gone in ("dawn-probe", "dawnDesc", "toggleDawn"):
             self.assertNotIn(gone, settings, "★ 设置页还留着一份 —— 两处开关迟早分叉")
@@ -425,7 +425,8 @@ class TheUi(unittest.TestCase):
         self.assertIn("<svg", chip)
         self.assertIn('type="time"', chip, "点开才有时间选择")
         # ★ 像素里实测过：`title` 原样露出 `**还没有任何一次运行记录**`（tooltip 不渲染 markdown）。
-        self.assertRegex(chip, r'const desc = dawnDesc\(rec, kind\)\.replace\(/\\\*\\\*/g, ""\);')
+        # 阶段 A 起读失败时整句换成「读不到」，读到时仍剥 `**`
+        self.assertRegex(chip, r': dawnDesc\(rec, kind\)\.replace\(/\\\*\\\*/g, ""\);')
         self.assertIn("title={desc}", chip)
 
     def test_catch_up_runs_both_kinds_without_waiting(self):

@@ -340,8 +340,6 @@ class RealDataCanary(unittest.TestCase):
                            f"★ cache_read({cr_tot:,}) 没有大于 input({i_tot:,}) —— f2/f5 可能认反")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheFrontendCopyMatchesTheBackend(unittest.TestCase):
@@ -391,3 +389,7 @@ class TheFrontendCopyMatchesTheBackend(unittest.TestCase):
         """★ 闸自证：判据依赖 `_sqlite_is_the_primary_source()` 真的能分辨两种接法。"""
         self.assertTrue(self._sqlite_is_the_primary_source(),
                         "当前主源应是 SQLite —— 若不是，上面两条会被静默 skip")
+
+
+if __name__ == "__main__":
+    unittest.main()

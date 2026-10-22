@@ -190,17 +190,27 @@ def _exp(jwt):
         return 0
 
 
-def _slot_token(aid, slot, force=False):
+def _slot_token(aid, slot, force=False, why=None):
     """Return (access_token, account_id), or (None, None) when this account is unusable RIGHT NOW.
     LIVE (active) account: READ-ONLY. Its refresh_token is owned by codex's native refresher, which
     does not take our flock — refreshing here can consume the same single-use token concurrently
     (= dead account, the last open death path of the B9 class). A valid live access token is used
     as-is (re-read every call, so codex's own rotation is picked up); expired/rejected → (None, None)
     and the caller fails over to another account instead of refreshing.
-    Inactive slot: refresh on expiry (or force=True after a 401) under in-process + cross-process locks."""
+    Inactive slot: refresh on expiry (or force=True after a 401) under in-process + cross-process locks.
+    `why` (dict, optional): set `why["transient"]` when the refresh did NOT get a verdict from the server
+    (network error / 5xx / a switch raced us). ★ The caller must not mark the account dead on that —
+    全方面评审 §10: a network blip during the forced refresh used to return the old token, the caller saw
+    `token2 == token` and `_mark_dead` killed a healthy inactive account with no way back."""
     use_live = (aid == _load(STATE).get("active") and LIVE.exists()
                 and (_load(LIVE).get("tokens") or {}).get("account_id") == aid)
     if use_live:
+        # ★ 当值号只读：强刷（401 之后）这里**不刷**，所以也没有服务端判决 ⇒ transient，调用方换号、不标死
+        #   （阶段 E 评审两方：首发 401 期间这个号被切成当值号时，原来直接返回旧 token，调用方 `_mark_dead`）。
+        if force:
+            if why is not None:
+                why["transient"] = "live account (read-only)"
+            return None, None
         tok = (_load(LIVE).get("tokens") or {})
         at = tok.get("access_token", "")
         if _exp(at) - time.time() > 60:
@@ -216,6 +226,8 @@ def _slot_token(aid, slot, force=False):
     with _refresh_lock, open(REFRESH_LOCK, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         if _load(STATE).get("active") == aid:
+            if why is not None:
+                why["transient"] = "became live"
             return None, None  # a switch raced us: account just became live → codex owns it, never refresh
         auth = _load(sf)
         tok = auth.get("tokens") or {}
@@ -234,6 +246,9 @@ def _slot_token(aid, slot, force=False):
                 d = json.loads(r.read())
         except Exception as e:
             _plog(f"refresh {slot.get('label')} FAILED: {e}")
+            # 只有服务端明确拒绝（400/401/403，如 invalid_grant）才是凭证的判决；连不上 / 超时 / 5xx 不是
+            if why is not None and not (isinstance(e, urllib.error.HTTPError) and e.code in (400, 401, 403)):
+                why["transient"] = type(e).__name__
             return at, tok.get("account_id")
         if d.get("access_token"):
             tok["access_token"] = d["access_token"]
@@ -248,8 +263,21 @@ def _slot_token(aid, slot, force=False):
             os.chmod(tmp, 0o600)
             os.replace(tmp, sf)
             _plog(f"refreshed {slot.get('label')} (slot)")
-            return d["access_token"], tok.get("account_id")
-        return at, tok.get("account_id")
+            new = (d["access_token"], tok.get("account_id"), auth["last_refresh"])
+        else:
+            return at, tok.get("account_id")
+    # ★ 把 `last_refresh` 投影回 state 槽位（阶段 E 评审 codex：原来只写凭证文件，界面上这个号的「上次刷新」
+    #   一直停在旧值）。**在 cred 锁外写**：锁序恒为 state → cred，持着 `.refresh.lock` 再拿 state 锁就反了。
+    #   身份字段（plan / sub_until…）不在这里解 —— 解码只有 `codex-rotate::_decode_identity` 一份，
+    #   下一次 keepalive / `refresh` 会盖上去；在这里另写一份就是同一条规则的第二个实现。
+    def _lr(st, a=aid, v=new[2], f=slot.get("file")):
+        sl = st.get("slots", {}).get(a)
+        # ★ 槽位还是那个文件、且只往前走（阶段 F 评审 codex：两次强刷以相反顺序拿到 state 锁时，旧时间会盖新时间）。
+        #   同一个 strftime 格式（`%Y-%m-%dT%H:%M:%S.%fZ`，codex-rotate 同款）⇒ 字符串序就是时间序。
+        if sl is not None and sl.get("file") == f and v > (sl.get("last_refresh") or ""):
+            sl["last_refresh"] = v
+    _mutate_state(_lr)
+    return new[0], new[1]
 
 
 def _win_used(slot, key):
@@ -301,8 +329,42 @@ def cooling(sl, now):
     cu = sl.get("cooling_until", 0)
     if cu <= now:
         return False
-    ra = ((sl.get("quota") or {}).get("primary") or {}).get("resets_at")
+    if recovered(sl, now):
+        return False
+    q = sl.get("quota") or {}
+    # ★ 还有窗口见底且没到重置 ⇒ 冷却仍成立（全方面评审 §10：周额度用光时 5h 先过重置点，旧判据当它回满了）
+    if _spent_resets(q, now):
+        return True
+    ra = (q.get("primary") or {}).get("resets_at")
     return not (ra and ra <= now)
+
+
+def recovered(sl, now):
+    """冷却之后读到了**新**额度，且 5h 还有余量、没有窗口见底 ⇒ 号已经回来了，冷却作废。
+
+    ★★ 用户 2026-10-23：「官方重置的时候也没有取消冻结。识别到 5H 额度不是 0 的，就应该取消冻结」。
+      原来只认「快照里 primary 的重置点已过」：一旦 quotad 在重置后读到新快照，`resets_at` 换成下一个窗口
+      （在未来），这条判据反而失效，号一直冻到 `cooling_until` —— 而 429 时读数缺失或过期，`_cool` 按
+      5 h 兜底，比真实重置晚得多。
+    ★ 必须是 `_cool` **之后**拍的快照（`captured_at > cooled_at`）：冷却前拍的 99% 不能证明 429 之后还有余量，
+      否则立刻又挑中它、再撞 429。没有 `cooled_at`（旧数据 / 手动 `cool`）⇒ 不判，保持原样。
+    ★ 代理 `cooling()` 与 `codex-rotate::_patch_slot`（写入额度时直接删 `cooling_until`，让 UI / CLI 的
+      各处原始判断也跟上）共用这一份。"""
+    ca = sl.get("cooled_at")
+    q = sl.get("quota") or {}
+    if not ca or (q.get("captured_at") or 0) <= ca:
+        return False
+    p = q.get("primary")
+    if not isinstance(p, dict) or p.get("used_percent") is None or p["used_percent"] >= 100:
+        return False
+    return not _spent_resets(q, now)
+
+
+def _spent_resets(q, now):
+    """见底（used ≥ 100）且还没到重置的窗口各自的 `resets_at`。`_cool` 与 `cooling` 共用这一份。"""
+    return [w.get("resets_at") for w in (q.get("primary"), q.get("secondary"))
+            if isinstance(w, dict) and (w.get("used_percent") or 0) >= 100
+            and (w.get("resets_at") or 0) > now]
 
 
 def usable(aid, sl, now):
@@ -458,12 +520,18 @@ def _relay_upstream():
                         if isinstance(r, dict) and r.get("id") == rid), None)
             if row and row.get("enabled") and row.get("key") and row.get("base_url"):
                 u = urllib.parse.urlsplit(str(row["base_url"]))
-                if u.scheme == "https" and u.hostname:
+                # ★ 回环明文 http 放行（自建 one-api `http://127.0.0.1:3000`，与 `relay/store.py` 的校验同一条）：
+                #   原来这里只认 https ⇒ store 允许保存、界面显示走中转站，请求却静默走了账号池（全方面评审 §4）。
+                loop = (u.hostname or "").lower() in ("localhost", "127.0.0.1", "::1")
+                if u.hostname and u.scheme not in ("https",) and not (u.scheme == "http" and loop):
+                    _plog(f"relay [{row.get('label') or rid}] base_url 既不是 https 也不是回环 http — 退回账号池")
+                if u.hostname and (u.scheme == "https" or (u.scheme == "http" and loop)):
                     up = {
                         "id": rid,
                         "label": str(row.get("label") or rid),
                         "host": u.hostname,
-                        "port": u.port or 443,
+                        "tls": u.scheme == "https",
+                        "port": u.port or (443 if u.scheme == "https" else 80),
                         # base_url 到 `/v1` 为止；请求路径(`/responses`)由 codex 给出。
                         "base": u.path.rstrip("/"),
                         "key": str(row["key"]),
@@ -591,7 +659,15 @@ def _cool(aid, minutes=300):
         if sl:
             now = time.time()
             until = now + minutes * 60
-            ra = ((sl.get("quota") or {}).get("primary") or {}).get("resets_at")
+            q = sl.get("quota") or {}
+            sl["cooled_at"] = now   # `recovered()` 只认这之后拍的快照
+            # ★ 见底的是哪个窗口就等哪个窗口（全方面评审 §10）：Plus 的周额度用光时 primary 是 5h，
+            #   原来按 5h 冷却，5h 一过又撞一次 429。几个都见底 ⇒ 等最晚的那个。
+            spent = _spent_resets(q, now)
+            if spent:
+                sl["cooling_until"] = max(spent) + 60
+                return
+            ra = (q.get("primary") or {}).get("resets_at")
             if ra and ra > now:
                 until = min(until, ra + 60)  # never cool past the real 5h-window reset
             elif ra:
@@ -958,8 +1034,11 @@ class Handler(BaseHTTPRequestHandler):
         # 连接构造/TLS ctx 也放进这一段:它们抛错时零字节送出,同属 SendFailed。
         conn = None
         try:
-            conn = http.client.HTTPSConnection(host, port,
-                                               context=ssl.create_default_context(), timeout=180)
+            if up and not up.get("tls", True):
+                conn = http.client.HTTPConnection(host, port, timeout=180)     # 只会是回环（见 `_relay_upstream`）
+            else:
+                conn = http.client.HTTPSConnection(host, port,
+                                                   context=ssl.create_default_context(), timeout=180)
             conn.request(self.command, path, body=body, headers=hdrs)
         except Exception as e:
             if conn is not None:
@@ -1082,17 +1161,19 @@ class Handler(BaseHTTPRequestHandler):
                 break
             self.wfile.write(chunk)
             self.wfile.flush()
-            # ★ `aid` 为空(中转站档)时整段跳过:粘性表存 `None` 会让 `_pick` 把
-            #   "没有归属"读成"归属于一个叫 None 的号"。跳过后 scanbuf 也不再增长。
-            if aid and not got:
+            # ★ `aid` 为空(中转站档)时**不进粘性表**:存 `None` 会让 `_pick` 把"没有归属"读成
+            #   "归属于一个叫 None 的号"。但归属行照写(标签是 `name@relay`):不写的话请求账本只能把它
+            #   记成「直连」,与真直连分不开(全方面评审 §5)。`rotation.py` 认 `@relay`,不会把它画进泳道。
+            if not got:
                 scanbuf += chunk
                 m = _RESP_ID.search(scanbuf)
                 if m:
                     rid = m.group(1).decode()
-                    with _lock:
-                        _affinity[rid] = aid
-                        while len(_affinity) > 256:  # FIFO cap — codex never sends previous_response_id
-                            _affinity.pop(next(iter(_affinity)))  # today, so entries only accumulate
+                    if aid:
+                        with _lock:
+                            _affinity[rid] = aid
+                            while len(_affinity) > 256:  # FIFO cap — codex never sends previous_response_id
+                                _affinity.pop(next(iter(_affinity)))  # today, so entries only accumulate
                     got = True
                     _plog(f"affinity {rid[:18]} → [{label}]", rid)
                 elif len(scanbuf) > 65536:
@@ -1151,7 +1232,8 @@ class Handler(BaseHTTPRequestHandler):
                 if resp.status == 401:
                     conn.close()  # stored token rejected → one forced refresh, retry SAME account once
                     conn = None
-                    token2, account_id2 = _slot_token(aid, slot, force=True)
+                    why = {}
+                    token2, account_id2 = _slot_token(aid, slot, force=True, why=why)
                     if token2 and token2 != token:
                         # ★ 评审抓到的 blocker:这里原本是 bare `except Exception: continue`,
                         # 与首发路径同一个双计费 bug。第一发 401 说明没计费,但这一发是真 billable POST。
@@ -1172,6 +1254,9 @@ class Handler(BaseHTTPRequestHandler):
                             streamed = True
                             self._finish(conn, resp, aid, label)
                             return
+                    if why.get("transient"):
+                        _plog(f"401, refresh got no verdict ({why['transient']}) → skip [{label}], not marked dead", rid)
+                        continue
                     _mark_dead(aid, (token2 or token)[-16:])
                     _plog(f"401 invalidated → marked dead [{label}], failing over", rid)
                     continue

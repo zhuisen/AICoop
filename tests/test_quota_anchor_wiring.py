@@ -23,6 +23,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -65,14 +66,18 @@ class LoaderActuallyLoads(unittest.TestCase):
 
     def test_loader_returns_none_instead_of_raising_when_module_is_absent(self):
         """★ 打包漏带时必须安静降级 —— 那正是 2026-09-05 事故的形态。"""
-        mod = _load_script("agy-quota")
-        real = MODULE
-        tmp = MODULE.with_suffix(".py.hidden-by-test")
-        real.rename(tmp)
-        try:
+        # ★ 拷到临时目录再加载（全方面评审 §11）：原来把真源码 `traffic/quota_anchors.py` 改名藏起来 ——
+        #   本机是克隆安装，服务直接跑仓库里的代码，测试期间锚点账本静默失效；测试被中断时文件就一直是改名状态
+        #   （`test_quota_anchor_wiring` 偶发失败的一个竞争原因：quotad 恰好在那一刻加载它）。
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy2(ROOT / "agy-quota", Path(d) / "agy-quota")
+            (Path(d) / "traffic").mkdir()                     # 有目录、没有模块 = 打包漏带的形态
+            loader = importlib.machinery.SourceFileLoader("agy_quota_no_ledger", str(Path(d) / "agy-quota"))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
             self.assertIsNone(mod._quota_anchors_mod())
-        finally:
-            tmp.rename(real)
+        self.assertTrue(MODULE.is_file(), "★ 测试动了真源码")
 
 
 class NoteWritesWhereItSaysItDoes(unittest.TestCase):

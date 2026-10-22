@@ -22,5 +22,6 @@ export function useGrokQuota(opts: { enabled?: boolean } = {}): QuotaSidecar<Gro
     freshMs: FRESH_MS,
     enabled: opts.enabled,
     updateEvent: "grok-quota-updated",
+    okOf: (s) => (s.accounts ?? []).some((a) => a.available),
   });
 }

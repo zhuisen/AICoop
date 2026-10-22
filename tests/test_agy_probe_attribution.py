@@ -227,8 +227,6 @@ class TheProbeIsNeverAutomatic(unittest.TestCase):
         self.assertNotIn("probe", code[i:j], "★★★ 共用取数函数里混进了 probe")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheErrorSummaryKeepsTheUsefulHalf(unittest.TestCase):
@@ -314,3 +312,7 @@ class HealthHonoursTheLabelArgument(unittest.TestCase):
         """★ 不传名字时仍是全池 —— 这是既有行为，别顺手改掉。"""
         self.assertRegex(self.body, r"if names:",
                          "★ 没有「不传名字 = 全池」这个分支")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -12,20 +12,24 @@ import { parseClaudeQuota, type ClaudeQuota } from "../mbLogic";
  *   托盘弹出时一次 —— 状态栏转写本身就只在 Claude Code 刷新状态栏时才变，读得再勤也没有新数。
  * ★ 后端命令可能还不存在（Rust 切片未合入）：invoke 抛错 ⇒ `quota` 仍为 null，界面写 —。
  */
-export function useClaudeQuota(enabled: boolean): { quota: ClaudeQuota | null; err: string | null; refresh: () => void } {
+export function useClaudeQuota(enabled: boolean): { quota: ClaudeQuota | null; err: string | null; refresh: () => Promise<boolean | null> } {
   const [quota, setQuota] = useState<ClaudeQuota | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const inflight = useRef(false);
 
-  const load = useCallback(async () => {
-    if (inflight.current) return;
+  /** → 读到了 / 没读到 / `null` = 已有一次在读（调用方别报成功或失败）。 */
+  const load = useCallback(async (): Promise<boolean | null> => {
+    if (inflight.current) return null;
     inflight.current = true;
     try {
       const raw = await invoke<string>("read_statusline_quota");
       const q = parseClaudeQuota(raw);
-      if (q) { setQuota(q); setErr(null); } else setErr("额度转写的格式不对");
+      if (q) { setQuota(q); setErr(null); return true; }
+      setErr("额度转写的格式不对");
+      return false;
     } catch (e: unknown) {
       setErr(String(e));
+      return false;
     } finally {
       inflight.current = false;
     }
@@ -39,6 +43,6 @@ export function useClaudeQuota(enabled: boolean): { quota: ClaudeQuota | null; e
     return () => { window.clearInterval(id); void un.then((f) => f()); };
   }, [enabled, load]);
 
-  const refresh = useCallback(() => { void load(); }, [load]);
+  const refresh = useCallback(() => load(), [load]);
   return { quota, err, refresh };
 }

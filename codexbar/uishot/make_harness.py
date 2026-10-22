@@ -102,8 +102,8 @@ STUB = """
     // ★★ `?h=<n>` 预置**记住的弹窗高度**。账号 Tab 用的就是这个数(今日页没渲染,量不到),
     //    所以「两个 Tab 等高」这条闸**必须能预置它** —— 否则每次加载 localStorage 都是空的,
     //    账号页永远落到兜底值,验出来的"相等"只是两个兜底值相等,与真实行为无关。
-    if (p.get('h')) localStorage.setItem('codexbar_mb_h', p.get('h'));
-    else localStorage.removeItem('codexbar_mb_h');
+    if (p.get('h')) localStorage.setItem('codexbar_mb_h_base', p.get('h'));
+    else localStorage.removeItem('codexbar_mb_h_base');
     // 平台偏好:`?plat=demo` 套一组示范偏好(停用一家 + 改名改色 + 换顺序),用来验设置面板与总览
     if (p.get('plat') === 'demo') {
       localStorage.setItem('codexbar_platform_prefs', JSON.stringify({
@@ -1425,6 +1425,9 @@ function relayEntry() {
       //   `?build=<n>`：给 0 就验"刚发版还没本地构建过"那一态（只显示 X.Y.Z）。
       case 'build_number':
         return Promise.resolve(p.get('build') || '7');
+      // `?pre=beta.1` 验预发布显示；缺省空 = 正式版
+      case 'build_prerelease':
+        return Promise.resolve(p.get('pre') || '');
       case 'read_logs':
         return Promise.resolve(LOGS_TXT);
       // ★ 代理轮换台账。**不打桩就是假绿** —— 落到 default 返回 null ⇒ `rot` 恒 null ⇒
@@ -1695,7 +1698,8 @@ function relayEntry() {
     var nw = Math.max(0, Math.min(3, Number(p.get('hvwarns') || 0)));
     // `hvsnoozed=1`：grok 已被 × 藏起来（B1），面板底部一行「已隐藏 · 撤销」，格子里没有它
     var sz = p.get('hvsnoozed') === '1';
-    var cells = m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4);
+    // `hvcells=0`：一格都没有（全被 × 藏起来了，配 `hvsnoozed=1`）—— 面板仍要弹、只剩「已隐藏 · 撤销」（全方面评审 §8）
+    var cells = m === '0' ? [] : m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4);
     if (sz) cells = cells.filter(function (c) { return c.key !== 'grok'; });
     return { cells: cells, max: m === '8' ? 8 : 4, warns: W.slice(0, nw), snoozed: sz ? [{ key: 'grok', reset: '3h58m' }] : [] };
   }
@@ -2456,9 +2460,10 @@ function relayEntry() {
 
           // 环:卡片里唯一 52×52 的 svg。报**中心 y** —— 环是圆的,比顶边更能反映"看起来在不在一条线上"。
           // ★ 用户 2026-08-26 指出环顶对齐难看,改回居中;居中之后它也必须跨卡对齐,所以一并守住。
-          grid.querySelectorAll('svg').forEach(function (e) {
+          // ★ 按身份认环（`OvRing` 的 `data-ov-ring`），不按尺寸（全方面评审 §11 存疑，2026-10-23 核实成立）：
+          //   AICoop 改版后环不再是 52×52 的 svg，这里恒 0 个 —— 跨卡对齐里「环」那一项一直没在比，且什么都不报。
+          grid.querySelectorAll('[data-ov-ring]').forEach(function (e) {
             var r = e.getBoundingClientRect();
-            if (Math.round(r.width) !== 52) return;
             out.rings.push(tag(e) + '@' + Math.round(r.top + r.height / 2));
           });
           return out;
@@ -2631,6 +2636,28 @@ def redacted_state():
                 "id": "card-demo-soon", "status": "available",
                 "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_s + 30 * 3600))}]}
             break
+    # ★ 用卡弹窗的闸（`test_use_credit.TheConfirmDialog`）要「Egan 有 3 张卡、按到期先后排」。原来全靠真状态里
+    #   那个号恰好有 3 张 —— 用掉 / 过期一张，闸就红（2026-10-23，与代码无关）。不够就补，日期按现在算（夹具不冻日期）。
+    for a in alive_ids:
+        sl = out_slots[a]
+        if sl.get("label") != "Egan":
+            continue
+        # ★ 只数前端真会画出来的：available、未来到期、id 不重复（阶段 F 评审 codex：三张过期卡会挡住补卡，
+        #   而 `helpers.ts` 把它们全过滤掉 ⇒ 弹窗 0 张）
+        cards, seen = [], set()
+        for c in (sl.get("credits_detail") or {}).get("credits") or []:
+            try:
+                t = time.mktime(time.strptime(c.get("expires_at", "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            except (ValueError, TypeError):
+                continue
+            if c.get("status") == "available" and c.get("id") and c["id"] not in seen and t > now_s + 3600:
+                seen.add(c["id"])
+                cards.append(c)
+        for k, days in enumerate((3, 9, 20)[len(cards):]):
+            cards.append({"id": "card-demo-egan-%d" % k, "status": "available",
+                          "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_s + days * 86400 + 3600))})
+        sl["credits_detail"] = {"credits": cards}
+        sl["credits"] = {**(sl.get("credits") or {}), "available": len(cards)}
     active = idmap.get(raw.get("active"), "")
     # ★★ `last_aid`（代理最近一次真的用了谁）**必须与 `active` 不同**（2026-09-23）。
     #   菜单栏/托盘改成跟代理走之后，判据就是「高亮落在 last_aid 而不是 active 上」——

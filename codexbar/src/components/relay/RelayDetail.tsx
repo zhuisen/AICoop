@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Theme } from "../../theme";
 import { MONO, tkPal } from "../tk/tkPal";
 import { money, type RelayEntry, type RelayRow } from "../../relay";
-import { type Banner, type Group, agoText, bannerOf, int, monthSum, runDays, saveRatio, sumOf, todayModels, tok } from "../../relayView";
+import { type Banner, type Group, agoText, bannerOf, groupPerActiveDay, int, monthSum, runDays, saveRatio, sumOf, todayModels, tok } from "../../relayView";
 
 /**
  * 中转站明细（P8-1.4），一个平台一块。账户表 → 视角（合计 / 各账户）→ 余额 + 还能撑 → 今日实扣 / 本月实扣 / 今日请求 → 今日按模型。
@@ -35,7 +35,12 @@ export default function RelayDetail({ t, g, rows, usage, exitId, usageBusy, onRe
   const ds = ids.map((id) => ent(id)?.data);
   const units = ds.map((d) => d?.unit);
   const bal = sumOf(ds.map((d) => d?.balance), units);
-  const perDay = sumOf(ds.map((d) => d?.runway?.per_active_day), units);
+  const perDay0 = sumOf(ds.map((d) => d?.runway?.per_active_day), units);
+  // 组合计：按日期合并后的日均（`groupPerActiveDay`），不是各账户日均之和。
+  // ★ 币种按「有数据的账户」判，不借 `perDay0`（阶段 C 评审：各账户自己的日均都读不到时它没有币种、也判不出混币种）
+  const cur = sumOf(ds.map((d) => (d ? 0 : null)), units);
+  const perDay = ids.length === 1 ? perDay0
+    : { v: cur.mixed || cur.v == null ? null : groupPerActiveDay(ds), unit: cur.unit, mixed: cur.mixed };
   const days = ids.length === 1 ? runDays(ds[0]?.balance, ds[0]?.runway?.days)
     : bal.v === 0 ? 0 : bal.v != null && perDay.v ? Math.floor(bal.v / perDay.v) : null;
   const reason = ids.length === 1 ? ds[0]?.runway?.reason ?? null : null;
@@ -59,11 +64,12 @@ export default function RelayDetail({ t, g, rows, usage, exitId, usageBusy, onRe
 
   const bannerEl = banner && (() => {
     const tone = banner.kind === "zero" ? { bg: "rgba(224,82,77,.1)", bd: "rgba(224,82,77,.4)", c: bad }
-      : banner.kind === "stale" ? { bg: "rgba(251,191,36,.08)", bd: "rgba(251,191,36,.35)", c: amb }
+      : banner.kind === "stale" || banner.kind === "error" ? { bg: "rgba(251,191,36,.08)", bd: "rgba(251,191,36,.35)", c: amb }
         : { bg: dark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.03)", bd: dark ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.12)", c: p.text2 };
     const txt = banner.kind === "zero"
       ? (banner.isExit ? `${banner.acc} 余额为 0：走它的请求会失败` : `${banner.acc} 余额为 0 · 当前出口不受影响`)
       : banner.kind === "nobal" ? `${banner.acc} 余额读不到（接口没返回）· 不等于 0，不报警；合计也只能显示「—」`
+        : banner.kind === "error" ? `${banner.acc} 从未取到数据：${banner.why ?? "原因未知"} · 下次刷新自动重试`
         : `数据过期：最近一次取数失败，下面是 ${agoText(banner.since, Date.now() / 1000)}的快照`;
     return (
       <div data-relay-banner={banner.kind} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderRadius: 8,
@@ -138,6 +144,10 @@ export default function RelayDetail({ t, g, rows, usage, exitId, usageBusy, onRe
                 {e?.stale && (
                   <span data-relay-balance-stale title={`这次没取到，显示的是上一次的读数${e.detail ? ` —— ${e.detail}` : ""}`}
                         style={{ color: amb, marginLeft: 2, cursor: "help" }}>*</span>
+                )}
+                {e?.ok === false && !e.data && !off && (
+                  <span data-relay-balance-never title={`还没取到过：${e.detail ?? "原因未知"}`}
+                        style={{ color: amb, marginLeft: 2, cursor: "help" }}>!</span>
                 )}
               </span>
               <span title={dd == null ? (d?.runway?.reason ?? "样本不足") : undefined}
@@ -216,7 +226,7 @@ export default function RelayDetail({ t, g, rows, usage, exitId, usageBusy, onRe
             <span style={{ fontSize: 12, color: p.label, flexShrink: 0 }}>还能撑</span>
             <span style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, color: runC, flexShrink: 0 }}>{days == null ? "—" : `${days} 天`}</span>
             <span style={{ fontSize: 11.5, color: muted, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {days == null ? (bal.v == null && !bal.mixed ? "有账户余额读不到，没法估算" : reason ?? "活跃日样本不足")
+              {days == null ? (bal.mixed ? "多币种，不能合计" : bal.v == null ? "有账户余额读不到，没法估算" : reason ?? "活跃日样本不足")
                 : `近 7 个活跃日日均实扣 ${money(perDay.v, perDay.unit)}`}
             </span>
           </span>

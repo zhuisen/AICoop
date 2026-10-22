@@ -1134,7 +1134,8 @@ pub mod draw {
     unsafe fn silhouette(logo: usize, ink: (f64, f64, f64)) -> usize {
         let img = logo as *mut AnyObject;
         if img.is_null() { return 0; }
-        const S: f64 = 28.0;   // 14 pt @2×，与空闲 logo 同尺寸
+        // ★ 按 logo 现在的尺寸光栅化（全方面评审 §8：logo 已从 14 pt 放大到 18 pt，这里还按 14 pt @2× 画 ⇒ 剪影发虚）
+        const S: f64 = crate::tray_idle::LOGO * 2.0;
         let Some((rep, ctx)) = new_ctx_sq(S) else { return 0 };
         save();
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: ctx];

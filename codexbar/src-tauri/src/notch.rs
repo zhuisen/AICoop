@@ -574,12 +574,38 @@ fn install_monitors(app: &AppHandle) {
             mons.push(Retained::into_raw(m) as usize);
         }
     }
+    // ★ 插拔显示器 / 合盖开盖：系统发 `NSApplicationDidChangeScreenParametersNotification`，立刻对齐一次
+    //   （全方面评审 §9 存疑：原来只靠下一次鼠标移动里的 `reconcile`，不动鼠标时光晕留在旧位置）。
+    let a3 = app.clone();
+    // 几何有 `GEOM_TTL` 缓存 ⇒ 先作废再对齐，否则这一下读到的还是旧屏
+    let screens = RcBlock::new(move |_n: NonNull<AnyObject>| { *GEOM.lock().unwrap() = None; reconcile(&a3); });
+    // SAFETY: 主线程；通知中心 copy 这个 block，返回的观察者对象由我们持有，`remove_monitors` 里注销并释放。
+    unsafe {
+        let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+        let queue: *mut AnyObject = msg_send![class!(NSOperationQueue), mainQueue];
+        let name = objc2_foundation::NSString::from_str("NSApplicationDidChangeScreenParametersNotification");
+        let obs: Option<Retained<AnyObject>> = msg_send![center, addObserverForName: &*name, object: std::ptr::null_mut::<AnyObject>(),
+                                                         queue: queue, usingBlock: &*screens];
+        if let Some(o) = obs { *SCREEN_OBS.lock().unwrap() = Some(Retained::into_raw(o) as usize); }
+    }
 }
+
+/// 屏幕参数变更的通知观察者（`install_monitors` 装、`remove_monitors` 拆）。
+static SCREEN_OBS: Mutex<Option<usize>> = Mutex::new(None);
 
 fn remove_monitors() {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
+    if let Some(p) = SCREEN_OBS.lock().unwrap().take() {
+        // SAFETY: 指针来自 `install_monitors` 的 `Retained::into_raw`，只释放这一次。
+        unsafe {
+            if let Some(obj) = Retained::from_raw(p as *mut AnyObject) {
+                let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+                let _: () = msg_send![center, removeObserver: &*obj];
+            }
+        }
+    }
     let mut mons = MONITORS.lock().unwrap();
     for p in mons.drain(..) {
         // SAFETY: 指针来自 `install_monitors` 的 `Retained::into_raw`，只释放这一次。
@@ -645,11 +671,15 @@ pub fn open_layout() -> Option<serde_json::Value> {
     }))
 }
 
+/// 空闲面板的最小高：一行「已隐藏 · 撤销」（`notchIdle.ts::notchGrid(0, 1).h` = 34）略小一点。
+const IDLE_H_MIN: f64 = 32.0;
+
 /// 前端量出面板的自然高度后告诉这里。`idle` = 空闲格子那份，否则 4e 卡片（随 Tab / 会话展开 / 告警行变）。
 /// 只有这一轮展开正是这一种时才重摆窗口。
 pub fn set_panel_height(app: &AppHandle, h: f64, idle: bool) {
     let slot = if idle { &PANEL_H_IDLE } else { &PANEL_H };
-    *slot.lock().unwrap() = h.clamp(80.0, CARD_H_MAX);
+    // ★ 空闲那份全藏了只剩「已隐藏 · 撤销」行时只有 34 pt；下限仍按 4e 卡的 80 会在下面留一块透明吃点击区（阶段 D 评审 gemini）
+    *slot.lock().unwrap() = h.clamp(if idle { IDLE_H_MIN } else { 80.0 }, CARD_H_MAX);
     if OPEN.load(Ordering::SeqCst) && OPEN_IDLE.load(Ordering::SeqCst) == idle { place_soon(app, true); }
 }
 

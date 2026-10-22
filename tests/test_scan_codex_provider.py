@@ -267,8 +267,6 @@ class TheUiSaysTheCostDoesNotApply(unittest.TestCase):
         self.assertNotIn("costOfBucket(b, ", self.PAGE)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheRouteRowActuallyRenders(unittest.TestCase):
@@ -397,3 +395,7 @@ class RelayAttributionSurvivedTheArchitectureChange(unittest.TestCase):
         billed_blk = page[page.index("const billed ="):page.index("const billedTok")]
         self.assertNotIn("by_provider", billed_blk)
         self.assertIn("relay_billed", billed_blk)
+
+
+if __name__ == "__main__":
+    unittest.main()

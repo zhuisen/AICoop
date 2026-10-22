@@ -198,8 +198,6 @@ for i in range(40):
                     f"★★ {s} 只剩 {len(srcs[s])}/40 条 —— 锁没挡住互相覆盖")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 def _load_rotate():
@@ -296,3 +294,7 @@ class TheProbeRecordsTheWindowItJustStarted(unittest.TestCase):
              "secondary": {"used_percent": None, "window_minutes": None, "resets_at": None},
              "captured_at": time.time(), "source": "probe"}
         self.assertIsNone(mod._mark_billed_anchor("aid-x", q, True))
+
+
+if __name__ == "__main__":
+    unittest.main()

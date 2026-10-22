@@ -52,6 +52,9 @@ export function claudeOtelWarn(st: ClaudeOtelStatus | null, readErr: string | nu
       return "⚠ 还没收到数据：重开 Claude Code 会话";
     case "on_down":
       return st.receiver.error ? `⚠ ${st.receiver.error}` : "⚠ 接收端没在运行：在「账号池接入」装常驻服务";
+    case "partial":
+      // ★ 只有一部分键是我们的值（另一部分被删了 / 没写全）：开关画成「关」，点一下会补齐（全方面评审 §6）
+      return "⚠ 只配好了一部分：点开关补齐";
     case "error":
       return st.error ? `⚠ ${st.error}` : "⚠ 读不到 Claude Code 的设置";
     default:

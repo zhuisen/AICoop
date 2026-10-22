@@ -8,6 +8,7 @@ import {
   filterPlatform, fmtHHMM, fmtInt, fmtSecs, fmtTokens, fmtTps, fmtWhen, footerText, modelName,
   rowsForDay, selectedIndex, slowWhy, sourceLabel, sourceNote, timeSplit, toMs, ttftTone, tzLabel,
   type ReqDay, type ReqFilter, type ReqPlatform, type ReqRow, type Tone,
+  rowStale,
 } from "../requests";
 
 /**
@@ -77,7 +78,7 @@ export interface ReqNav { platform: ReqPlatform | null; n: number }
 
 export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: boolean; nav?: ReqNav }) {
   const pal = t.isDark ? PAL.dark : PAL.light;
-  const { payload, readAt, err, retry } = useRequests(true);
+  const { payload, readAt, err, failed, retry } = useRequests(true);
   const [day, setDay] = useState<ReqDay>("today");
   const [f, setF] = useState<ReqFilter>("all");
   const [selKey, setSelKey] = useState<string | null>(null);
@@ -103,7 +104,8 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
   const sel = selectedIndex(list, selKey);
   const r: ReqRow | undefined = list[sel];
   const stale = err != null;
-  const dim = stale ? STALE_OPACITY : 1;
+  // 表头只在「全部读不到」时降；每一行只看它自己那一家（`rowStale`）
+  const dim = rowStale(failed, "") ? STALE_OPACITY : 1;
   const toneColor = (tone: Tone) => (tone === "amber" ? pal.amber : tone === "muted" ? t.muted : t.text);
   const acct = (a: string | null) => accountLabel(a, privacy, (s) => maskId(s, true));
   const empty = list.length === 0;
@@ -122,7 +124,7 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
   const kpi = (label: string, value: string, unit: string) => (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
       <span style={{ fontSize: 11, color: t.muted, whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ ...NUM, fontSize: 17, fontWeight: 600 }}>{value}<span style={{ fontSize: 11, fontWeight: 400, color: t.muted }}> {unit}</span></span>
+      <span style={{ ...NUM, fontSize: 17, fontWeight: 600 }}>{value}{value !== DASH && <span style={{ fontSize: 11, fontWeight: 400, color: t.muted }}> {unit}</span>}</span>
     </div>
   );
   const field = (label: string, value: string, color?: string) => (
@@ -219,23 +221,24 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
                           transition: "opacity .15s ease-out", pointerEvents: "none" }} />
               {list.map((x, i) => {
                 const tone = ttftTone(x.ttft_ms);
+                const rd = rowStale(failed, x.platform) ? STALE_OPACITY : 1;
                 return (
                   <div key={x.key} data-req-row={i} onClick={() => setSelKey(x.key)}
                        style={{ display: "grid", gridTemplateColumns: REQ_GRID, columnGap: 8, alignItems: "center", height: 34, padding: "0 10px", borderRadius: 7, background: i === sel ? pal.selRow : "transparent", fontSize: 12.5, cursor: "pointer" }}>
-                    <span style={{ ...NUM, fontSize: 11.5, color: t.muted, textAlign: "center", opacity: dim }}>{fmtHHMM(toMs(x.t_end))}</span>
+                    <span style={{ ...NUM, fontSize: 11.5, color: t.muted, textAlign: "center", opacity: rd }}>{fmtHHMM(toMs(x.t_end))}</span>
                     <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, minWidth: 0, whiteSpace: "nowrap" }}>
                       <PlatformLogo platform={x.platform} isDark={t.isDark} size={14} alt={PLATFORM_NAME[x.platform]} />
-                      <span style={{ ...NUM, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", opacity: dim }}>{modelName(x.model)}</span>
+                      <span style={{ ...NUM, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", opacity: rd }}>{modelName(x.model)}</span>
                     </span>
-                    <span style={{ color: t.text2, fontSize: 12, textAlign: "center", ...NOWRAP, opacity: dim }}>{sourceLabel(x.platform, x.source)}</span>
-                    <span style={{ color: t.text2, textAlign: "center", ...NOWRAP, opacity: dim }}>{acct(x.account)}</span>
-                    <span style={{ ...NUM, textAlign: "center", opacity: dim }}>{fmtTokens(x.input)}</span>
-                    <span style={{ ...NUM, textAlign: "center", opacity: dim }}>{fmtInt(x.output)}</span>
-                    <span style={{ ...NUM, textAlign: "center", color: toneColor(tone), opacity: dim }}>{fmtSecs(x.ttft_ms)}</span>
-                    <span style={{ ...NUM, textAlign: "center", fontWeight: 600, color: x.tps == null ? t.muted : pal.num[x.platform], opacity: dim }}>
+                    <span style={{ color: t.text2, fontSize: 12, textAlign: "center", ...NOWRAP, opacity: rd }}>{sourceLabel(x.platform, x.source)}</span>
+                    <span style={{ color: t.text2, textAlign: "center", ...NOWRAP, opacity: rd }}>{acct(x.account)}</span>
+                    <span style={{ ...NUM, textAlign: "center", opacity: rd }}>{fmtTokens(x.input)}</span>
+                    <span style={{ ...NUM, textAlign: "center", opacity: rd }}>{fmtInt(x.output)}</span>
+                    <span style={{ ...NUM, textAlign: "center", color: toneColor(tone), opacity: rd }}>{fmtSecs(x.ttft_ms)}</span>
+                    <span style={{ ...NUM, textAlign: "center", fontWeight: 600, color: x.tps == null ? t.muted : pal.num[x.platform], opacity: rd }}>
                       {fmtTps(x.tps)}{x.tps != null && <span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>}
                     </span>
-                    <span style={{ ...NUM, textAlign: "center", color: t.text2, opacity: dim }}>{fmtSecs(x.total_ms)}</span>
+                    <span style={{ ...NUM, textAlign: "center", color: t.text2, opacity: rd }}>{fmtSecs(x.total_ms)}</span>
                   </div>
                 );
               })}
@@ -287,7 +290,7 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
                   </span>
                   <span style={{ ...NUM, color: t.text2, textAlign: "right" }}>{fmtTokens(x.input + x.output)}</span>
                   <span style={{ ...NUM, fontWeight: 600, textAlign: "right", color: x.avgTps != null ? pal.num[p] : t.muted }}>
-                    {fmtTps(x.avgTps)}<span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>
+                    {fmtTps(x.avgTps)}{x.avgTps != null && <span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>}
                   </span>
                 </div>
               )))}

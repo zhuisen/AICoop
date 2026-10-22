@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Theme, modelColor } from "../theme";
 import PriceStack, { cacheNotes } from "../components/tk/PriceStack";
-import { priceWarnings } from "../rates";
+import { priceWarnings, recentModels } from "../rates";
 import Toast from "../components/Toast";
 import { introEnabled } from "../hooks/useIntro";
 import type { Bucket, CacheMode, Coverage, PlatformPrefs, RangeState, TrafficData } from "../traffic";
@@ -108,19 +108,8 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
     return orderedKeys(rows.map((r) => r.key), prefs, (k) => by.get(k)?.total ?? 0).map((k) => by.get(k)!).filter(Boolean);
   }, [rows, prefs]);
   const labels = rows[0]?.labels ?? [];
-  // 价格待核：最近 30 天用过的模型（不随所选区间变 —— 换个区间警告就消失，会让人以为价格表好了）
-  const priceWarns = useMemo(() => {
-    if (!data) return [];
-    const from = addDays(today, -29);
-    const used: { model: string; platform: string }[] = [];
-    for (const [k, pl] of Object.entries(data.platforms)) {
-      for (const [d, b] of Object.entries(pl.days ?? {})) {
-        if (d < from) continue;
-        for (const [m, mb] of Object.entries(b.models ?? {})) if ((mb.total ?? 0) > 0) used.push({ model: m, platform: k });
-      }
-    }
-    return priceWarnings(used, today);
-  }, [data, today]);
+  // 价格待核：最近 30 天用过的模型（不随所选区间变，口径见 `recentModels`）
+  const priceWarns = useMemo(() => (data ? priceWarnings(recentModels(data, today), today) : []), [data, today]);
   const days = diffDays(range.s, range.e);
   const gran = isToday ? null : effGran(st, days);
   const kpis = data ? buildKpis({ t, data, raw, rows, sel: soloOk ? [soloOk] : null, st, today, L, cacheMode, single: false }) : [];

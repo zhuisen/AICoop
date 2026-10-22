@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
+import { modalOpen } from "../modalOpen";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 
 export function useKeyboard(
@@ -11,6 +12,8 @@ export function useKeyboard(
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.metaKey) return;
+      // 弹层开着时只放行窗口级的 ⌘W / ⌘Q / ⌘M；切号、刷新、跳设置都等弹层关掉
+      if (modalOpen() && !["w", "q", "m"].includes(e.key)) return;
       switch (e.key) {
         case "w": e.preventDefault(); void invoke("set_main_visible", { show: false }); break;
         case "q": e.preventDefault(); void invoke("set_main_visible", { show: false }); break;

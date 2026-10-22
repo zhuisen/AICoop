@@ -36,7 +36,8 @@ export interface QuotaSidecar<T> {
   /** 读 sidecar 本身失败（IO 层）。**注意这与「额度读不到」是两回事** ——
    *  后者是 snapshot 里正常返回的降级数据（`reason` 字段），不是错误。 */
   err: string | null;
-  refresh: () => void;
+  /** 手动刷新 → 成功与否（toast 要等结果出来再说「已刷新」）。 */
+  refresh: () => Promise<boolean>;
 }
 
 /** ★ 同一个 `runCmd` 的在途请求。第二个调用方**等同一个 promise**，不再起第二个子进程。 */
@@ -77,8 +78,13 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
    *  没有它的话 UI 只在自己轮询到点时才前进，而轮询只在 `enabled` 的页面上跑 ——
    *  用户切走再回来最坏要等一整个 `freshMs`。 */
   updateEvent?: string;
+  /** 这份快照算不算「刷新成功」。子进程跑完 ≠ 读到了：grok 降级时照样写出一份快照（`available:false`），
+   *  只看 Promise 是否 resolve 会把「读不到」报成「已刷新」（阶段 A 评审）。缺省 = 解析得出就算。 */
+  okOf?: (d: T) => boolean;
 }): QuotaSidecar<T> {
-  const { readCmd, runCmd, freshMs, enabled = true, updateEvent } = cfg;
+  const { readCmd, runCmd, freshMs, enabled = true, updateEvent, okOf } = cfg;
+  const okRef = useRef(okOf); okRef.current = okOf;
+  const judge = (d: unknown): boolean => d != null && (okRef.current ? okRef.current(d as T) : true);
   const [snap, setSnap] = useState<T | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -107,9 +113,9 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
     return () => { subs.delete(adopt as (d: unknown) => void); };
   }, [runCmd, adopt]);
 
-  const fetchQuota = useCallback(async (force = false) => {
+  const fetchQuota = useCallback(async (force = false): Promise<boolean> => {
     const pending = _inflight.get(runCmd);
-    if (pending) { await pending; return; }
+    if (pending) { try { return judge(await pending); } catch { return false; } }
     setBusy(true);
     setErr(null);
     const job = (async () => {
@@ -128,8 +134,10 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
       const d = await job;
       // ★ 广播给**所有**实例，不只是发起的那个。
       for (const fn of _subs.get(runCmd) ?? []) fn(d);
+      return judge(d);
     } catch (e: unknown) {
       setErr(String(e).slice(0, 200));
+      return false;
     } finally {
       _inflight.delete(runCmd);
       setBusy(false);
@@ -200,5 +208,5 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
     return () => { dead = true; un?.(); };
   }, [updateEvent, readCmd, adopt]);
 
-  return { snap, busy, err, refresh: () => void fetchQuota(true) };
+  return { snap, busy, err, refresh: () => fetchQuota(true) };
 }

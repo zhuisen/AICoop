@@ -2,7 +2,7 @@ import { fullVersion, isWindowsUI } from "../helpers";
 import { NOTCH_DESC, notchRowDesc, notchRowWarn, type NotchStatus } from "../notchSegs";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import ConnectorPanel from "../components/ConnectorPanel";
 // ★ 外链走本仓自己的 `open_url`,**不用 `@tauri-apps/plugin-shell` 的 `open`**:
 //   那条路是 `open::that_detached`,spawn 完直接 drop `Child`,每点一次留一具僵尸
@@ -14,6 +14,7 @@ import logo from "../../src-tauri/icons/128x128@2x.png";
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import type { Theme } from "../theme";
 import { MultiSeg, SBtn, SegSlide, SGroup, Toggle, presetOpts } from "../components/settings/SetKit";
+import { isNewer } from "../semver";
 import ShimText from "../components/ShimText";
 import CmdRules from "../components/settings/CmdRules";
 import { useWinDensity } from "./TrafficPage";
@@ -298,10 +299,16 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
       setBorrow(null);
     }
   }, []);
+  /** 借用开关写失败的原因（全方面评审 §6：原来写失败不提示，开关回弹像什么都没发生）。 */
+  const [borrowErr, setBorrowErr] = useState<string | null>(null);
   const toggleBorrow = useCallback(async () => {
+    if (borrow == null) return;              // 读不到时不写：`!null` 是 true，会把「不知道」写成「开」
     const next = !borrow;
     try {
       await invoke("run_rotate", { args: ["borrow", next ? "--on" : "--off"] });
+      setBorrowErr(null);
+    } catch (e: unknown) {
+      setBorrowErr(`Codex 没改成：${String(e).slice(0, 80)}`);
     } finally { void loadBorrow(); }
   }, [borrow, loadBorrow]);
   useEffect(() => { void loadBorrow(); }, [loadBorrow]);
@@ -317,10 +324,14 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
     }
   }, []);
   const toggleAgyBorrow = useCallback(async () => {
+    if (agyBorrow == null) return;
     const next = !agyBorrow;
     try {
       await invoke("run_agy_rotate", { args: ["borrow", next ? "--on" : "--off"] });
+      setBorrowErr(null);
       void emit("agy-pool-updated");      // 续航条的「下一个」可能随之变化
+    } catch (e: unknown) {
+      setBorrowErr(`Gemini 没改成：${String(e).slice(0, 80)}`);
     } finally { void loadAgyBorrow(); }
   }, [agyBorrow, loadAgyBorrow]);
   useEffect(() => { void loadAgyBorrow(); }, [loadAgyBorrow]);
@@ -354,16 +365,24 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
 
   const win = isWindowsUI();
   const { W } = useWinDensity();
-  // 只读一次快照就够：平台行要的是「有哪几家、各自多少量」，扫描行要上次扫描的源状态。不保鲜、不在设置页触发扫描。
+  // 平台行要的是「有哪几家、各自多少量」，扫描行要上次扫描的源状态。不在设置页触发扫描；
+  // ★ 别处扫完（`traffic-updated`）就重读快照（~1 ms）：「数据源状态」写着「每次刷新自动更新」，
+  //   原来只在挂载时读一次（全方面评审 §6）。读失败留着上次的。
   const [snap, setSnap] = useState<TrafficData | null>(null);
   useEffect(() => {
-    invoke<string | null>("read_traffic_snapshot")
-      .then((raw) => { if (raw) setSnap(JSON.parse(raw) as TrafficData); })
-      .catch(() => { /* 没扫过就没有快照，平台列表回落到偏好里记过的键 */ });
+    const read = (): void => {
+      invoke<string | null>("read_traffic_snapshot")
+        .then((raw) => { if (raw) setSnap(JSON.parse(raw) as TrafficData); })
+        .catch(() => { /* 没扫过就没有快照，平台列表回落到偏好里记过的键 */ });
+    };
+    read();
+    const un = listen("traffic-updated", read);
+    return () => { void un.then((f) => f()); };
   }, []);
   // ★ 读不到要说是哪一端：一端读不到时另一端照常显示、照常可点（评审 P6-gemini-2）。
   const UNREAD = "读不到这项设置 —— 不是「已关闭」，是这次没读到";
-  const borrowDesc = borrow == null && agyBorrow == null ? UNREAD
+  const borrowDesc = borrowErr ? `⚠ ${borrowErr}`
+    : borrow == null && agyBorrow == null ? UNREAD
     : borrow == null ? `Codex 读不到（不是「已关闭」）· Gemini ${agyBorrow ? "借用" : "不借"}`
     : agyBorrow == null ? `Gemini 读不到（不是「已关闭」）· Codex ${borrow ? "借用" : "不借"}`
     : borrow || agyBorrow ? "借用时在总览顶部标红说明"
@@ -912,12 +931,6 @@ function DiscoverPanel({ t, snap }: { t: Theme; snap: TrafficData | null }) {
 const REPO = "zhuisen/codex-account-rotator";
 const REPO_URL = `https://github.com/${REPO}`;
 
-/** 语义化版本比较。**不能按字符串比** —— 那样 0.10.0 会被判成小于 0.9.0。 */
-function isNewer(remote: string, current: string): boolean {
-  const parse = (v: string) => v.replace(/^v/, "").split(".").map((x) => parseInt(x, 10) || 0);
-  const [a, b, c] = parse(remote), [x, y, z] = parse(current);
-  return a !== x ? a > x : b !== y ? b > y : c > z;
-}
 
 type UpdateState =
   | { k: "idle" }

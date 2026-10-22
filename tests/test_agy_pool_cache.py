@@ -234,8 +234,6 @@ class AFailedLiveProbeMustNotClaimThereIsNoDrift(unittest.TestCase):
             "  catch 块：{!r}".format(block))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # ★ 兄弟 webview 广播的那个号（夹具里 `sub2` = Huo）。与 SEED/LIVE 都不同，
@@ -529,3 +527,7 @@ class TheGeminiCardMatchesTheAccountCardLayout(unittest.TestCase):
         **搬走一句真话之前要先给它找到家。**
         """
         self.assertIn("在轮换池", self.src, "★ 「在/不在轮换池」被顺手弄丢了")
+
+
+if __name__ == "__main__":
+    unittest.main()

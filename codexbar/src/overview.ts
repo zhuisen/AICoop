@@ -385,13 +385,19 @@ export function dayStart(nowMs: number): number {
 }
 
 /** 每号：最后一次在岗的结束时刻（秒）+ 今天的 token。来自轮换段（`segments`）。 */
-export function lastUseByAcct(segs: readonly { acc: string; end: number; tokens: number }[], dayStartMs: number):
+export function lastUseByAcct(segs: readonly { acc: string; start?: number; end: number; tokens: number }[], dayStartMs: number):
   Map<string, { last: number; today: number }> {
   const m = new Map<string, { last: number; today: number }>();
+  const d0 = dayStartMs / 1000;
   for (const s of segs) {
     const v = m.get(s.acc) ?? { last: 0, today: 0 };
     v.last = Math.max(v.last, s.end);
-    if (s.end * 1000 >= dayStartMs) v.today += s.tokens || 0;
+    if (s.end >= d0) {
+      // ★ 跨午夜的那一段按时长比例切（2026-10-22 评审）：整段算进今天会把昨晚的用量记成今天的
+      const st = typeof s.start === "number" ? s.start : s.end;
+      const share = s.end > st && st < d0 ? (s.end - d0) / (s.end - st) : 1;
+      v.today += Math.round((s.tokens || 0) * share);
+    }
     m.set(s.acc, v);
   }
   return m;

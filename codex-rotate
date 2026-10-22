@@ -255,6 +255,44 @@ def _refresh_patch(slot):
     return patch
 
 
+def _patch_slot(st, aid, patch):
+    """定向写一个槽位的几个字段；**槽位不在就不写**（`setdefault` 会让期间被 remove 的号以残缺槽位复活，阶段 F 评审 codex）。"""
+    sl = st.get("slots", {}).get(aid)
+    if sl is not None:
+        sl.update(patch)
+        # ★ 新额度证明号已回来 ⇒ 直接删冷却（判据只有 `proxy.recovered` 一份；用户 2026-10-23「官方重置也不解冻」）
+        if "quota" in patch and (sl.get("cooling_until") or 0) > time.time() and _px().recovered(sl, time.time()):
+            sl.pop("cooling_until", None)
+            sl.pop("cooled_at", None)
+
+
+def _px():
+    """按需加载 `proxy/proxy.py`（冷却判据的唯一一份）。每次现读、不缓存：quotad 常驻，缓存住就是旧代码，
+    而放在顶层 import 又得进 `DAEMON_SOURCES`（同 `_dawn_sched`）。只在号正冷却时才走到，成本可忽略。"""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("_px_cool", Path(__file__).resolve().parent / "proxy" / "proxy.py")
+    m = _il.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _restamp_from_file(aid, slot):
+    """不联网：从槽位凭证文件解一次身份，变了才定向写回。
+
+    ★ 代理刷新非活跃号时只写凭证文件与 `last_refresh`（身份解码只有这里一份，代理里不复制）。
+    keepalive 撞上 `still valid` 原来直接跳过、从不解码 ⇒ 代理带回来的新 id_token（续费后的 `sub_until`、
+    Plus→Pro 的 `plan`）永远进不了槽位，而选号先看 `slot.plan`（阶段 F 评审 codex）。"""
+    try:
+        auth = _load_json(AUTH_DIR / slot["file"])
+    except (OSError, ValueError, KeyError):
+        return
+    probe = dict(slot)
+    _stamp_identity(probe, auth, expect_aid=aid)
+    patch = {k: probe[k] for k in IDENT_FIELDS if probe.get(k) and probe.get(k) != slot.get(k)}
+    if patch:
+        _mutate_state(lambda st, a=aid, v=patch: _patch_slot(st, a, v))
+
+
 def _autosync_live(s):
     """Auto-capture / keep-fresh the currently-live account — no manual `add` needed.
     A freshly `codex login`-ed account gets a slot automatically (labelled main / plusN),
@@ -967,16 +1005,33 @@ def cmd_remove(args):
     if not args:
         sys.exit("usage: codex-rotate remove <label>")
     key = args[0]
+    # ★ `remove` 在 `STATE_LOCKED` 里：整个 读→改→存 已由 `main()` 持 state 锁（这里再拿一次就是自锁死）。
     s = _state()
     target = next((aid for aid, sl in s["slots"].items()
                    if aid == key or sl.get("label") == key), None)
     if not target:
         sys.exit(f"no slot matching '{key}'")
+    # ★ 拒删 auth.json 里那个号（同 agy 拒删当前号，2026-10-22 全方面评审）：只从池里摘掉它，
+    #   下一次 autosync 看到 auth.json 里的 account_id 不在池里，就以新 label 把它收回来并抢回 active。
+    #   要删它先切走：`codex-rotate switch <别的号>`。
+    # ★ auth.json 在但读不出 ⇒ 确认不了它不是这个号 ⇒ 也拒（「读不到」不能当「不是它」，阶段 A 评审）。
+    lbl = s["slots"][target].get("label") or _mask(target)
+    try:
+        live_aid = _account_id(_load_json(LIVE)) if LIVE.exists() else None
+    except (OSError, ValueError) as e:
+        sys.exit(f"拒绝:读不出 ~/.codex/auth.json({type(e).__name__}),确认不了 [{lbl}] 不是裸 codex 正在用的号。"
+                 f"稍后再试;或先 `codex-rotate switch <别的号>` 再删。")
+    if live_aid == target:
+        sys.exit(f"拒绝:[{lbl}] 正在 ~/.codex/auth.json 里(裸 codex 正在用它),删了会被自动收回。"
+                 f"先 `codex-rotate switch <别的号>` 再删。")
     slot = s["slots"].pop(target)
     if s.get("active") == target:
         remaining = list(s["slots"].keys())
         s["active"] = remaining[0] if remaining else None
         s["active_since"] = time.time() if remaining else 0
+    # 置顶里留着它的 aid ⇒ `pin --toggle` 写盘后 KeyError、`next` 的置顶序号错位
+    if target in (s.get("pinned") or []):
+        s["pinned"] = [a for a in s["pinned"] if a != target]
     _save_state(s)
     auth_file = AUTH_DIR / slot.get("file", "")
     if auth_file.exists():
@@ -1026,12 +1081,18 @@ def _headroom(slot):
     """
     q = slot.get("quota") or {}
     best = None
+    now = time.time()
     for key in ("primary", "secondary"):
         w = q.get(key) or {}
         if not _win_real(w):
             continue
         used = w.get("used_percent")
         if used is None:
+            continue
+        # ★ 过了重置点、快照又拍在重置之前 ⇒ 这个读数属于上一个窗口，是「未知」不是读数
+        #   （全方面评审 §10 存疑；与 `proxy._win_used` / `helpers.ts::winRem` / `lib.rs` 托盘同一条判据）
+        ra = w.get("resets_at")
+        if ra and ra <= now and (q.get("captured_at") or 0) < ra:
             continue
         rem = 100.0 - float(used)
         if best is None or rem < best:
@@ -1414,7 +1475,7 @@ def cmd_refresh(args):
         ok, msg = _refresh_slot(aid, slot, force=force)
         if msg == "ok":  # persist via a fresh RMW — a bulk save here would clobber
             _mutate_state(lambda st, a=aid, v=_refresh_patch(slot):  # concurrent proxy/plugin writes
-                          st["slots"].setdefault(a, {}).update(v))
+                          _patch_slot(st, a, v))
         out.append(f"{slot.get('label')}:{'ok' if ok else msg}")
     print("refresh " + (" ".join(out) if out else "(no matching slot)"))
 
@@ -1452,18 +1513,33 @@ def _codex_running():
         #    这是仓库那条铁律的同一形态:「这一枪没打中」不能和「确实没有」返回同一个值 ——
         #    在两者必须合并成布尔时,就得合并到**不会造成损失**的那一边。
         return True
-    for line in out.splitlines():
-        low = line.lower()
-        if ("codex-rotate" in low or "codex-account-rotator" in low
-                or "codexbar" in low or "quota_daemon" in low):
-            continue  # our own tooling, not a codex session
-        # 只有**裸 codex** 会读/刷 ~/.codex/auth.json;cxp/代理会话(--profile rotateproxy)的 token 由代理
-        # 的 auth-token 命令注入、不碰 auth.json → 放行(否则 graph-label 等 cxp 定时任务会一直阻塞轮换)。
-        is_codex_bin = ("npm-global/bin/codex" in line or "codex-cli" in low
-                        or "/.local/bin/codex" in line)
-        if is_codex_bin and "rotateproxy" not in low:
-            return True
-    return False
+    return any(_is_bare_codex_line(line, pid_first=os.name != "nt") for line in out.splitlines())
+
+
+def _is_bare_codex_line(line, pid_first=True):
+    """进程表里的一行是不是**裸 codex**（会读/刷 `~/.codex/auth.json` 的那种）。
+
+    ★ 按可执行身份认（全方面评审 §10 存疑，2026-10-23 本机核实成立）：原来只认三种路径片段
+      （`npm-global/bin/codex` / `codex-cli` / `/.local/bin/codex`），而 npm 版真正在跑的两个进程是
+      `node …/@openai/codex/bin/codex.js` 和原生 `…/vendor/<triple>/bin/codex` —— 一个都对不上。
+      本机当时 2 个 codex 进程 2 个都漏；裸 codex 在跑时就会被判成没在跑，ensure-live 照样覆盖它的 auth.json。
+      现在：argv0 或 argv1 的文件名是 `codex` / `codex.js` / `codex.exe`（Homebrew、原生安装、wrapper 都是这样）。
+    `pid_first`：`pgrep -fl` 每行以 pid 开头；没有 pid 的是别的进程多行命令串的续行，不是进程。"""
+    low = line.lower()
+    if ("codex-rotate" in low or "codex-account-rotator" in low
+            or "codexbar" in low or "quota_daemon" in low):
+        return False  # our own tooling, not a codex session
+    # 只有**裸 codex** 会读/刷 ~/.codex/auth.json;cxp/代理会话(--profile rotateproxy)的 token 由代理
+    # 的 auth-token 命令注入、不碰 auth.json → 放行(否则 graph-label 等 cxp 定时任务会一直阻塞轮换)。
+    if "rotateproxy" in low:
+        return False
+    toks = line.split()
+    if pid_first:
+        if not toks or not toks[0].isdigit():
+            return False
+        toks = toks[1:]
+    names = [t.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower() for t in toks[:2]]
+    return any(n in ("codex", "codex.js", "codex.exe") for n in names)
 
 
 def _can_go_live(slot):
@@ -1586,10 +1662,11 @@ def cmd_keepalive(args):
             continue
         ok, msg = _refresh_slot(aid, slot, min_valid_seconds=thresh_h * 3600)
         if msg == "ok":  # real refresh → persist via targeted RMW (bulk save would clobber)
-            _mutate_state(lambda st, a=aid, v=_refresh_patch(slot):
-                          st["slots"].setdefault(a, {}).update(v))
+            _mutate_state(lambda st, a=aid, v=_refresh_patch(slot): _patch_slot(st, a, v))
             refreshed.append(f"{label}:ok")
         else:
+            if msg == "still valid":
+                _restamp_from_file(aid, slot)
             skipped.append(f"{label}:{msg}")  # 'still valid' / 'skip-active' are NO-OPS — not refreshes
     print(f"keepalive refreshed=[{', '.join(refreshed) or 'none'}] skipped=[{', '.join(skipped)}]")
     # 选项②(2026-07-16):keepalive 尾部保活 ~/.codex/auth.json——非活跃号已刷新鲜,这里把最新鲜的
@@ -1646,7 +1723,7 @@ USAGE_PATH = "/backend-api/codex/usage"
 #                 only when the free count says there is something to list. Verified 2026-07-30.
 CREDITS_PATH = "/backend-api/codex/rate-limit-reset-credits"
 CREDIT_DETAIL_TTL = 12 * 3600      # dates are near-static; a stale-by-hours cache is fine
-CREDIT_EXPIRY_WARN_DAYS = 3.0
+CREDIT_EXPIRY_WARN_DAYS = 2.0    # 与界面 `helpers.ts::CARD_WARN_DAYS` 同一个数（用户 2026-10-22「快到期按卡 ≤2 天」）
 CREDIT_PACE_SECS = 20              # between accounts, to stay under connector_rate_limit
 # Liveness endpoint. /usage carries a Cloudflare bot challenge (403 for every client, healthy or not),
 # so it cannot answer "is this token revoked". /models is unchallenged, is a GET, costs no quota, and
@@ -1873,8 +1950,7 @@ def cmd_refresh_all(args):
         label = slot.get("label", _mask(aid))
         q, msg = _probe_quota(aid, slot, aid == active)
         if q:
-            _mutate_state(lambda st, a=aid, qq=q: st["slots"].setdefault(a, {}).update(
-                {"quota": qq, "quota_status": "ok"}))
+            _mutate_state(lambda st, a=aid, qq=q: _patch_slot(st, a, {"quota": qq, "quota_status": "ok"}))
             parts = []
             for wkey in ("primary", "secondary"):
                 w = q.get(wkey)
@@ -2210,23 +2286,32 @@ def _write_last_probe(aid, **fields):
 
 
 def _probe_claims(targets):
-    """逐号占计费锁 → `(aid, 占到没有)`;调用方进入下一个号时释放上一个。
+    """开头一次占齐整批的计费锁 → 逐个 `(aid, 占到没有)`;整批结束才一起释放。
 
     ★★ 计费探针跨进程互斥(2026-10-22 全方面评审):菜单栏、总览、⌘K、dawn-probe 各自起一个
       `probe` 子进程,前端的在途锁只管它自己那个 webview ⇒ 同一个号能被两个进程同时计费。
       锁按号(不是全局):全池探针与单号探针只在**重叠的那个号**上互斥。
-      占不到 = 别的进程正在探它 ⇒ 跳过,不排队等(等完再探就是第二次计费)。"""
-    for aid in targets:
-        fh = open(STORE / f".probe-{uuid.uuid5(uuid.NAMESPACE_OID, aid).hex[:12]}.lock", "w")  # 文件名不带 account id
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            fh.close()
-            yield aid, False
-            continue
-        try:
-            yield aid, True
-        finally:
+      占不到 = 别的进程正在探它 ⇒ 跳过,不排队等(等完再探就是第二次计费)。
+    ★ **开头占齐,不是走到哪个号才占哪个**(阶段 A 评审):逐号占的话,全池批次还没走到 z 时
+      另一个进程先探完 z 并释放,批次走到 z 照样再探一次 —— 两次计费只是错开了,没有被挡住。"""
+    held, got = [], {}
+    try:
+        for aid in targets:
+            if aid in got:
+                continue
+            fh = open(STORE / f".probe-{uuid.uuid5(uuid.NAMESPACE_OID, aid).hex[:12]}.lock", "w")  # 文件名不带 account id
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                fh.close()
+                got[aid] = False
+                continue
+            held.append(fh)
+            got[aid] = True
+        for aid in targets:
+            yield aid, got[aid]
+    finally:
+        for fh in held:
             fh.close()
 
 
@@ -2252,7 +2337,8 @@ def cmd_probe(args, aids=None):
         codex-rotate probe --all --model gpt-5.5
 
     ★ 这会花真钱(周额度)。项目当初正是因为**自动**计费探测每天烧掉 17-18% 才把它废掉的 ——
-    所以它没有接进 quotad、没有接进 CodexBar 按钮、也没有任何定时器会调它。只在你手动敲的时候跑。
+    所以它没有接进 quotad;CodexBar 里只在用户点「探针 · 计费」时调它(总览卡片 / 全池 / 菜单栏),
+    定时调它的只有默认关闭的 `dawn-probe`。同一个号同一时刻只许一个进程在探(`_probe_claims`)。
     日常看额度请用零消耗的 `refresh-all`。
 
     每号打印 探测前 → 探测后(前值取自免费的 /usage,后值取自本次探测的响应头),这样单次真实成本
@@ -2367,8 +2453,7 @@ def cmd_probe(args, aids=None):
         ok_n += 1
         after = (q.get("primary") or {}).get("used_percent") if q else None
         if q:
-            _mutate_state(lambda st, a=aid, qq=q: st["slots"].setdefault(a, {}).update(
-                {"quota": qq, "quota_status": "ok"}))
+            _mutate_state(lambda st, a=aid, qq=q: _patch_slot(st, a, {"quota": qq, "quota_status": "ok"}))
         # ★★★ 把「这个窗口是这次探针启动的」当场记下来。不记的话,判定要再花
         #    **897–1197 秒**从时间序列里把同一件事推导一遍(2026-09-12 实测),
         #    而那十几分钟里 UI 会对着一个刚花过钱启动的窗口显示「窗口未启动」。
@@ -2888,6 +2973,19 @@ def _consume_outcome(status, raw):
     return "no_effect", d.get("code"), 0
 
 
+#: 用卡成功后核对读数的间隔（秒）。重置刚确认时 `/usage` 可能还是重置前那份，最多等约 14 s。
+CREDIT_READ_DELAYS = (0, 2, 4, 8)
+
+
+def _credit_echo(q, spent_old):
+    """这份读数是不是**重置前的回声**：用卡前见底的窗口仍见底，且 `resets_at` 还是原来那个（±120 s）。"""
+    for k, ra in spent_old:
+        w = q.get(k)
+        if isinstance(w, dict) and (w.get("used_percent") or 0) >= 100 and abs((w.get("resets_at") or 0) - ra) < 120:
+            return True
+    return False
+
+
 def cmd_use_credit(args):
     """用掉一个号的一张重置卡：默认**最近到期**的那张，`--card <id>` 指定某一张（弹窗里让人挑的）。
     `codex-rotate use-credit <label> [--card <id>] [--json]`。退出码 0 ⟺ 服务端确认重置了窗口。"""
@@ -2961,21 +3059,67 @@ def cmd_use_credit(args):
     # ④ 发
     st, raw = _api_post(tok, CREDIT_CONSUME_PATH, {"credit_id": card["id"], "redeem_request_id": rid})
     kind, code, windows = _consume_outcome(st, raw)
-    # ⑤ 核对：免费读一次，看张数
-    _probe_quota(aid, slot, is_active)
-    after = ((_state()["slots"].get(aid) or {}).get("credits") or {}).get("available")
-    exp = _iso_ts(card.get("expires_at"))
-    exp_s = datetime.datetime.fromtimestamp(exp).strftime("%m-%d %H:%M") if exp else "?"
     if kind == "reset":
-        def _done(stt, a=aid, cid=card["id"]):
+        # ★★ 用户 2026-10-23 实报：某个号用了重置卡之后仍是冷却状态。原因：429 时代理写的 `cooling_until`
+        #   用卡成功后没人清，号要冻到那个时刻过去（最长 5 h；阶段 E 起按见底的周窗口可达几天）。
+        #   在 state 锁里（`_mutate_state`）：
+        #   ① 删 `cooling_until`；
+        #   ② 旧读数里见底的窗口把 `resets_at` 记成「此刻」—— 服务端刚确认它重置过，旧的 100% 属于上一个窗口。
+        #      于是下面那次 GET 万一没读到（`/usage` 偶发 403），它也是「未知」（`_win_used` 的判据），
+        #      不会被当成仍见底、再判回冷却；也不编造满额。
+        t_reset = time.time()
+        spent_old = []      # 用卡前见底的窗口 (槽位名, 旧 resets_at) —— 判下面的 GET 是不是重置前的回声
+
+        def _done(stt, a=aid, cid=card["id"], t=t_reset, windows=windows):
             sl = stt["slots"].get(a)
             if sl is None:
                 return
             sl.pop("credit_redeem", None)
+            sl.pop("cooling_until", None)
+            sl.pop("cooled_at", None)
+            # ★ 只有服务端重置的窗口数 ≥ 见底窗口数时才把它们都记成已重置（阶段 F 评审 codex：
+            #   `windows_reset=1` 证明不了两个见底窗口都重置了）。不够 ⇒ 不猜，等下面那次 GET 的真读数。
+            q0 = sl.get("quota") or {}
+            spent = [w for w in (q0.get(k) for k in ("primary", "secondary"))
+                     if isinstance(w, dict) and (w.get("used_percent") or 0) >= 100 and (w.get("resets_at") or 0) > t]
+            spent_old[:] = [(k, q0[k]["resets_at"]) for k in ("primary", "secondary")
+                            if isinstance(q0.get(k), dict) and q0[k] in spent]
+            if spent and (windows or 0) >= len(spent):
+                for w in spent:
+                    w["resets_at"] = t
             for c in ((sl.get("credits_detail") or {}).get("credits") or []):
                 if c.get("id") == cid:
                     c["status"] = "redeemed"
         _mutate_state(_done)
+    # ⑤ 核对：免费读一次 GET /usage —— 新读数覆盖旧额度，顺带看张数。
+    #   ★ `_probe_quota` 只回读数、不写 `quota`（写是调用方的事，同 `cmd_refresh_all`）：原来这里把回值丢了，
+    #     旧的 100% 一直留在 state 里，直到 quotad 下一次全池扫描。读不到（None）就不写，不拿空值盖旧值。
+    # ★★ 用户 2026-10-23「用完重置卡，没有立马刷新恢复全额度」：重置刚确认时 `/usage` 可能还回重置前那份
+    #   （见底窗口原样、`resets_at` 没变）。原来照写 ⇒ 旧的 100% 又写回去，要等 quotad 下一轮（夜里 30 分钟）。
+    #   现在：重置成功后最多读 `len(CREDIT_READ_DELAYS)` 次，**回声不写**；一直是回声 ⇒ 不写，留着上面
+    #   「此刻已重置 ⇒ 未知」那份（显示 —，不编满额），等 quotad。每次怎么读的记进 `last_credit_use` 备查。
+    reads = []
+    for i, d in enumerate(CREDIT_READ_DELAYS if kind == "reset" else (0,)):
+        if d:
+            time.sleep(d)
+        q_new, _msg = _probe_quota(aid, slot, is_active)
+        echo = bool(q_new) and _credit_echo(q_new, spent_old)
+        reads.append({"dt": round(time.time() - t_reset, 1) if kind == "reset" else 0,
+                      "got": bool(q_new), "echo": echo})
+        if q_new and not echo:
+            # ★ 槽位还在才写（阶段 F 评审 codex：`setdefault` 会让请求期间被 remove 的号以一个只有 quota 的残缺槽位复活）
+            def _fresh(st, a=aid, qq=q_new):
+                sl = st.get("slots", {}).get(a)
+                if sl is not None:
+                    sl.update({"quota": qq, "quota_status": "ok"})
+            _mutate_state(_fresh)
+            break
+    if kind == "reset":
+        _mutate_state(lambda st, a=aid, r=reads, w=windows, t=t_reset: _patch_slot(
+            st, a, {"last_credit_use": {"at": t, "windows_reset": w, "reads": r}}))
+    after = ((_state()["slots"].get(aid) or {}).get("credits") or {}).get("available")
+    exp = _iso_ts(card.get("expires_at"))
+    exp_s = datetime.datetime.fromtimestamp(exp).strftime("%m-%d %H:%M") if exp else "?"
     res = {"ok": kind == "reset", "label": label, "kind": kind, "code": code, "windows_reset": windows,
            "credit_id": card["id"], "expires_at": card.get("expires_at"), "available_before": before,
            "applicable_before": applicable_before,
@@ -3815,7 +3959,7 @@ def cmd_next(args):
     s = _state()
     slots = s.get("slots", {})
     now = time.time()
-    pinned = list(s.get("pinned") or [])
+    pinned = [a for a in (s.get("pinned") or []) if a in slots]   # 序号只数池里还在的号
 
     def win(sl, key):
         w = (sl.get("quota") or {}).get(key) or {}
@@ -4059,7 +4203,7 @@ def cmd_pin(args):
     s = _state()
     slots = s.get("slots", {})
     by_label = {(sl.get("label") or ""): aid for aid, sl in slots.items()}
-    pinned = list(s.get("pinned") or [])
+    pinned = [a for a in (s.get("pinned") or []) if a in slots]   # 池里已没有的号不算（老 state 可能留着）
 
     def _resolve(names):
         unknown = [n for n in names if n not in by_label]
@@ -4082,25 +4226,37 @@ def cmd_pin(args):
                 print(f"用法: codex-rotate pin {flag} <label> [<label> …]", file=sys.stderr)
                 sys.exit(2)
             aids = _resolve(names)
-            nxt = list(pinned)
-            for aid in aids:
-                if act == "add" or (act == "toggle" and aid not in nxt):
-                    # ★ 重复点击**不改排队位次** —— 否则「再点一下」会把它挪到队尾，
-                    #   而用户的预期是「再点一下是取消」。取消走 --remove / --toggle。
-                    if aid not in nxt:
-                        nxt.append(aid)
+            res = []
+
+            # ★ 在锁里按**锁里读到的** pinned / slots 算：锁外算好再整份写回，会把并发 `remove`
+            #   刚删的 aid 写回去、也会吞掉另一个 `pin` 刚加的号（阶段 A 评审）。
+            def apply(st, aids=aids, act=act):
+                sl = st.get("slots", {})
+                nxt = [a for a in (st.get("pinned") or []) if a in sl]
+                for aid in aids:
+                    if aid not in sl:
+                        continue
+                    if act == "add" or (act == "toggle" and aid not in nxt):
+                        # ★ 重复点击**不改排队位次** —— 否则「再点一下」会把它挪到队尾，
+                        #   而用户的预期是「再点一下是取消」。取消走 --remove / --toggle。
+                        if aid not in nxt:
+                            nxt.append(aid)
+                    else:
+                        nxt = [x for x in nxt if x != aid]
+                if nxt:
+                    st["pinned"] = nxt
                 else:
-                    nxt = [x for x in nxt if x != aid]
-            _mutate_state(lambda st: st.__setitem__("pinned", nxt) if nxt
-                          else st.pop("pinned", None))
-            lab = [slots[a].get("label") for a in nxt]
+                    st.pop("pinned", None)
+                res[:] = nxt
+            _mutate_state(apply)
+            lab = [slots[a].get("label") for a in res if a in slots]
             print("✅ 置顶: " + (" → ".join(lab) if lab else "(无)"))
             return
 
     names = [a for a in args if not a.startswith("--")]
     if names:                                   # `pin A B C` = 整份覆盖，按给定顺序排队
         aids = _resolve(names)
-        _mutate_state(lambda st: st.__setitem__("pinned", aids))
+        _mutate_state(lambda st: st.__setitem__("pinned", [a for a in aids if a in st.get("slots", {})]))
         print("✅ 置顶: " + " → ".join(names))
         print("   排第一的号一直用到撞限,冷却后轮到下一个;全部不可用时回到容量最高优先。")
         return

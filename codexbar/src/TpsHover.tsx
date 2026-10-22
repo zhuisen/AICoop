@@ -47,7 +47,7 @@ function isMulti(r: RunningRow): boolean {
 function noop(_e: unknown): void { /* 托盘 / 高度命令失败不影响面板本身 */ }
 
 export default function TpsHover() {
-  const { live } = useLive();
+  const { live, error: liveErr } = useLive();
   const [theme, setTheme] = useState<"dark" | "light">(loadTheme);
   const [reduce, setReduce] = useState<boolean>(prefersReduce);
   const [mode, setMode] = useState<Mode>("closed");
@@ -341,7 +341,8 @@ export default function TpsHover() {
         })}
         <div className="hv-foot" data-hover-foot style={{ opacity: isOpen ? 1 : 0, transition: footT }}>
           {/* 「均」不跨 AI（2026-10-22）：两家以上今天有实测时后端给 null，这里整段不画 */}
-          <span>今日 <b>{live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{L.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
+          {/* ★ 读不到实时速度：数字是上一份的，说出来（全方面评审 §8）。不另起一行，面板高度不变 */}
+          <span>{liveErr && live && <span className="hv-stale" data-hover-stale title={`实时速度这次没读到：${liveErr}`}>⚠ 上次的数 · </span>}今日 <b>{live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{L.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
           <a href="#" className="hv-link" data-hover-link onClick={openLink}>请求页 →</a>
         </div>
       </div>

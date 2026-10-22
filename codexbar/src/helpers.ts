@@ -77,6 +77,8 @@ export interface QuotaWindow {
   /** 悬浮解释（`title`）。★ 它同时是 `reset` 那三个字的**证据**——
    *  「未启动」必须能说出凭什么，否则和「待确认」一样是个不可证的断言。 */
   resetAt: string;
+  /** 重置时刻（epoch 秒）。★ 只有锚定的窗口才给数；「未启动 / 待确认」的 reset 是滑动的点估计，给 null。 */
+  resetsAtSec: number | null;
   /** 锚点三态，供样式/测试使用。 */
   anchorState: AnchorState;
 }
@@ -147,6 +149,13 @@ export function cardLeftText(days: number): string {
   if (!Number.isFinite(days)) return "?";
   if (days >= 1) return `${Math.floor(days)}天`;
   return `${Math.max(1, Math.floor(days * 24))}小时`;
+}
+
+/** 一个额度窗口归「短窗（5h 那一格）」还是「长窗（周那一格）」：< 1 天 = 短，≥ 1 天 = 长。
+ *  卡片、菜单栏行、总览续航、中转站池子详情共用这一个界线（2026-10-22 评审：原来卡片写 1000 / 10000、
+ *  菜单栏写 1440 —— 上游今天只有 300 / 10080 两种窗口所以没出事，哪天来个 1 天窗口两处就画得不一样）。 */
+export function winSlot(mins: number): "5h" | "w" | null {
+  return mins > 0 && mins < 1440 ? "5h" : mins >= 1440 ? "w" : null;
 }
 
 /** ≤ this many days left ⇒ amber + pulse (design handoff §4). User 2026-10-22: 3 → 2 (「快到期按卡 ≤2 天」). */
@@ -286,15 +295,17 @@ export function fmtAgo(ts?: number): string {
  * 而一个 token 已失效 10 小时的号会因为「相对周窗口不算久」被判新鲜，
  * 调度器继续往黑洞里打请求。**窗口长度决定的是预算周期，不是观测有效期。**
  *
- * quotad 的全池扫描周期是 300s。取 **6 个周期 = 30 分钟**：够宽，不会被一两次
- * 网络抖动或单次扫描失败触发；又远短于「一个号已经死了好几天」那种真问题。
+ * quotad 的全池扫描周期白天 300s、空闲时段（22–08）1800s（`USAGE_SECS` / `USAGE_SECS_IDLE`）。
+ * 取**最长那个周期的 3 倍 = 90 分钟**：够宽，两次扫描失败也不触发；又远短于「一个号已经死了好几天」那种真问题。
+ * ★ 原来是 30 分钟（= 6 × 300s）。夜间改成 1800s 一扫之后只剩 1 个周期的容差，空闲号每到周期末都闪「陈旧」
+ *   （全方面评审 §11）。闸从 `quota_daemon.py` 现读两个周期，改周期不改这里会红。
  *
  * ⚠️ **已知边界（agy 提出）**：Mac 合盖休眠数小时后唤醒的那一瞬间，全池 age 会同时突增，
  * 于是所有号一起标陈旧。这**不是误报** —— 那一刻的数据确实全是旧的；quotad 会在一个
  * 扫描周期内补齐。所以这里刻意**不上红色**、不参与选号否决，只做一个可悬浮的事实陈述，
  * 避免把「一次正常的唤醒」训练成用户忽略所有告警的理由。
  */
-export const QUOTA_STALE_SEC = 30 * 60;
+export const QUOTA_STALE_SEC = 90 * 60;
 
 /** 秒数 → 「N 分钟 / N 小时 / N 天」。★ 与 `fmtAgo` 分工:那个吃时间戳,这个吃**已经算好的年龄**
  *  —— 让调用方各自再减一次 `now()`,就等于把「现在是几点」这个知识复制出去好几份。 */
@@ -342,14 +353,19 @@ export function freshnessLine(lastAt: number | undefined,
     : `全池 ${total} 个都是新的 · ${fmtAgo(lastAt)}`;
 }
 
-/** Gemini 池的新鲜度：按各号的 `quota_at`（云端按账号读成功的时刻），阈值与 codex 同一条
- *  `QUOTA_STALE_SEC`。没有 `quota_at` = 从未读到，进分母（同 `poolFreshness`）。 */
+/** Gemini 池额度的陈旧阈值：30 分钟 = 后台保鲜周期（`useAgyPool::QUOTA_FRESH_MS`，3 分钟）的 10 倍。
+ *  ★ **不跟 `QUOTA_STALE_SEC` 走**（阶段 F 评审 codex）：那个按 quotad 夜间 1800 s 的扫描周期放宽到 90 分钟，
+ *    Gemini 没有夜间放慢，跟着放宽就会把 30–90 分钟没更新的数当成新鲜。 */
+export const AGY_QUOTA_STALE_SEC = 30 * 60;
+
+/** Gemini 池的新鲜度：按各号的 `quota_at`（云端按账号读成功的时刻），阈值 `AGY_QUOTA_STALE_SEC`。
+ *  没有 `quota_at` = 从未读到，进分母（同 `poolFreshness`）。 */
 export function agyPoolFreshness(accts: { quota_at?: number | null }[], atNow = now()):
   { fresh: number; stale: number; unknown: number; lastAt: number | undefined } {
   let fresh = 0, stale = 0, unknown = 0, lastAt: number | undefined;
   for (const a of accts) {
     if (!a.quota_at) { unknown++; continue; }
-    if (atNow - a.quota_at > QUOTA_STALE_SEC) stale++; else fresh++;
+    if (atNow - a.quota_at > AGY_QUOTA_STALE_SEC) stale++; else fresh++;
     if (lastAt == null || a.quota_at > lastAt) lastAt = a.quota_at;
   }
   return { fresh, stale, unknown, lastAt };
@@ -468,6 +484,7 @@ function buildWindow(w: Win | undefined, capturedAt?: number, anchor?: QuotaAnch
     pct: clamp(pctRaw),
     reset: st === "anchored" ? fmtEta(w.resets_at) : st === "floating" ? "未启动" : "待确认",
     resetAt: anchorNote(st, w, anchor),
+    resetsAtSec: st === "anchored" && typeof w.resets_at === "number" ? w.resets_at : null,
     anchorState: st,
   };
 }
@@ -603,6 +620,13 @@ export function isWindowsUI(): boolean {
 }
 
 
+/** 界面上的版本串（`fullVersion` 的纯核心）：`X.Y.Z` + 预发布段 `-pre`（tag 是这个版本的预发布时）+ `+B`（B > 0 时）。
+ *  ★ B 读不到（`null`）或为 `"0"` ⇒ 不加 `+`，绝不写 `+?`：那是关于版本的一句假话。 */
+export function displayVersion(v: string, pre: string, b: string | null): string {
+  const base = pre ? `${v}-${pre}` : v;
+  return b && b !== "0" ? `${base}+${b}` : base;
+}
+
 /**
  * 运行期取完整版本号 `X.Y.Z+B`。
  *
@@ -616,10 +640,10 @@ export async function fullVersion(): Promise<string> {
     import("@tauri-apps/api/app"), import("@tauri-apps/api/core"),
   ]);
   const v = await getVersion();
-  try {
-    const b = (await invoke<string>("build_number")).trim();
-    return b && b !== "0" ? `${v}+${b}` : v;
-  } catch {
-    return v;
-  }
+  // ★ 预发布段只在 tag 上（manifest 恒三段）：tag `v1.12.0-beta.1` ⇒ `1.12.0-beta.1`，别说成正式版（全方面评审 §11）
+  let pre = "";
+  try { pre = (await invoke<string>("build_prerelease")).trim(); } catch { /* 旧二进制没有这条命令 ⇒ 不加 */ }
+  let b: string | null = null;
+  try { b = (await invoke<string>("build_number")).trim(); } catch { /* 读不到 ⇒ 不加 +B */ }
+  return displayVersion(v, pre, b);
 }

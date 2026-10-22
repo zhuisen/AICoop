@@ -17,8 +17,7 @@
 
 > 📦 **安装** → [**docs/INSTALL.md**](docs/INSTALL.md)（两半可以只装一半；凭证不搬运，新机 `codex login` 重新生成）。
 > 📚 **全部文档** → [**docs/README.md**](docs/README.md)（架构 · 排障 · 安装 · Windows）。
-> 🪟 **Windows** → [**docs/WINDOWS.md**](docs/WINDOWS.md)。v1.0.0 起提供 Windows 安装包（NSIS/MSI，由 CI 在真 Windows 上构建）。
-> ⚠️ 开发机只有 macOS，Windows 端**没有端到端真机验证**，请当 beta 用 —— 哪些验过、哪些没验，那份文档逐条写明。
+> 🪟 **Windows 版已于 2026-10-19 取消**：不再出安装包，CI 只构建 macOS。旧版本的说明留在 [docs/WINDOWS.md](docs/WINDOWS.md)，不再维护。
 
 ## 界面
 
@@ -162,7 +161,7 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 
 | 痛点 | 怎么解的 |
 |---|---|
-| ① token 失效要重登 | 代理挑到 token 过期的**非活跃**号时当场 OAuth 续期(双重锁) → 有流量的号**不用手动重登**。⚠️ 定时保活(keepalive)已于 2026-08-29 取消,所以**长期不被挑中的号不会自愈** —— 那种情况手动 `codex-rotate refresh <label>` 即可(非活跃号安全);真死了才 `codex login` |
+| ① token 失效要重登 | 代理挑到 token 过期的**非活跃**号时当场 OAuth 续期(双重锁) → 有流量的号**不用手动重登**。定时保活(keepalive)2026-08-29 取消、2026-10-22 恢复:每小时拉起,只在 22:00–08:00 刷非活跃号里 48h 内到期的 token,长期不被挑中的号也能续上。急用时手动 `codex-rotate refresh <label>`(非活跃号安全);真死了才 `codex-rotate login` |
 | ② 会话内切号要重启 | 代理逐请求透明轮换;Codex 每请求发完整上下文 → **中途换号无感、不重启**。同一段对话靠 body 里的 `prompt_cache_key` 粘住同一个号(codex 不发 `previous_response_id`,见 CHANGELOG B26) |
 | ③ 额度不实时 | **事件驱动**:quotad 监测 codex 活动(4 路本地信号)→ 数秒内读**官方 usage API**(零消耗)刷当前号;实测发起调用后 **+8s** 见数、运行中每 20s 续刷。另有 300s 全池扫描兜底 + 代理逐请求记账 |
 | ④ 撞限要手动换 | 代理撞 429 → 标冷却 → 下个请求自动换号 |
@@ -217,8 +216,8 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 | `traffic/agy_rotation.py` | 代理轮换 **Gemini 版块**的数据（与 `rotation.py` 同形 + `platform: "agy"`）。读 `~/.gemini/antigravity-cli/log/cli-*.log` 与 `agy.log`；纯模块、只读、不联网、不碰凭证 |
 | `traffic/discover.py` | **数据源体检**(`--json`):找本机还有哪些 AI 把用量落了盘,并现场验算它的 token 口径。纯本地只读、不联网、不碰凭证,SQLite 一律 `mode=ro`,**只出报告不自动启用**(接一家的实质是写解析器) |
 | `claude/claude_tokens.py` | ⚠️ 只统计 Claude 的旧扫描器,能力已被 `traffic/scan.py` 完全覆盖(v0.7.0 起 app 不再调用)。保留仅作 CLI |
-| `scripts/install-launchd.sh` | **生成并加载 5 个 launchd 服务**(autosync/quotad/proxy + 两个定时计费探针 dawnprobe/agydawn,探针默认关)。★ keepalive(04:30)与 refreshquota(07:00)已于 2026-08-29 按需取消 —— 前者职责由代理接手(覆盖面见上表①),后者与 quotad 的 300s 全池扫描重复。两个 CLI 子命令仍可手动跑。生成而非提交成文件:plist 内嵌绝对路径,提交的副本换台机器就是错的,且会静默漂移(旧的 `launchd/*.plist` 就漂到了写死 `/usr/bin/python3`)。★脚本会**解析并钉住 OpenSSL 版的 python3**,见「维护约定」 |
-| `scripts/install-windows.ps1` | Windows 版常驻服务(计划任务),与 `install-launchd.sh` **装同一组服务**(`tests/test_installers_agree.py` 守着) |
+| `scripts/install-launchd.sh` | **生成并加载 7 个 launchd 服务**(autosync/keepalive/quotad/proxy/otel + 两个定时计费探针 dawnprobe/agydawn,探针默认关)。keepalive 每小时拉起、只在 22:00–08:00 干活;otel 是「Claude 实测速度」的本机接收端(只听 127.0.0.1:4318)。refreshquota(07:00)2026-08-29 取消后未恢复 —— 与 quotad 的全池扫描重复。生成而非提交成文件:plist 内嵌绝对路径,提交的副本换台机器就是错的,且会静默漂移(旧的 `launchd/*.plist` 就漂到了写死 `/usr/bin/python3`)。★脚本会**解析并钉住 OpenSSL 版的 python3**,见「维护约定」 |
+| `scripts/install-windows.ps1` | Windows 版常驻服务(计划任务)。Windows 已取消,脚本留档、不再验证;2026-10-19 之后新增的服务(otel)只在 macOS |
 | `daemon/quota_daemon.py` | **quotad**:活动驱动 + rollout 尾随 + 300s 全池扫描刷额度。启动时整份加载 `codex-rotate`,所以改 `codex-rotate` 也要 kickstart 它 |
 | `connector.py` | **账号池 Connector**(设置页「账号池接入」的后端):把只装了看板的机器接进轮换 —— 准备运行时、装入口与常驻服务、写托管区配置。**绝不调用 `codex login/logout`**。v1.10.0 起逐字节比对 `<store>/runtime/` 与 App 自带脚本,不一致就要求重新接入 |
 | `<store>/runtime/` | 装机版(`.dmg`)接入时复制过去的运行时(代理/CLI/服务入口都跑这份)。**App 更新不会替换它** —— 每次更新后在设置页再点一次「接入」 |
@@ -230,7 +229,7 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 | `bin/agy` | agy 的 PATH wrapper:拦 `-p` 模式把用量写进 `traffic/agy-ledger/`,并在启动前拉起额度采样器(`traffic/agy_quota_sampler.py`) |
 | `codexbar/uishot/make_harness.py` | UI 验证 harness:打桩 Tauri IPC + 脱敏夹具,用**同一份构建产物**在 Chrome headless 里渲染(`127.0.0.1:3304`)。改了组件先 `vite build --outDir uishot/app` 再跑它 |
 | `tests/` | 不变量与行为闸(`python3 -m pytest -q tests`);UI 闸跑真 bundle,harness 没起时是 **skip 不是绿** |
-| `.github/workflows/` | `ci.yml`(测试 + 双平台构建)· `release.yml`(推 `v*` tag 触发,产出 macOS `.dmg` 与 Windows `.exe/.msi` 挂到 Release) |
+| `.github/workflows/` | `ci.yml`(测试 + macOS 构建)· `release.yml`(推 `v*` tag 触发,产出 macOS `.dmg` 挂到 Release) |
 | `app/CodexBar/` | ⚠️ 早期 Swift 原型,已被 `codexbar/` 取代,别在这里改 |
 | `agy-rotate` | ★ **agy(Antigravity) 账号池 CLI** —— `login` / `list` / `quota` / `switch` / `pick` / `auto` / `live` / `health` / `probe` / `rotate` / `auto-switch` / `rename` / `remove`。与 codex 池**机制完全不同**：agy 只在**进程启动时**读凭证，所以换号只对**下一次启动的 agy** 生效。★★★ 登录态在 **macOS 钥匙串**（`svce=gemini`/`acct=antigravity`），那个 `antigravity-oauth-token` 文件只是钥匙串写失败时的兜底 |
 | `agy/pool.py` | agy 池的凭证与额度层（钥匙串读写、OAuth 刷新、`retrieveUserQuotaSummary` 按账号取**完整**额度含周窗口；摘要缺 Gemini 组时 5h 由 `fetchAvailableModels` 补）。OAuth client 从**本机 agy 二进制**现取，**绝不入库**（本仓公开） |

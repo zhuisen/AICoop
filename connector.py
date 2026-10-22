@@ -62,6 +62,8 @@ RUNTIME_FILES = [
     "traffic/otel_receiver.py",
     # 逐请求账本；它 `import scan` / `import agy_rotation`（同目录），两个都得跟着拷，否则 runtime 里 ImportError。
     "traffic/requests.py", "traffic/scan.py", "traffic/agy_rotation.py",
+    # `scan.py` 按路径加载（附加功能，取不到就跳过）；runtime 里没有它 = agy 额度消耗序列静默缺席。
+    "traffic/agy_quota_series.py",
     # ★ agy 账号池那一套。**漏了它 `~/.local/bin/agy-rotate` 会是个悬空 symlink** ——
     #   点一下报「No such file」，而用户完全看不出与 Connector 有关。
     #   2026-09-19 实测漏过一次，现在有 `EveryEntryTargetIsInTheRuntime` 守着。
@@ -409,8 +411,13 @@ def plan(src, store):
     blk = provider_block(runtime)
     cfg_txt = _read(cfg)
     _, managed, _ = split_managed(cfg_txt)
-    if managed is not None:
+    # ★ 按**内容**判，不按「托管标记在不在」判（全方面评审 §6，与 B77 同族）：运行时搬了家、
+    #   旧版本写的块少一行，标记都还在，原来照样报「已完成」，codex 却拿着旧路径。
+    if managed is not None and managed.strip() == blk.strip():
         pstate, pdetail = "done", f"托管区已在 {cfg}"
+    elif managed is not None:
+        pstate, pdetail = "todo", (f"{cfg} 的托管区与这一版要写的不同（例如 auth 路径变了）—— "
+                                   "勾上它重写托管区，托管区之外一个字节都不动")
     elif cfg_txt and "[model_providers.rotateproxy]" in cfg_txt:
         pstate = "external"
         pdetail = (f"{cfg} 里**已经有**你自己写的 `[model_providers.rotateproxy]`，"
@@ -425,8 +432,10 @@ def plan(src, store):
     pblk = profile_block()
     prof_txt = _read(prof)
     _, pmanaged, _ = split_managed(prof_txt)
-    if pmanaged is not None:
+    if pmanaged is not None and pmanaged.strip() == pblk.strip():
         fstate, fdetail = "done", f"托管区已在 {prof}"
+    elif pmanaged is not None:
+        fstate, fdetail = "todo", f"{prof} 的托管区与这一版要写的不同 —— 勾上它重写托管区"
     elif prof_txt and "rotateproxy" in prof_txt:
         fstate = "external"
         fdetail = f"{prof} 已存在且指向 rotateproxy —— 你自己建的，Connector 不碰。"

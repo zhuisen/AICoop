@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Theme } from "../theme";
 import ShimText from "./ShimText";
+import { coalesce } from "../coalesce";
+import { defaultPicks, mergePicks } from "../connectorPicks";
 
 /**
  * 账号池接入面板（Connector）。
@@ -57,19 +59,6 @@ const TONE: Record<Step["state"], { c: string; label: string }> = {
   blocked: { c: "#E0524D", label: "装不了" },
 };
 
-/**
- * 默认勾选规则：只勾没装的；`optional` 的那一步（改 `codex` 行为）**永远不默认勾**。
- *
- * ★★ `blocked` 时**一个都不勾**。像素验证抓到（2026-09-19）：这份安装缺运行时文件、
- *   红条已经说了「装不了」，可复选框仍是勾选态、按钮还写着「接入（N 项）」——
- *   一个说不能装、一个邀请你去装，用户只会相信后者。
- */
-function defaultPicks(steps: Step[], blocked: boolean): Record<string, boolean> {
-  const out: Record<string, boolean> = {};
-  for (const s of steps) out[s.id] = !blocked && s.state === "todo" && !s.optional;
-  return out;
-}
-
 /** `embedded`：放进设置页 S1「账号池 · 轮换」组卡片里 —— 去掉自己的外边距，标题改成卡片行的字号。 */
 export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: boolean }) {
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -83,20 +72,24 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
   /** 逐项明细默认**收起**（用户 2026-09-21：「接入内容太复杂了」）。 */
   const [advanced, setAdvanced] = useState(false);
 
-  const load = useCallback(() => {
-    void (async () => {
-      try {
-        const raw = await invoke<string>("connector_plan");
-        const p = JSON.parse(raw) as Plan;
-        setPlan(p);
-        setPicks(defaultPicks(p.steps, !!p.blocked));
-      } catch (e: unknown) {
-        // ★ 读不到就如实说，**不合成一个「一切正常」** —— 本仓铁律。
-        setPlan(null);
-        setMsg(`读不到接入状态：${String(e).slice(0, 120)}`);
-      }
-    })();
-  }, []);
+  /** 上一份计划的步骤 —— 状态没变的步骤保留用户的勾选（`mergePicks`）。 */
+  const lastSteps = useRef<Step[] | null>(null);
+  // ★ 合流：每条 `state-changed` 都会叫它，在途只许一个 python（全方面评审 §6）
+  const load = useMemo(() => coalesce(async () => {
+    try {
+      const raw = await invoke<string>("connector_plan");
+      const p = JSON.parse(raw) as Plan;
+      const prevSteps = lastSteps.current;
+      lastSteps.current = p.steps;
+      setPlan(p);
+      setPicks((prev) => (prevSteps ? mergePicks(prev, prevSteps, p.steps, !!p.blocked) : defaultPicks(p.steps, !!p.blocked)));
+    } catch (e: unknown) {
+      // ★ 读不到就如实说，**不合成一个「一切正常」** —— 本仓铁律。
+      lastSteps.current = null;
+      setPlan(null);
+      setMsg(`读不到接入状态：${String(e).slice(0, 120)}`);
+    }
+  }), []);
 
   useEffect(() => {
     load();

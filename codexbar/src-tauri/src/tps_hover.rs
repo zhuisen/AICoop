@@ -49,7 +49,14 @@ static POLLER: AtomicBool = AtomicBool::new(false);
 static SUPPRESS: AtomicBool = AtomicBool::new(false);
 /// 每次打开 / 关闭 +1；延迟隐藏核对自己那一代（中途又打开了就不许把它藏掉）。
 static GEN: AtomicU64 = AtomicU64::new(0);
-static PANEL_H: Mutex<f64> = Mutex::new(240.0);
+/// 两种面板各记各的高（全方面评审 §8 存疑：原来共用一个，换一种面板打开时第一帧按另一种的高摆）。
+static PANEL_H_RUN: Mutex<f64> = Mutex::new(240.0);
+static PANEL_H_IDLE: Mutex<f64> = Mutex::new(240.0);
+/// 这一次打开的那种面板的高。
+fn panel_h() -> f64 {
+    let m = if IDLE_PANEL.load(Ordering::SeqCst) { &PANEL_H_IDLE } else { &PANEL_H_RUN };
+    *m.lock().unwrap()
+}
 /// 空闲面板当前宽（网页报上来；格子满一行时 = `IDLE_PANEL_W`）。
 static IDLE_W: Mutex<f64> = Mutex::new(IDLE_PANEL_W);
 static GEOM: Mutex<Option<Tray>> = Mutex::new(None);
@@ -96,7 +103,7 @@ fn pill_and_panel(t: &Tray) -> (serde_json::Value, f64) {
 
 fn rect_now(t: &Tray) -> ((f64, f64, f64, f64), (f64, f64), f64) {
     let (_, pw) = pill_and_panel(t);
-    let (r, p) = window_rect_for(t, pw, *PANEL_H.lock().unwrap());
+    let (r, p) = window_rect_for(t, pw, panel_h());
     (r, p, pw)
 }
 
@@ -105,7 +112,7 @@ pub fn layout() -> Option<serde_json::Value> {
     let t = (*GEOM.lock().unwrap())?;
     let (pill, pw) = pill_and_panel(&t);
     let pill_w = pill["width"].as_f64().unwrap_or(0.0);
-    let ph = *PANEL_H.lock().unwrap();
+    let ph = panel_h();
     let ((wx, wy, ww, wh), (px, py)) = window_rect_for(&t, pw, ph);
     let pill_x = t.x + (t.w - pill_w) / 2.0 - wx;
     let pill_y = t.y + (t.h - crate::tray_pill::H) / 2.0 - wy;
@@ -141,9 +148,23 @@ fn read_tray() -> Option<Tray> {
         if n == 0 { return None; }
         let primary: *mut AnyObject = msg_send![screens, objectAtIndex: 0usize];
         let pf: NSRect = msg_send![primary, frame];
-        for w in app.windows().iter() {
-            let cls = w.class().name().to_string_lossy().to_string();
-            if !cls.contains("StatusBar") { continue; }
+        // ★ 多显示器时每块屏的菜单栏各有一个托盘窗口（全方面评审 §8 存疑，双屏真机未验）：取光标所在的那个，
+        //   取不到才退回第一个。`on_enter` 来自托盘 Enter，光标此刻就在那个托盘上。
+        let m: objc2_foundation::NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let bars: Vec<_> = app.windows().iter()
+            .filter(|w| w.class().name().to_string_lossy().contains("StatusBar")).collect();
+        let hit = |f: NSRect| m.x >= f.origin.x && m.x <= f.origin.x + f.size.width
+            && m.y >= f.origin.y - 2.0 && m.y <= f.origin.y + f.size.height + 2.0;
+        // 面板开着时定期重读几何，光标那会儿在面板里、不在托盘上 ⇒ 沿用上一次那块屏的托盘，别跳回第一个
+        let prev = *GEOM.lock().unwrap();
+        let pick = bars.iter().position(|w| hit(w.frame()))
+            // ★ x 和 y 都要对上：上下排列的两块屏，托盘可能同 x（阶段 D 评审 codex）。y 与 `Tray.y` 同一个翻转坐标
+            .or_else(|| prev.and_then(|p| bars.iter().position(|w| {
+                let f = w.frame();
+                (f.origin.x - p.x).abs() < 1.0 && (pf.size.height - (f.origin.y + f.size.height) - p.y).abs() < 1.0
+            })))
+            .unwrap_or(0);
+        if let Some(w) = bars.get(pick) {
             let f = w.frame();
             let sp: *mut AnyObject = msg_send![&*w, screen];
             let sf: NSRect = if sp.is_null() { pf } else { msg_send![sp, frame] };
@@ -314,8 +335,14 @@ pub fn on_enter(app: &AppHandle) {
                 }
                 break;
             }
+            // ★ 空闲面板开着时内容全没了（格子与「已隐藏」行都为 0）⇒ 收起（全方面评审 §8：原来留下一块
+            //   透明、但吃点击的区域；刘海那边早就主动收起）
+            if idle && !idle_has_cells() {
+                close(&app, "empty");
+                break;
+            }
             let ((wx, wy, _, _), (px, py), pw) = rect_now(&t);
-            let panel = (wx + px, wy + py, pw, *PANEL_H.lock().unwrap());
+            let panel = (wx + px, wy + py, pw, panel_h());
             let in_panel = contains(panel, x, y);
             if in_panel != accepting { accepting = in_panel; set_accepting(&app, in_panel); }
             // 面板内光标坐标交给网页做行命中（展开会话）：app 不在前台时 WKWebView 收不到鼠标移动。只在变了时报
@@ -332,6 +359,9 @@ pub fn on_enter(app: &AppHandle) {
             }
         }
         POLLER.store(false, Ordering::SeqCst);
+        // ★ 竞态（全方面评审 §8 存疑，约 16 ms 窗口）：本线程退出前那一刻进来的 `on_enter` 把 PHASE 置成 DWELL，
+        //   却因 POLLER 还是 true 直接返回 ⇒ 没人轮询，这次悬停丢了。退出后再看一眼，补起一条。
+        if PHASE.load(Ordering::SeqCst) == DWELL { on_enter(&app); }
     });
 }
 
@@ -456,14 +486,17 @@ fn greet_allowed(app: &AppHandle) -> bool {
     ok
 }
 
-/// 空闲面板有没有格子（菜单栏 webview 随 `set_idle_tray` 带来）。没有就不弹 —— 否则是一条带阴影的细线。
+/// 空闲面板有没有内容（格子 + 「已隐藏」行，菜单栏 webview 随 `set_idle_tray` 带来）。没有就不弹 —— 否则是一条带阴影的细线。
+/// ★ 「已隐藏」行也算：全藏了以后它是唯一的撤销入口（全方面评审 §8）。
 static IDLE_CELLS: AtomicBool = AtomicBool::new(false);
 pub fn idle_has_cells() -> bool { IDLE_CELLS.load(Ordering::SeqCst) }
 pub fn set_idle_cells(n: usize) { IDLE_CELLS.store(n > 0, Ordering::SeqCst); }
 
-/// 高度两个面板都报；宽只有空闲面板报（格子少于一行时收窄，`idleGridLayout.ts::panelWidth`）。
+/// 高度两个面板都报；宽只有空闲面板报（格子少于一行时收窄，`idleGridLayout.ts::panelWidth`）——
+/// 所以带 `w` 的是空闲面板，不带的是在跑面板。
 pub fn set_panel_size(app: &AppHandle, h: f64, w: Option<f64>) {
-    *PANEL_H.lock().unwrap() = h.clamp(40.0, 640.0);
+    let slot = if w.is_some() { &PANEL_H_IDLE } else { &PANEL_H_RUN };
+    *slot.lock().unwrap() = h.clamp(40.0, 640.0);
     if let Some(w) = w { *IDLE_W.lock().unwrap() = w.clamp(100.0, IDLE_PANEL_W); }
     if PHASE.load(Ordering::SeqCst) == OPEN { place(app, false); }
 }

@@ -607,7 +607,10 @@ class ActivityWatcher(unittest.TestCase):
                       "光晕要用 live 的判断（live 不可用才退回 FSEvents）")
         self.assertIn("let fs = publish(&app);", self.watch, "每 tick 走 publish")
         self.assertIn("run_live_soon(&app, fs)", self.watch, "live 失败时托盘退回的是 FSEvents 那一份")
-        i, j = live.index("*LIVE_ACT.lock().unwrap() = act;"), live.index("publish(&app);")
+        # 阶段 E/F 评审：写回改在核代次那把锁里（`*g = act;`），发布锁 `LIVE_PUB` 罩住整段
+        i, j = live.index("*g = act;"), live.index("publish(&app);")
+        self.assertLess(live.index("let _pub = LIVE_PUB.lock().unwrap();"), live.index("if LIVE_GEN.load(Ordering::SeqCst) != gen"),
+                        "发布锁先于核代次拿：退订插不进核代次与 emit／on_live 之间")
         self.assertLess(i, j, "live 一回来先记下、再立刻推光晕（不等下一 tick）")
         self.assertIn("let mut was_live = true;", self.watch, "订阅那一刻先跑一次 live（长工具调用中途打开时没有写入来叫醒）")
 

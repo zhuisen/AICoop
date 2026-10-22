@@ -100,12 +100,19 @@ class BothCallSitesAnnounceInFinally(unittest.TestCase):
         return src[j:src.index("}", src.index("{", j))]
 
     def test_store_run_announces_in_finally(self):
-        self.assertIn("announce(null)",
+        # 并发动作：熄的是自己，镜像改报还在跑的那一个（阶段 A，全方面评审 §7）。
+        self.assertIn("announce(rest)",
                       self._finally_block(STORE, "const run = useCallback"))
 
     def test_traffic_scan_announces_in_finally(self):
-        self.assertIn("announce(null)",
-                      self._finally_block(TRAFFIC, "const scan = useCallback"))
+        # 阶段 B 起扫描与小时补扫共用一个在途计数：finally 里调 `end()`，由它在计数归零时熄灯。
+        fin = self._finally_block(TRAFFIC, "const scan = useCallback")
+        if "announce(null)" in fin:
+            return
+        self.assertIn("end()", fin, "★ finally 里既没熄灯也没调 end()")
+        src = strip_ts(TRAFFIC.read_text(encoding="utf-8"))
+        i = src.index("const end = useCallback")
+        self.assertIn("announce(null)", src[i:src.index("\n", i)], "★ end() 归零时不熄灯")
 
     def test_both_announce_a_start(self):
         for path, tag in ((STORE, "announce(actionId)"), (TRAFFIC, 'announce("traffic-scan")')):

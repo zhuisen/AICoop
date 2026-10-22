@@ -212,6 +212,28 @@ const NOT_A_MODEL = new Set(["", "unknown", "<synthetic>"]);
  * 用到的模型里：① 牌价备注写着「YYYY-MM-DD 后翻倍」而那天已过（价格表过期，费用按旧价算低了）；
  * ② 没有牌价、走了同平台兜底价。`today` = 本地日期 `YYYY-MM-DD`。只看用过的模型 —— 没人用的旧价不打扰。
  */
+/** 用量快照里「最近 30 天用过 token 的模型」只需要的那几层（结构类型：本模块零 import，node 直接跑得动）。 */
+export interface UsedModelsData {
+  platforms: Record<string, { days?: Record<string, { models?: Record<string, { total?: number }> }> }>;
+}
+
+/** 最近 30 天用过 token 的模型（价格待核的输入）。**不随所选区间变**：换个区间警告就消失，会让人以为价格表好了。
+ *  「消耗」页与平台详情页共用这一个口径（`only` = 只看这一家；全方面评审 §2：原来详情页只看当前窗口）。 */
+export function recentModels(data: UsedModelsData, today: string, only?: string): { model: string; platform: string }[] {
+  const [y, mo, d] = today.split("-").map(Number);
+  const f = new Date(Date.UTC(y, mo - 1, d - 29));
+  const from = `${f.getUTCFullYear()}-${String(f.getUTCMonth() + 1).padStart(2, "0")}-${String(f.getUTCDate()).padStart(2, "0")}`;
+  const used: { model: string; platform: string }[] = [];
+  for (const [k, pl] of Object.entries(data.platforms)) {
+    if (only !== undefined && k !== only) continue;
+    for (const [day, b] of Object.entries(pl.days ?? {})) {
+      if (day < from) continue;
+      for (const [m, mb] of Object.entries(b.models ?? {})) if ((mb.total ?? 0) > 0) used.push({ model: m, platform: k });
+    }
+  }
+  return used;
+}
+
 export function priceWarnings(used: readonly { model: string; platform: string }[], today: string): PriceWarn[] {
   const out: PriceWarn[] = [];
   const seen = new Set<string>();

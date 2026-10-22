@@ -27,13 +27,17 @@ export default function DawnChip({ t, kind, active, compact, look = "chip", show
   /** `switch` 形态下是否带「定时」两个字（窄档只留图标 + 开关）。 */
   showLabel?: boolean;
 }) {
-  const { rec, busy, toggle, setTime } = useDawnStatus(kind, active);
+  const { rec, busy, failed, toggle, setTime } = useDawnStatus(kind, active);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const box = useRef<HTMLSpanElement>(null);
   const on = !!rec?.enabled;
   // `dawnDesc` 用 `**` 标重点（设置页旧版按 markdown 渲染）；这里是 `title` 与纯文本，剥掉。
-  const desc = dawnDesc(rec, kind).replace(/\*\*/g, "");
+  // 读失败：没有旧读数 ⇒ 整句「读不到」；有旧读数 ⇒ 照说旧状态，但标明是旧的、先不让改
+  const desc = failed && !rec ? "读不到定时探针的状态 —— 不知道现在是开是关，先不让改"
+    : failed ? `${dawnDesc(rec, kind).replace(/\*\*/g, "")}（⚠ 最近一次读取失败，这是上次读到的状态，先不让改）`
+      : dawnDesc(rec, kind).replace(/\*\*/g, "");
+  const canWrite = !!rec && !failed;
 
   useEffect(() => {
     if (!open) return;
@@ -88,9 +92,10 @@ export default function DawnChip({ t, kind, active, compact, look = "chip", show
               <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
                              color: "#E0901C", border: "1px solid #E0901C66" }}>计费</span>
             </b>
-            <span data-dawn-toggle onClick={() => { if (!busy) void toggle(); }}
+            <span data-dawn-toggle onClick={() => { if (!busy && canWrite) void toggle(); }}
+                  title={canWrite ? undefined : "读不到定时探针此刻的状态 —— 不知道现在是开是关，先不让改"}
                   style={{ width: 34, height: 18, borderRadius: 9, position: "relative", flexShrink: 0,
-                           cursor: busy ? "default" : "pointer", opacity: busy ? .5 : 1,
+                           cursor: busy || !canWrite ? "default" : "pointer", opacity: busy || !canWrite ? .5 : 1,
                            background: on ? t.accent : t.barTrack, transition: "background .2s" }}>
               <span style={{ position: "absolute", top: 2, left: 2, width: 14, height: 14, borderRadius: 7,
                              background: "#fff", transform: on ? "translateX(16px)" : "none",
@@ -103,8 +108,9 @@ export default function DawnChip({ t, kind, active, compact, look = "chip", show
                    style={{ fontFamily: MONO, fontSize: 12, padding: "3px 6px", borderRadius: 6,
                             background: t.popFieldBg, color: t.text, border: `1px solid ${t.ghostBorder}` }} />
             {dirty
-              ? <span data-dawn-save onClick={() => { if (!busy && draft) void setTime(draft).then(() => setDraft(null)); }}
-                      style={{ fontWeight: 700, color: t.accent, cursor: "pointer" }}>保存</span>
+              ? <span data-dawn-save onClick={() => { if (!busy && draft && canWrite) void setTime(draft).then(() => setDraft(null)); }}
+                      title={canWrite ? undefined : "读不到定时探针此刻的状态，先不让改"}
+                      style={{ fontWeight: 700, color: t.accent, cursor: canWrite ? "pointer" : "default", opacity: canWrite ? 1 : .5 }}>保存</span>
               : <span style={{ fontFamily: MONO, color: t.muted }}>{rec?.window ?? ""}</span>}
           </div>
           <div style={{ color: t.muted, lineHeight: 1.5 }}>

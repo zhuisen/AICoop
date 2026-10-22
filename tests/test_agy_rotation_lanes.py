@@ -193,7 +193,8 @@ class TheLogsPageWiring(unittest.TestCase):
     SRC = (ROOT / "codexbar" / "src" / "pages" / "LogsPage.tsx").read_text(encoding="utf-8")
 
     def test_the_gemini_tab_uses_its_own_ipc(self):
-        self.assertIn('invoke<Rotation>("read_agy_rotation"', self.SRC)
+        # 阶段 C 起两家共用一条取数路径，按平台选命令（codex 先读成品快照）
+        self.assertIn('invoke<Rotation>(plat === "agy" ? "read_agy_rotation" : "read_proxy_rotation"', self.SRC)
         # AICoop P7：平台切换是 logo 胶囊（`data-rot-plat-chip`），两项 codex / agy。
         self.assertRegex(self.SRC, r'k: "codex" as const.*\n.*k: "agy" as const')
         self.assertIn("data-rot-plat-chip={x.k}", self.SRC)

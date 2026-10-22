@@ -163,7 +163,9 @@ export function useStore() {
     return () => clearInterval(id);
   }, []);
 
+  const inflight = useRef<string[]>([]);
   const run = useCallback(async (actionId: string, args: string[], msg: string, opts?: RunOpts) => {
+    inflight.current.push(actionId);
     setLoadingAction(actionId);
     // ★ 告诉另一个 webview「我开始跑了」。此前两边只在**结束**时靠 `state-changed` 同步,
     //   于是在菜单栏点刷新、再打开主界面,主界面整个执行期间看起来什么都没发生
@@ -191,16 +193,22 @@ export function useStore() {
       // ★★ **必须在 `finally`** —— 上面 `catch` 之后还有 `showToast`,任何一处再抛,
       //    不在 finally 里的熄灯就漏了,对方会一直转圈。
       // 只熄自己这一盏：别的动作（探针）还在跑时点了图钉，不能把探针的转圈一起熄掉（评审 Opus M1）
-      setLoadingAction((cur) => (cur === actionId ? null : cur));
-      announce(null);
+      // ★ 并发的动作按在途清单熄灯（2026-10-22 评审）：先结束的那个不能把还在跑的转圈和跨窗镜像一起熄掉
+      const i = inflight.current.indexOf(actionId);
+      if (i >= 0) inflight.current.splice(i, 1);
+      const rest = inflight.current[inflight.current.length - 1] ?? null;
+      setLoadingAction((cur) => (cur === actionId ? rest : cur));
+      announce(rest);
     }
     return ok;
   }, [refresh, showToast, announce]);
 
   const slots: Record<string, Slot> = state.slots ?? {};
+  // 池里已没有的 aid 不算（老 state 可能留着）：否则卡片置顶序号整体错一位、与 CLI 对不上（阶段 A 评审）
+  const pinned = (state.pinned ?? []).filter((x) => x in slots);
   const accounts: Account[] = Object.entries(slots)
     .map(([aid, sl]) => {
-      const a = slotToAccount(aid, sl, tokens, state.pinned);
+      const a = slotToAccount(aid, sl, tokens, pinned);
       if (cooldowns[aid] != null) a.cooldownSec = cooldowns[aid];
       if (a.cooldownSec > 0 && a.status !== "dead") a.status = "cool";
       return a;

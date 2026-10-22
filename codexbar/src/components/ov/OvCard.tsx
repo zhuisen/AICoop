@@ -433,7 +433,9 @@ export function RotIb({ off, onToggle, unsupported }: { off: boolean; onToggle?:
 
 export interface CardMenuItem { key: string; label: string; icon?: ReactNode; onClick: () => void; bad?: boolean; warn?: boolean;
   /** 只在卡宽 < 240 时出现（CSS 容器查询）。 */
-  narrow?: boolean }
+  narrow?: boolean;
+  /** 正在跑（探针在途）⇒ 画成不可点、点了不发。 */
+  disabled?: boolean }
 
 /** 底栏最右的 ···（P5 §5.1）：只有「详情 / 删除」，卡窄时首项补「⚡ 探针 · 计费」。滑动高亮跟着鼠标走。 */
 export function CardMenu({ items, onOpenChange }: { items: CardMenuItem[]; onOpenChange?: (o: boolean) => void }) {
@@ -473,9 +475,10 @@ export function CardMenu({ items, onOpenChange }: { items: CardMenuItem[]; onOpe
                                          transition: moved.current ? "transform .14s cubic-bezier(.2,.9,.3,1), opacity .1s" : "opacity .1s" }} />
         {items.map((it, i) => (
           <div key={it.key} className={`ov-mi${it.bad ? " ov-mi-bad" : ""}${it.warn ? " ov-mi-warn" : ""}${it.narrow ? " ov-mi-narrow" : ""}`}
-               role="menuitem" tabIndex={0} data-ov-mi={it.key}
+               role="menuitem" tabIndex={0} data-ov-mi={it.key} aria-disabled={it.disabled ? "true" : undefined}
+               style={it.disabled ? { opacity: .45, cursor: "default" } : undefined}
                onMouseEnter={() => { if (mh >= 0) moved.current = true; setMh(i); }}
-               onClick={() => { setO(false); it.onClick(); }}
+               onClick={() => { setO(false); if (!it.disabled) it.onClick(); }}
                onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLElement).click(); }}>
             <span className="ov-mi-ic">{it.icon}</span>{it.label}
           </div>

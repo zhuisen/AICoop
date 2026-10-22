@@ -114,9 +114,20 @@ class TheVersionIsShownFromOnePlace(unittest.TestCase):
 
     def test_a_missing_build_number_shows_no_plus_suffix(self):
         """★ 取不到 `B` 就**只显示 `X.Y.Z`**，不显示 `+?` —— 那是关于版本的一句假话。"""
+        # ★ 行为闸（阶段 F 评审两方：原来断言源码里有 `return v;`，加了预发布段之后形状变了就假红）。
+        #   拼接规则在零 import 的 `helpers.ts::displayVersion`，node 直接跑真文件。
+        import json as _json
+        import subprocess as _sp
+        cases = [("1.12.0", "", None), ("1.12.0", "", "0"), ("1.12.0", "", "7"),
+                 ("1.12.0", "beta.1", None), ("1.12.0", "beta.1", "0"), ("1.12.0", "beta.1", "44")]
+        js = "import('file://%s').then(m => console.log(JSON.stringify(%s.map(c => m.displayVersion(...c)))))" % (
+            (ROOT / "codexbar" / "src" / "helpers.ts").as_posix(), _json.dumps(cases))
+        r = _sp.run(["node", "--experimental-strip-types", "-e", js], capture_output=True, text=True, timeout=60)
+        got = _json.loads([ln for ln in r.stdout.splitlines() if ln.strip()][-1])
+        self.assertEqual(got, ["1.12.0", "1.12.0", "1.12.0+7", "1.12.0-beta.1", "1.12.0-beta.1", "1.12.0-beta.1+44"])
         i = HELPERS.index("export async function fullVersion")
         seg = _ts(HELPERS[i:HELPERS.index("\n}", i)])
-        self.assertIn("return v;", seg, "★ 取不到 B 时没有退回纯 X.Y.Z")
+        self.assertIn("return displayVersion(v, pre, b);", seg, "★ fullVersion 没走那个纯函数")
         self.assertNotIn('+?', seg)
 
 
@@ -211,8 +222,6 @@ class TheDeployRuleIsWrittenDown(unittest.TestCase):
                       "★ 语言规矩没写进正本")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class DeployTellsYouWhichVersionItJustBaked(unittest.TestCase):
@@ -346,3 +355,7 @@ class DeployTellsYouWhichVersionItJustBaked(unittest.TestCase):
         t = f.read_text(encoding="utf-8")
         self.assertIn("tag BEFORE you deploy locally", t,
                       "★★ 发版顺序那条没写进正本 —— 下一次又会先 build 后 tag")
+
+
+if __name__ == "__main__":
+    unittest.main()

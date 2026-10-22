@@ -9,6 +9,9 @@ rust-version = "1.77.2"
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+# ★ 文档注释里的代码块不是可跑的示例（`build_number` / `LOG_SOURCES` 的 doctest 自 v1.9.6 起就红）；
+#   关掉它，CI 才能跑真的单测（`cargo test --lib`，全方面评审 §11）。
+doctest = false
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

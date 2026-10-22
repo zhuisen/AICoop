@@ -61,7 +61,8 @@ class TheMainWindowZoomsWithItsSize(unittest.TestCase):
         for p in (ROOT / "codexbar" / "src").rglob("*"):
             if p.suffix in (".ts", ".tsx", ".css"):
                 src = re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", "", p.read_text(encoding="utf-8"))
-                if re.search(r"\bzoom\s*:", src):
+                # TS 类型标注里的字段（`zoom: number`，Rust 事件载荷）不是 CSS zoom
+                if re.search(r"\bzoom\s*:(?!\s*(?:number|string|boolean)\b)", src):
                     hits.append(p.name)
         self.assertEqual(hits, [])
 

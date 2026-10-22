@@ -230,8 +230,6 @@ class WiredIntoTheSystem(unittest.TestCase):
         self.assertNotIn("localStorage", ts, "开关走了 localStorage 而不是 CLI")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ForceDoesNotJoinARunInFlight(unittest.TestCase):
@@ -346,3 +344,7 @@ class TheProgramInternalCallDoesNotGoThroughArgv(unittest.TestCase):
                          "★★★ 一个叫 `--all` 的 label 把 take_all 打开了 ⇒ 整池计费\n" + p.stdout)
         self.assertNotIn("proC", p.stdout,
                          "★★★ Pro 号进了计费名单 —— 每日探针刻意排除它（它没有 5h 窗口）")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -270,8 +270,6 @@ class NoImportTimeSideEffects(unittest.TestCase):
                              "模块顶层出现了 %s —— import 就有副作用" % bad)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class BilledAnchorOutranksDerivation(unittest.TestCase):
@@ -389,3 +387,7 @@ class BilledAnchorOutranksDerivation(unittest.TestCase):
                            path="/nonexistent-dir-xyz/ledger.json")
         self.assertIn("state", v)
         self.assertIn("billed", v)
+
+
+if __name__ == "__main__":
+    unittest.main()

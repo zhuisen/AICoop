@@ -268,8 +268,6 @@ class UnsupportedModelSaysWhatToDo(unittest.TestCase):
         self.assertIn("models_cache.json", seg, "没告诉用户去哪查可用清单")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ThePinnedDefaultIsNotVetoedByTheCatalog(unittest.TestCase):
@@ -328,3 +326,7 @@ class ThePinnedDefaultIsNotVetoedByTheCatalog(unittest.TestCase):
         """★ 探针只要证明「这个号能干活」，effort 越低越省 —— 用户 2026-09-16 同时定的。"""
         self.assertRegex(self.src, re.compile(r'^PROBE_EFFORT\s*=\s*"low"', re.M),
                          "★ 探针 effort 不是 low 了")
+
+
+if __name__ == "__main__":
+    unittest.main()

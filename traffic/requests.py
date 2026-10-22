@@ -73,6 +73,7 @@
 没有回复）、`stop_hook_summary`（实测 32/2140 次后面还跟着模型继续调工具 —— 子 agent 的 Stop 钩子也写它）。
 """
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -520,11 +521,20 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
     return state
 
 
-def _codex_files(root):
+def _walk_err(err):
+    """`os.walk` 默认把子目录的读错误**吞掉**（`onerror=None`）⇒ 一整棵会话树可以静默消失（阶段 B 评审）。
+    这里把它记成源级错误；目录在列完之后被删（ENOENT）不算。"""
+    def on(e):
+        if err is not None and not isinstance(e, FileNotFoundError):
+            err.append("读不了 %s: %s" % (S._tilde(Path(getattr(e, "filename", "") or "?")), e.strerror or e))
+    return on
+
+
+def _codex_files(root, err=None):
     out = []
     if not root.is_dir():
         return out
-    for dp, _dn, fns in os.walk(root):
+    for dp, _dn, fns in os.walk(root, onerror=_walk_err(err)):
         for n in fns:
             if n.startswith("rollout-") and (n.endswith(".jsonl") or n.endswith(".jsonl.zst")):
                 p = Path(dp) / n
@@ -536,14 +546,17 @@ def _codex_files(root):
 def _do_codex(cur, rt, horizon, emit, err, seen):
     root = rt["codex"]
     try:
-        files = _codex_files(root)
+        files = _codex_files(root, err)
     except OSError as e:
         err.append("读不了 %s: %s" % (S._tilde(root), e))
         return
     for p in files:
         try:
             st = p.stat()
-        except OSError:
+        except FileNotFoundError:
+            continue                                 # 列目录之后被删了：不是读失败
+        except OSError as e:
+            err.append("读不了 %s: %s" % (S._tilde(p), e))   # ★ 读不到 ≠ 没有（全方面评审 §5）
             continue
         if st.st_mtime < horizon:
             continue
@@ -563,7 +576,7 @@ def _do_codex(cur, rt, horizon, emit, err, seen):
                                        horizon, emit)
                 cur["files"][k] = {"sig": sig, "mtime": st.st_mtime, "state": state}
             else:
-                old = (ent or {}).get("state")
+                old = copy.deepcopy((ent or {}).get("state"))  # ★ 深拷贝：解析器原地改它，中途抛 ReadFail 时游标不前进、旧条目却已被改 ⇒ 下一轮从同一偏移重读，按改过的状态再算一遍（全方面评审 §5）
                 cur["files"][k] = _tail_lines(
                     k, st, ent, lambda it, fresh: _codex_consume(k, it, fresh, old, horizon, emit))
         except ReadFail as e:
@@ -648,6 +661,11 @@ def _claude_user_turn(state, line, o):
             return
     if not isinstance(o, dict) or o.get("type") != "user" or o.get("isMeta"):
         return
+    # 会话 id / 工作目录在 user 行上就有：新会话第一轮还没写出 assistant 行时，在跑面板的标题也不用退成短 id（阶段 B 评审）
+    if state.get("sess") is None and isinstance(o.get("sessionId"), str):
+        state["sess"] = o["sessionId"]
+    if state.get("title") is None and isinstance(o.get("cwd"), str):
+        state["title"] = _base(o["cwd"])
     if "interruptedMessageId" in o:
         state["open"] = False                             # Esc 中断：Claude Code 写这一行，不写 turn_duration
     elif not o.get("isCompactSummary") and ("promptSource" in o or o.get("isSidechain") is True):
@@ -713,7 +731,7 @@ def _claude_rec(rid, t, sp, span_n):
     return base
 
 
-def _claude_files(root):
+def _claude_files(root, err=None):
     out = []
     if not root.is_dir():
         return out
@@ -730,9 +748,13 @@ def _claude_files(root):
                         #   （实测 6725 个在第 7 层、432 个在第 5 层）。只看一层会静默漏掉前者。
                         sub = os.path.join(e.path, "subagents")
                         if os.path.isdir(sub):
-                            for dp, _dn, fns in os.walk(sub):
+                            for dp, _dn, fns in os.walk(sub, onerror=_walk_err(err)):
                                 out.extend(Path(dp) / n for n in fns if n.endswith(".jsonl"))
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            if err is not None:
+                err.append("读不了 %s: %s" % (S._tilde(Path(pd)), e))
             continue
     return out
 
@@ -746,7 +768,10 @@ def _do_claude(cur, rt, horizon, emit, err, seen):
         for p in sorted(od.glob("*.jsonl")):
             try:
                 st = p.stat()
-            except OSError:
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                err.append("读不了 %s: %s" % (S._tilde(p), e))
                 continue
             if st.st_mtime < horizon:
                 continue
@@ -758,21 +783,24 @@ def _do_claude(cur, rt, horizon, emit, err, seen):
                 err.append(str(e))
     root = rt["claude"]
     try:
-        files = _claude_files(root)
+        files = _claude_files(root, err)
     except OSError as e:
         err.append("读不了 %s: %s" % (S._tilde(root), e))
         files = []
     for p in files:
         try:
             st = p.stat()
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            err.append("读不了 %s: %s" % (S._tilde(p), e))
             continue
         if st.st_mtime < horizon:
             continue
         k = str(p)
         seen[k] = ("claude", st.st_mtime)
         ent = cur["files"].get(k)
-        old = (ent or {}).get("state")
+        old = copy.deepcopy((ent or {}).get("state"))  # ★ 深拷贝：解析器原地改它，中途抛 ReadFail 时游标不前进、旧条目却已被改 ⇒ 下一轮从同一偏移重读，按改过的状态再算一遍（全方面评审 §5）
         try:
             cur["files"][k] = _tail_lines(
                 k, st, ent, lambda it, fresh: _claude_consume(k, it, fresh, old, horizon, tr, touched))
@@ -902,7 +930,7 @@ def _agy_db(path, ent, horizon, emit):
                 raise ReadFail("查不了 %s: %s" % (S._tilde(path), e)) from e
     finally:
         con.close()
-    for gidx, item in parsed:
+    for pi, (gidx, item) in enumerate(parsed):
         if item is None or item[1] is None:
             stt["gidx"] = gidx                         # 空行 / 没有 last_step_index：跳过（不猜时间戳）
             continue
@@ -915,7 +943,13 @@ def _agy_db(path, ent, horizon, emit):
         ttft = _pb_ts(_pb1(inner, 11))
         strm = _pb_ts(_pb1(inner, 12))
         if created is None or (fin is None and (ttft is None or strm is None)):
-            break                                      # 还在生成 / 模型步没写完：停在这里，下次接着读
+            if pi < len(parsed) - 1:
+                # ★ 后面已经有下一次生成 ⇒ 这一次早就结束了，只是永远不会有时间戳（取消 / 出错的步骤）。
+                #   停在这里的话游标永不前进，这个会话之后的请求全部不入账（全方面评审 §5）⇒ 跳过它、往后读。
+                #   `last_ms` 一起推过它的模型步：它之前的工具步不该算进下一条的工具耗时。
+                stt["gidx"], stt["last_ms"] = gidx, max(stt["last_ms"], sidx)
+                continue
+            break                                      # 最后一项：还在生成 / 模型步没写完，停在这里，下次接着读
         t_end = fin if fin is not None else created + (ttft or 0) + (strm or 0)
         tool = 0
         for i in range(stt["last_ms"] + 1, sidx):
@@ -964,7 +998,10 @@ def _do_agy(cur, rt, horizon, emit, err, seen):
         p = root / n
         try:
             mt, sig = S._agy_db_sig(p, p.stat())
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            err.append("读不了 %s: %s" % (S._tilde(p), e))
             continue
         if mt < horizon:
             continue
@@ -1087,17 +1124,26 @@ def _do_grok(cur, rt, horizon, emit, err, seen):
         title = _base(urllib.parse.unquote(cd.name))
         try:
             sdirs = [e for e in os.scandir(cd.path) if e.is_dir(follow_symlinks=False)]
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            err.append("读不了 %s: %s" % (S._tilde(Path(cd.path)), e))
             continue
         for sd in sdirs:
             up, evp = Path(sd.path) / "updates.jsonl", Path(sd.path) / "events.jsonl"
             try:
                 ust = up.stat()
-            except OSError:
+            except FileNotFoundError:
+                continue                             # 这个会话还没写 updates：常态
+            except OSError as e:
+                err.append("读不了 %s: %s" % (S._tilde(up), e))
                 continue
             try:
                 est_ = evp.stat()
-            except OSError:
+            except FileNotFoundError:
+                est_ = None                          # 这个会话没有 events：只是没有首字数据
+            except OSError as e:
+                err.append("读不了 %s: %s" % (S._tilde(evp), e))
                 est_ = None
             mt = max(ust.st_mtime, est_.st_mtime if est_ else 0)
             if mt < horizon:
@@ -1106,12 +1152,12 @@ def _do_grok(cur, rt, horizon, emit, err, seen):
             try:
                 ek = str(evp)
                 if est_ is not None:
-                    eold = (cur["files"].get(ek) or {}).get("state")
+                    eold = copy.deepcopy((cur["files"].get(ek) or {}).get("state"))  # ★ 深拷贝：解析器原地改它，中途抛 ReadFail 时游标不前进、旧条目却已被改 ⇒ 下一轮从同一偏移重读，按改过的状态再算一遍（全方面评审 §5）
                     cur["files"][ek] = _tail_lines(ek, est_, cur["files"].get(ek),
                                                    lambda it, fresh: _grok_events(it, fresh, eold))
                 ev = (cur["files"].get(ek) or {}).get("state")
                 uk = str(up)
-                uold = (cur["files"].get(uk) or {}).get("state")
+                uold = copy.deepcopy((cur["files"].get(uk) or {}).get("state"))  # ★ 深拷贝：解析器原地改它，中途抛 ReadFail 时游标不前进、旧条目却已被改 ⇒ 下一轮从同一偏移重读，按改过的状态再算一遍（全方面评审 §5）
                 ent = _tail_lines(uk, ust, cur["files"].get(uk),
                                   lambda it, fresh: _grok_updates(it, fresh, uold, sd.name, title, ev,
                                                                   horizon, emit))
@@ -1242,9 +1288,12 @@ def update(now, days, rt=None, join=False):
                          "since": (old_err.get(p) or {}).get("since") or now} for p, v in errs.items()}
     # 游标里只留窗口内还在动的文件（窗口外的文件下次被改写时会从头重解，按 key 去重）。
     cur["files"] = {k: v for k, v in cur["files"].items() if (v.get("mtime") or 0) >= horizon}
-    _atomic_write(st.d / ".window.json",
-                  json.dumps({"v": V, "records": {k: _whitelist(v) for k, v in recs.items()}},
-                             ensure_ascii=False))
+    # ★ `.window.json` 坏了、按账本重建又失败（`snap_err`）时**不写**：此刻 `recs` 只有这一轮新解析的，
+    #   写下去下一轮就当它是完整窗口，两天的历史从此不再回来（全方面评审 §5）。不写 ⇒ 下一轮再试重建。
+    if not snap_err:
+        _atomic_write(st.d / ".window.json",
+                      json.dumps({"v": V, "records": {k: _whitelist(v) for k, v in recs.items()}},
+                                 ensure_ascii=False))
     _atomic_write(st.d / ".cursor.json", json.dumps(cur, ensure_ascii=False))
     return recs, cur, seen
 
@@ -1252,10 +1301,12 @@ def update(now, days, rt=None, join=False):
 def _meta(cur):
     errs = cur.get("errors") or {}
     if not errs:
-        return {"ok": True, "error": None, "stale_since": None}
+        return {"ok": True, "error": None, "stale_since": None, "failed": []}
+    # `failed` 让界面只把**读失败的那几家**降透明度（全方面评审 §5）；账本本身坏了 = 全部（`*`）。
     return {"ok": False,
             "error": "；".join("%s: %s" % (p, v["error"]) for p, v in sorted(errs.items())),
-            "stale_since": min(v["since"] for v in errs.values())}
+            "stale_since": min(v["since"] for v in errs.values()),
+            "failed": sorted("*" if p == "ledger" else p for p in errs)}
 
 
 # ── 账号 join（只在 --json 时做：要读 proxy.log / cli-*.log，live 不需要账号） ──────────
@@ -1272,13 +1323,15 @@ def _join_codex(recs, rt, now, horizon):
                      for aid, s in (json.load(fh).get("slots") or {}).items() if isinstance(s, dict)}
     except (OSError, ValueError, AttributeError):
         pass
-    owner = {}
+    owner, relay = {}, {}
     if text is not None:
-        _rq, owner, *_ = R.scan_proxy_log(text, now, horizon, now + 60, resolve=R.make_resolver(slots))
+        _rq, owner, *_ = R.scan_proxy_log(text, now, horizon, now + 60, resolve=R.make_resolver(slots),
+                                          relay_owner=relay)
     out = []
     for r in todo:
         rid = r["key"][6:]
-        acc = owner.get(rid)
+        # ★ 走中转站的响应记「中转站·名字」，不是「直连」（全方面评审 §5；代理从这一版起给中转站也写归属行）
+        acc = owner.get(rid) or (("中转站·%s" % relay[rid]) if rid in relay else None)
         if acc is None:
             # ★ 「对不上」≠「直连」：日志读不到 / 日志没覆盖到那一刻 / 响应刚写完代理还没落行，都写 null。
             cov = info.get("covers_from")
@@ -1381,6 +1434,18 @@ def build_json(now, days=2, rt=None):
     finally:
         st.unlock()
     rows = sorted((_whitelist(r) for r in recs.values()), key=lambda r: -(r["t_end"] or 0))
+    # ★ 只在 OTel 里有的 Claude 调用（后台调用，transcript 不写）拿不到工作目录，标题退成会话短 id。
+    #   同一会话别的行有真标题就借过来（全方面评审 §5「Claude 标题是 UUID」：本机 2 天 760 行，
+    #   同一会话都另有带标题的行）。
+    best = {}
+    for r in rows:
+        sid, tt = r.get("session"), r.get("session_title")
+        if sid and tt and tt != _short(sid):
+            best.setdefault((r["platform"], sid), tt)
+    for r in rows:
+        sid = r.get("session")
+        if sid and r.get("session_title") in (None, _short(sid)) and (r["platform"], sid) in best:
+            r["session_title"] = best[(r["platform"], sid)]
     t_today, t_yday = _local_midnight(now, 0), _local_midnight(now, 1)
     days_out = {}
     for name, a, b in (("today", t_today, now + 86400), ("yesterday", t_yday, t_today)):
@@ -1436,12 +1501,29 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
             s = sess.setdefault(r["session"], {"id": r["session"], "title": r.get("session_title")
                                                or _short(r["session"]), "tps": None, "tokens": 0,
                                                "last_t_end": None, "active": False, "_last": None})
+            tt = r.get("session_title")              # 先来的行可能只有短 id（OTel 旁路调用）⇒ 后面有真标题就换上
+            if tt and tt != _short(r["session"]) and s["title"] in (None, _short(r["session"])):
+                s["title"] = tt
             s["tokens"] += (r.get("input") or 0) + (r.get("output") or 0)
             if s["_last"] is None or r["t_end"] > s["_last"]["t_end"]:
                 s["_last"] = r
+        # ★ 速度的「最近一条实测」不按自然日切（用户 2026-10-23「Gemini 经常 — t/s」）：只看今天的话，过了午夜、
+        #   还没出新的实测响应的会话一律 —。argon 约 89% 的响应是整包、只有估值（中位 31 vs 实测 116 t/s），
+        #   一个会话今天的几条恰好全是整包很常见。取账本已载入的两天里这个会话最近一条实测；token 仍只算今天。
+        for r in recs.values():
+            if r["platform"] != p or not r.get("session") or r["session"] not in sess:
+                continue
+            s = sess[r["session"]]
             if r.get("tps") is not None and not r.get("est") and (
                     s.get("_meas") is None or r["t_end"] > s["_meas"]["t_end"]):
                 s["_meas"] = r
+        # ★ 会话两天里一条实测都没有 ⇒ 用同一模型两天实测的中位数（用户 2026-10-23「整包下发……或者取平均」）。
+        #   不用整包那条自己的 `output ÷ (首字 + 生成)`：首字里含排队与读上下文，argon 整包中位 31 vs 实测 116 t/s，
+        #   同一个模型托盘上一会儿 31 一会儿 116，会被读成「忽快忽慢」。没有同模型实测 ⇒ 仍是 null（—）。
+        by_model = {}
+        for r in recs.values():
+            if r["platform"] == p and r.get("tps") is not None and not r.get("est"):
+                by_model.setdefault(r.get("model"), []).append(r["tps"])
         lst = []
         for s in sess.values():
             last, meas = s.pop("_last"), s.pop("_meas", None)
@@ -1452,6 +1534,9 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
                 # ★ 2026-10-22 三方评审：一条实测都没有 ⇒ null（托盘写 —），不再退回估值 —— 不加「估」字地
                 #   显示 5.2 / 31.7 t/s，会被读成「模型变慢了」。
                 s["last_t_end"], s["tps"] = last["t_end"], (meas.get("tps") if meas else None)
+                if s["tps"] is None and by_model.get(last.get("model")):
+                    s["tps"] = round(_median(by_model[last.get("model")]), 1)
+                    s["tps_model_avg"] = True      # 只在数据里；界面不加「估」（交接包全局规则）
                 if s["title"] is None:
                     s["title"] = last.get("session_title")
             if s["active"] or last is not None:
@@ -1493,8 +1578,9 @@ def main(argv=None):
     try:
         out = build_live(now, a.fallback_secs) if a.live else build_json(now, max(1, a.days))
     except Exception as e:                           # noqa: BLE001 —— 退出码恒 0：Err 在前端会被读成「没数据」
+        # ★ `stale_since` 不填 now：「此刻才开始读不到」是编的 —— 说不出就留空，界面保留上次真读到的时刻（全方面评审 §5）
         out = {"v": V, "generated_at": int(now), "ok": False, "error": "%s: %s" % (type(e).__name__, e),
-               "stale_since": now}
+               "stale_since": None, "failed": ["*"]}
         out.update({"platforms": {}, "today": {"tokens": 0, "avg_tps": None, "n": 0}} if a.live
                    else {"requests": [], "days": {}})
     sys.stdout.write(json.dumps(out, ensure_ascii=False))

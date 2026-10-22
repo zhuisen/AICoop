@@ -766,18 +766,84 @@ fn run_py_script(script: &str, args: &[&str]) -> Result<String, String> {
     Ok(body)
 }
 
+/// 同 `run_py_script`，但有时限：超时就杀掉子进程、按失败返回。
+/// ★ `--live` 每 2 s 跑一次，挂住一次 `LIVE_BUSY` 就永远是 true，托盘胶囊冻在最后一帧（全方面评审 §8）。
+///   stdout / stderr 各一条线程读：只等退出再读，输出超过管道缓冲（64 KB）就会互相等死、伪装成超时。
+fn run_py_script_timeout(script: &str, args: &[&str], limit: Duration) -> Result<String, String> {
+    use std::process::Stdio;
+    if !std::path::Path::new(script).is_file() {
+        return Err(format!("script not found: {}", script));
+    }
+    let mut cmd = py_cmd();
+    cmd.arg(script).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("exec: {}", e))?;
+    let t0 = std::time::Instant::now();
+    let (ho, he) = (read_all(child.stdout.take()), read_all(child.stderr.take()));
+    let status = loop {
+        if t0.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();     // 收尸：杀掉之后也要 wait，否则留僵尸
+            return Err(format!("{} 超过 {} s 没跑完，已结束它", script, limit.as_secs()));
+        }
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("wait: {}", e)),
+        }
+    };
+    let out = ho.join().unwrap_or_default();
+    let err = he.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("{} exited {}: {}{}", script, status,
+            String::from_utf8_lossy(&err).trim(), String::from_utf8_lossy(&out).trim()));
+    }
+    let body = String::from_utf8_lossy(&out).trim().to_string();
+    if body.is_empty() { return Err(format!("{} printed nothing", script)); }
+    Ok(body)
+}
+
+/// 一条线程把管道读到 EOF（`run_py_script_timeout` 用；`None` ⇒ 空）。
+fn read_all<R: std::io::Read + Send + 'static>(p: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut b = Vec::new();
+        if let Some(mut p) = p { let _ = p.read_to_end(&mut b); }
+        b
+    })
+}
+
+/// `--live` 的时限。正常一次远小于 1 s；改 `CUR_V` 后第一次要全量重解，留足余量。
+const LIVE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `--json` 的时限（冷路径全量重解比 `--live` 多读两天的逐条记录）。
+const JSON_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 在 `limit` 内拿到 `REQUESTS_LOCK`，拿不到 ⇒ Err。★ 阶段 D 评审 codex：子进程有了时限，等锁却没有 ——
+///   一份卡住的 `--json` 持锁不放，`--live` 就在 `lock()` 上无限等，`LIVE_BUSY` 照样永远是 true。
+fn requests_lock(limit: Duration) -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    let t0 = std::time::Instant::now();
+    loop {
+        match REQUESTS_LOCK.try_lock() {
+            Ok(g) => return Ok(g),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Ok(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if t0.elapsed() >= limit =>
+                return Err(format!("requests.py 另一份还在跑，等了 {} s", limit.as_secs())),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
 /// 跑一次 `requests.py --live`（阻塞，调用方自己放到后台线程）。活动检测线程每 2 s 调一次。
 fn run_live_blocking() -> Result<String, String> {
-    let _g = REQUESTS_LOCK.lock();
-    run_py_script(&requests_script(), &["--live"])
+    let _g = requests_lock(LIVE_TIMEOUT)?;
+    run_py_script_timeout(&requests_script(), &["--live"], LIVE_TIMEOUT)
 }
 
 /// 最近 2 天的逐条请求（「请求」页）。
 #[tauri::command]
 async fn read_requests() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _g = REQUESTS_LOCK.lock();
-        run_py_script(&requests_script(), &["--json"])
+        let _g = requests_lock(JSON_TIMEOUT)?;
+        run_py_script_timeout(&requests_script(), &["--json"], JSON_TIMEOUT)
     })
     .await
     .map_err(|e| format!("join: {}", e))?
@@ -992,13 +1058,33 @@ fn set_scan_source(key: String, on: bool) -> Result<(), String> {
 ///   这里从一开始就只有一份。
 #[tauri::command]
 async fn read_integration() -> Result<String, String> {
+    let asked = std::time::Instant::now();
+    tauri::async_runtime::spawn_blocking(move || coalesce_after(&INTEGRATION_LAST, asked, run_integration))
+        .await
+        .map_err(|e| format!("join: {}", e))?
+}
+
+/// `read_integration` 最近一次的（开跑时刻, 结果）。
+static INTEGRATION_LAST: Mutex<Option<(std::time::Instant, Result<String, String>)>> = Mutex::new(None);
+
+/// 跨窗口合流（阶段 D 评审 codex）：一条 `state-changed` 主窗与菜单栏各收一份，前端的 `coalesce` 只管得了自己那个 webview。
+/// 拿到锁时，若最近一次是在**我发起之后**才开跑的，它看到的状态不比我要的旧 ⇒ 直接用它的结果，不再起一个 python。
+fn coalesce_after(slot: &Mutex<Option<(std::time::Instant, Result<String, String>)>>, asked: std::time::Instant,
+                  run: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    let mut g = slot.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((started, r)) = g.as_ref() {
+        if *started >= asked { return r.clone(); }
+    }
+    let started = std::time::Instant::now();
+    let r = run();
+    *g = Some((started, r.clone()));
+    r
+}
+
+fn run_integration() -> Result<String, String> {
     let rot = format!("{}/codex-rotate", script_dir());
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        py_cmd().arg(&rot).arg("integration").arg("--json").output()
-    })
-    .await
-    .map_err(|e| format!("join: {}", e))?
-    .map_err(|e| format!("exec: {}", e))?;
+    let out = py_cmd().arg(&rot).arg("integration").arg("--json").output()
+        .map_err(|e| format!("exec: {}", e))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -1291,6 +1377,20 @@ const AGY_POOL: &str = ".agy-pool.json";
 
 /// 独立于 `GROK_LOCK`:两条额度链路互不相干,共用一把锁只会让一边等另一边。
 static AGY_LOCK: Mutex<()> = Mutex::new(());
+/// 长的 `agy-rotate` 命令（quota / health / probe / dawn-probe 真跑）自己一把（全方面评审 §10）：它们一跑 10–120 s，
+/// 原来和毫秒级的 live / switch / pin 共用 `AGY_LOCK`，按钮要等几十秒。拆开后靠两样兜住：
+///   · 写池全走 `pool.merge_back`（锁内重读、只合并自己改的字段）；
+///   · `switch` / `auto` 占着探针锁才装钥匙串（`agy-rotate::_probe_lock`），探针在跑就拒绝 / 跳过。
+static AGY_LONG_LOCK: Mutex<()> = Mutex::new(());
+
+/// 这条 `agy-rotate` 子命令会不会跑很久（联网逐号 / 起真 agy）。`dawn-probe` 只有改开关、读状态是短的。
+fn agy_is_long(args: &[String]) -> bool {
+    match args.first().map(String::as_str) {
+        Some("quota") | Some("health") | Some("probe") => true,
+        Some("dawn-probe") => !args.iter().any(|a| matches!(a.as_str(), "--status" | "--enable" | "--disable" | "--time")),
+        _ => false,
+    }
+}
 /// ★ 比 grok 的 300s 短得多。agy 的额度是**本机进程**里的实时数,取一次只是一个 loopback
 /// 往返(实测毫秒级),没有外网成本也没有配额成本;而它的 5h 窗口跳得比 grok 的周窗口快。
 const AGY_COALESCE_SECS: u64 = 60;
@@ -1506,6 +1606,12 @@ fn build_number() -> String {
     env!("CODEXBAR_BUILD").to_string()
 }
 
+/// 最近的 tag 若是这个版本的预发布（`v1.12.0-beta.1`）⇒ `beta.1`，否则空（`build.rs::prerelease`）。
+#[tauri::command]
+fn build_prerelease() -> String {
+    env!("CODEXBAR_PRERELEASE").to_string()
+}
+
 #[tauri::command]
 fn read_agy_quota() -> Result<Option<String>, String> {
     read_sidecar(AGY_SNAPSHOT)
@@ -1558,7 +1664,7 @@ async fn run_agy_rotate(args: Vec<String>) -> Result<String, String> {
     // ★ `switch` 之后必须让前端重读池：`--json` 只有 quota 有，switch 回的是人话。
     let script = format!("{}/agy-rotate", script_dir());
     let out = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = AGY_LOCK.lock();
+        let _guard = if agy_is_long(&args) { AGY_LONG_LOCK.lock() } else { AGY_LOCK.lock() };
         py_cmd().arg(&script).args(&args).output()
     })
     .await
@@ -3104,6 +3210,7 @@ pub fn run() {
             read_grok_quota,
             run_grok_quota,
             build_number,
+            build_prerelease,
             read_agy_quota,
             read_agy_pool,
             run_agy_rotate,
@@ -3343,5 +3450,129 @@ mod legacy_name_tests {
         fs::write(la.join("AICoop.plist"), "<string>/Applications/AICoop.app/Contents/MacOS/codexbar</string>").unwrap();
         assert!(super::new_autostart_ok(&d, exe));
         let _ = fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod agy_lock_tests {
+    use super::agy_is_long;
+    fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
+
+    #[test]
+    fn long_and_short_commands_take_different_locks() {
+        for a in [&["quota"][..], &["health"], &["probe", "x"], &["dawn-probe", "--no-wait"], &["dawn-probe"]] {
+            assert!(agy_is_long(&v(a)), "{:?} 应走长命令那把锁", a);
+        }
+        for a in [&["live"][..], &["switch", "x"], &["pin", "--toggle", "x"], &["rotate", "x", "--off"],
+                  &["dawn-probe", "--status"], &["dawn-probe", "--time", "06:00"], &["auto-switch", "--on"]] {
+            assert!(!agy_is_long(&v(a)), "{:?} 是毫秒级的，别排在探针后面", a);
+        }
+    }
+}
+
+#[cfg(test)]
+mod coalesce_after_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn concurrent_callers_share_one_run() {
+        static SLOT: Mutex<Option<(std::time::Instant, Result<String, String>)>> = Mutex::new(None);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let asked = std::time::Instant::now();
+        let hs: Vec<_> = (0..3).map(|_| {
+            let runs = runs.clone();
+            std::thread::spawn(move || coalesce_after(&SLOT, asked, || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(150));
+                Ok("x".into())
+            }))
+        }).collect();
+        for h in hs { assert_eq!(h.join().unwrap(), Ok("x".to_string())); }
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "三个同时发起的调用应合成一次");
+    }
+
+    /// ★ 阶段 E 评审 codex：原测试三个调用共用一个 `asked`，测不到真实时序。这里第一次已经在跑，
+    /// 期间又来两次：它们开跑前看到的状态可能比第一次新，所以必须**再跑一次**（尾随），但只一次。
+    #[test]
+    fn calls_arriving_mid_run_share_one_trailing_run() {
+        static SLOT: Mutex<Option<(std::time::Instant, Result<String, String>)>> = Mutex::new(None);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let job = |runs: Arc<AtomicUsize>| move || {
+            runs.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(200));
+            Ok("x".to_string())
+        };
+        let r0 = runs.clone();
+        let first = std::thread::spawn(move || coalesce_after(&SLOT, std::time::Instant::now(), job(r0)));
+        std::thread::sleep(Duration::from_millis(60));            // 第一次已经开跑
+        let later: Vec<_> = (0..2).map(|_| {
+            let r = runs.clone();
+            let asked = std::time::Instant::now();
+            std::thread::spawn(move || coalesce_after(&SLOT, asked, job(r)))
+        }).collect();
+        first.join().unwrap().unwrap();
+        for h in later { h.join().unwrap().unwrap(); }
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "在途一次 + 尾随一次；不是每来一个就跑一个，也不能不跑尾随");
+    }
+
+    #[test]
+    fn a_call_after_the_last_run_started_runs_again() {
+        static SLOT: Mutex<Option<(std::time::Instant, Result<String, String>)>> = Mutex::new(None);
+        assert_eq!(coalesce_after(&SLOT, std::time::Instant::now(), || Ok("old".into())), Ok("old".to_string()));
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(coalesce_after(&SLOT, std::time::Instant::now(), || Ok("new".into())), Ok("new".to_string()),
+                   "上一次开跑早于这次发起 ⇒ 它可能没看到最新状态，必须重跑");
+    }
+}
+
+#[cfg(test)]
+mod py_timeout_tests {
+    use super::{run_py_script_timeout, Duration};
+
+    fn script(body: &str) -> (tempfile_dir::Dir, String) {
+        let d = tempfile_dir::Dir::new();
+        let p = d.0.join("s.py");
+        std::fs::write(&p, body).unwrap();
+        let s = p.to_string_lossy().to_string();
+        (d, s)
+    }
+
+    /// 最小的临时目录（不引新依赖）：Drop 时删掉。
+    mod tempfile_dir {
+        pub struct Dir(pub std::path::PathBuf);
+        impl Dir {
+            pub fn new() -> Self {
+                let p = std::env::temp_dir().join(format!("cbx-pyto-{}-{:?}", std::process::id(), std::thread::current().id()));
+                let _ = std::fs::remove_dir_all(&p);
+                std::fs::create_dir_all(&p).unwrap();
+                Dir(p)
+            }
+        }
+        impl Drop for Dir { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+    }
+
+    #[test]
+    fn a_hung_script_is_killed_and_reported_as_failure() {
+        let (_d, s) = script("import time\ntime.sleep(30)\n");
+        let t0 = std::time::Instant::now();
+        let r = run_py_script_timeout(&s, &[], Duration::from_millis(800));
+        assert!(r.is_err(), "★ 挂住的脚本没按失败返回");
+        assert!(t0.elapsed() < Duration::from_secs(10), "没在时限附近结束：{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn output_larger_than_the_pipe_buffer_is_not_a_timeout() {
+        // ★ 只等退出再读的写法在这里会互相等死（子进程写满 64 KB 管道阻塞），伪装成超时
+        let (_d, s) = script("import sys\nsys.stdout.write('x' * 300000)\n");
+        let r = run_py_script_timeout(&s, &[], Duration::from_secs(20)).expect("应当成功");
+        assert_eq!(r.len(), 300000);
+    }
+
+    #[test]
+    fn a_failing_script_is_an_error() {
+        let (_d, s) = script("import sys\nsys.exit(3)\n");
+        assert!(run_py_script_timeout(&s, &[], Duration::from_secs(20)).is_err());
     }
 }
