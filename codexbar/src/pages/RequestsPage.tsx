@@ -4,7 +4,7 @@ import { maskId } from "../helpers";
 import PlatformLogo from "../components/PlatformLogo";
 import { useRequests } from "../hooks/useRequests";
 import {
-  PLATFORM_NAME, PLATFORM_ORDER, DASH, accountLabel, cacheRate, dayKeys, daySummary, emptyCopy, topMetrics,
+  PLATFORM_NAME, PLATFORM_ORDER, DASH, accountLabel, cacheRate, dayKeys, dayMetrics, daySummary, emptyCopy,
   filterPlatform, fmtHHMM, fmtInt, fmtSecs, fmtTokens, fmtTps, fmtWhen, footerText, modelName,
   rowsForDay, selectedIndex, slowWhy, sourceLabel, sourceNote, timeSplit, toMs, ttftTone, tzLabel,
   type ReqDay, type ReqFilter, type ReqPlatform, type ReqRow, type Tone,
@@ -95,7 +95,8 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
   const all = useMemo(() => rowsForDay(payload?.requests ?? [], day === "today" ? keys.today : keys.yest),
     [payload, day, keys.today, keys.yest]);
   const list = useMemo(() => filterPlatform(all, f), [all, f]);
-  const m = useMemo(() => topMetrics(all), [all]);
+  // 右上角跟着左边的筛选走（用户 2026-10-22）：选哪家就是哪家今天的数，「全部」= 今天所有请求
+  const m = useMemo(() => dayMetrics(list), [list]);
   // 右侧「今天总计」：选了一家 ⇒ 这一家；「全部」⇒ 各家一行（不跨 AI 合计）
   const sums = useMemo(() => (f === "all" ? PLATFORM_ORDER : [f]).map((p) => ({ p, s: daySummary(filterPlatform(all, p)) }))
     .filter((x) => f !== "all" || x.s.n > 0), [all, f]);
@@ -177,7 +178,6 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
             占位留在第一行，指标会掉到第二行的**左边**；`auto` 外边距在哪一行都把它推到右边。 */}
         <div data-req-kpis style={{ display: "flex", gap: 22, alignItems: "baseline", marginLeft: "auto" }}>
           {kpi(day === "today" ? "今天" : "昨天", m.n ? String(m.n) : DASH, "次")}
-          {/* 均速 / 首字两家以上有实测时写 —：四家口径不同，不跨 AI（各家的数在右侧「今天总计」） */}
           {kpi("均速", fmtTps(m.avgTps), "t/s")}
           {kpi("首字中位", m.ttftMedianS == null ? DASH : m.ttftMedianS.toFixed(1), "s")}
         </div>

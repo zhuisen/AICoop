@@ -1,9 +1,9 @@
-"""「请求」页右侧「今天总计」与顶栏 KPI 不跨 AI（用户 2026-10-22）。
+"""「请求」页右侧「今天总计」与右上角 KPI 跟着筛选走（用户 2026-10-22）。
 
 用户原话：「我选择 claude 右侧不只是只有单条请求的内容的，还有今天总请求的总结」。
-本仓铁律：四家的 t/s 口径不同，**任何界面都不出跨 AI 的合计速度**。所以：
-- 顶栏「均速 / 首字」只有一家有实测时才写数，两家以上写「—」（`topMetrics`）；
-- 右侧选了一家 ⇒ 那一家的总计；「全部」⇒ 各家一行，不合成一个数（`daySummary`）。
+同日又说右上角「同步左侧的按钮，如果选全部就全部信息展示，如果是 codex 就只有 codex」。所以：
+- 右上角 = 所选那一家（「全部」= 今天全部请求）的 次数 · 均速 · 首字中位（`dayMetrics(list)`）；
+- 右侧选了一家 ⇒ 那一家的总计；「全部」⇒ 各家一行（`daySummary`）。
 """
 import shutil
 import sys
@@ -18,18 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipIf(shutil.which("node") is None, "没有 node")
 class Logic(unittest.TestCase):
-    def test_top_speed_is_a_dash_when_two_ais_have_measurements(self):
-        got = _node("m.topMetrics([R({platform:'codex',tps:100,ttft_ms:1000}), R({platform:'claude',tps:20,ttft_ms:3000})])")
-        self.assertEqual(got["n"], 2)
-        self.assertIsNone(got["avgTps"], "★ 两家各有实测 ⇒ 不许合成一个均速")
-        self.assertIsNone(got["ttftMedianS"], "★ 首字中位同理")
-
-    def test_top_speed_is_that_ais_number_when_only_one_measured(self):
-        got = _node("m.topMetrics([R({platform:'codex',tps:100,ttft_ms:1000}), R({platform:'claude',tps:20,est:true})])")
-        self.assertEqual(got["n"], 2, "次数仍是全部")
-        self.assertEqual(got["avgTps"], 100, "只有 Codex 有实测 ⇒ 写 Codex 的数")
-        self.assertEqual(got["ttftMedianS"], 1.0)
-
     def test_summary_sums_tokens_and_keeps_unknown_apart_from_zero(self):
         got = _node("m.daySummary([R({input:1000,cached:800,output:50,tps:40}), R({input:500,cached:0,output:null,tps:60,est:true})])")
         self.assertEqual((got["n"], got["input"], got["cached"], got["output"]), (2, 1500, 800, 50))
@@ -67,6 +55,21 @@ class Rendered(unittest.TestCase):
         rows = pg.evaluate("() => [...document.querySelectorAll('[data-req-summary=all] [data-req-summary-row]')].map(e => e.dataset.reqSummaryRow)")
         self.assertGreaterEqual(len(rows), 2, f"夹具不到两家 —— 判不了：{rows}")
         self.assertEqual(len(rows), len(set(rows)))
+
+    KPIS = "() => [...document.querySelectorAll('[data-req-kpis] > *')].map(e => e.textContent.replace(/\\s+/g, ''))"
+
+    def test_header_follows_the_filter(self):
+        pg = self._page()
+        all_ = pg.evaluate(self.KPIS)
+        n_all = pg.evaluate("() => document.querySelectorAll('[data-req-row]').length")
+        self.assertTrue(all_[0].endswith(f"{n_all}次"), f"「全部」次数 ≠ 列表行数：{all_[0]} vs {n_all}")
+        self.assertNotIn("—", all_[1], "★ 选「全部」均速也要有数（用户：全部就全部信息展示）")
+        pg.click("[data-req-filter=claude]")
+        pg.wait_for_timeout(250)
+        cl = pg.evaluate(self.KPIS)
+        n_cl = pg.evaluate("() => document.querySelectorAll('[data-req-row]').length")
+        self.assertLess(n_cl, n_all, "夹具里 Claude 不少于全部 —— 判不了")
+        self.assertTrue(cl[0].endswith(f"{n_cl}次"), f"★ 选了 Claude 右上角次数仍是全部：{cl[0]} vs {n_cl}")
 
     def test_picking_claude_shows_claudes_day_summary(self):
         pg = self._page()

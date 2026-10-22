@@ -171,8 +171,8 @@ export function pyRound1(x: number): number {
 export interface DayMetrics { n: number; avgTps: number | null; ttftMedianS: number | null }
 
 /**
- * 右上三项指标。★ 按**整天**算，不跟筛选走（画板 `renderVals` 用的是 `all` 不是 `list`；
- * 截图 11 筛到 Claude 时右上仍是 64 次）。
+ * 右上三项指标。★ **跟着筛选走**（用户 2026-10-22「同步左侧的按钮，选全部就全部信息，选 Codex 就只有 Codex」；
+ * 原来照画板按整天、不跟筛选，选了一家右上仍是全部）。「全部」时均速 / 首字是四家实测行合在一起的中位数。
  * - 均速 = 有 t/s 的**实测**请求（`est=false`）的**中位数**；没有实测行 → null（界面写 `—`）。
  *   估值行照常显示自己的数字，但不进均速（用户 2026-10-22 定；估值分母含首字等待，是下限）。
  *   ★ 中位数不是算术平均（AICoop P3，阶段 6）：后端 `_day_stats.avg_tps` 一直是中位数（`traffic.md`：重尾分布下
@@ -279,17 +279,6 @@ export type Tone = "normal" | "muted" | "amber";
 export function ttftTone(ms: number | null): Tone {
   if (ms == null) return "muted";
   return ms > SLOW_TTFT_MS ? "amber" : "normal";
-}
-
-/**
- * 顶栏三项（不跟筛选走，画板口径）。★ 速度与首字**不跨 AI**（2026-10-22 Opus 评审：四家口径不同，混在一起取中位
- * 违反「任何界面不跨 AI 合计」）：只有一家有实测 ⇒ 就是那一家的；两家以上 ⇒ null（写 —，各家的数在右侧「今天总计」）。
- */
-export function topMetrics(rows: readonly ReqRow[]): DayMetrics {
-  const m = dayMetrics(rows);
-  const measured = PLATFORM_ORDER.filter((p) => rows.some((r) => r.platform === p && !r.est && r.tps != null));
-  if (measured.length <= 1) return measured.length ? { ...dayMetrics(rows.filter((r) => r.platform === measured[0])), n: m.n } : m;
-  return { n: m.n, avgTps: null, ttftMedianS: null };
 }
 
 /** 右侧「今天总计」（用户 2026-10-22：选了 Claude，右侧除了单条，还要今天总请求的总结）。只算一家，不跨 AI。 */
