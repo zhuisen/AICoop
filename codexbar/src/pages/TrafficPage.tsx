@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Theme, modelColor } from "../theme";
 import CacheChip from "../components/CacheChip";
+import PriceStack from "../components/tk/PriceStack";
+import { priceWarnings } from "../rates";
 import Toast from "../components/Toast";
 import { introEnabled } from "../hooks/useIntro";
 import type { Bucket, CacheMode, Coverage, PlatformPrefs, RangeState, TrafficData } from "../traffic";
@@ -107,6 +109,19 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
     return orderedKeys(rows.map((r) => r.key), prefs, (k) => by.get(k)?.total ?? 0).map((k) => by.get(k)!).filter(Boolean);
   }, [rows, prefs]);
   const labels = rows[0]?.labels ?? [];
+  // 价格待核：最近 30 天用过的模型（不随所选区间变 —— 换个区间警告就消失，会让人以为价格表好了）
+  const priceWarns = useMemo(() => {
+    if (!data) return [];
+    const from = addDays(today, -29);
+    const used: { model: string; platform: string }[] = [];
+    for (const [k, pl] of Object.entries(data.platforms)) {
+      for (const [d, b] of Object.entries(pl.days ?? {})) {
+        if (d < from) continue;
+        for (const [m, mb] of Object.entries(b.models ?? {})) if ((mb.total ?? 0) > 0) used.push({ model: m, platform: k });
+      }
+    }
+    return priceWarnings(used, today);
+  }, [data, today]);
   const days = diffDays(range.s, range.e);
   const gran = isToday ? null : effGran(st, days);
   const kpis = data ? buildKpis({ t, data, raw, rows, sel: soloOk ? [soloOk] : null, st, today, L, cacheMode, single: false }) : [];
@@ -177,6 +192,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
               style={{ fontSize: 12, color: p.label, fontFamily: MONO, cursor: "help" }}>ⓘ</span>
         {/* 缓存口径不是 full 时，数字会静默换成另一套口径 ⇒ 挂牌（偏离 R2-4）。 */}
         <CacheChip mode={cacheMode} />
+        <PriceStack t={t} items={priceWarns} />
         <span style={{ flex: 1 }} />
         <RefreshAgo t={t} generatedAt={data?.generated_at ?? null} L={L} busy={busy} onRefresh={onRefresh} />
         <RangeSeg t={t} st={st} today={today} L={L} onChange={setSt} onToast={showToast} />

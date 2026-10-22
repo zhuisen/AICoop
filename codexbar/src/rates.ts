@@ -202,6 +202,30 @@ export function isPriced(model: string): boolean {
   return model in RATES;
 }
 
+/** 价格表需要人核的一条（Token 消耗页的弱警告堆叠，用户 2026-10-22 #11「做个弱警告的悬浮堆叠的警告条就好了」）。 */
+export interface PriceWarn { key: string; model: string; kind: "promo" | "unpriced"; date?: string }
+
+/** 认不出模型名的占位：它们本来就只能走兜底价，不是价格表漏了。 */
+const NOT_A_MODEL = new Set(["", "unknown", "<synthetic>"]);
+
+/**
+ * 用到的模型里：① 牌价备注写着「YYYY-MM-DD 后翻倍」而那天已过（价格表过期，费用按旧价算低了）；
+ * ② 没有牌价、走了同平台兜底价。`today` = 本地日期 `YYYY-MM-DD`。只看用过的模型 —— 没人用的旧价不打扰。
+ */
+export function priceWarnings(used: readonly { model: string; platform: string }[], today: string): PriceWarn[] {
+  const out: PriceWarn[] = [];
+  const seen = new Set<string>();
+  for (const u of used) {
+    if (seen.has(u.model) || NOT_A_MODEL.has(u.model)) continue;
+    seen.add(u.model);
+    const r = RATES[u.model];
+    if (!r) { out.push({ key: `unpriced:${u.model}`, model: u.model, kind: "unpriced" }); continue; }
+    const m = /(\d{4}-\d{2}-\d{2}) ?后翻倍/.exec(r.note ?? "");
+    if (m && m[1] < today) out.push({ key: `promo:${u.model}`, model: u.model, kind: "promo", date: m[1] });
+  }
+  return out.sort((x, y) => (x.kind === y.kind ? (x.model < y.model ? -1 : 1) : x.kind === "promo" ? -1 : 1));
+}
+
 export interface TokenClasses {
   uncached_in: number;
   cache_read: number;
