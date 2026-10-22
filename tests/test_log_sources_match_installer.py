@@ -94,8 +94,8 @@ class TheLogSourcesTrackTheInstaller(unittest.TestCase):
                     "★ LOG_SOURCES 里的 `{}` 不是安装脚本会装的任务 —— 退役残留".format(name))
 
     def test_the_retired_pair_is_actually_gone(self):
-        """★ 点名守这次的两具尸体：它们**同时**从脚本和清单里消失才算修好。"""
-        for dead in ("keepalive", "refreshquota"):
+        """★ 点名守这次的尸体：它**同时**从脚本和清单里消失才算修好。（keepalive 2026-10-22 恢复，不再在这里。）"""
+        for dead in ("refreshquota",):
             with self.subTest(job=dead):
                 self.assertNotIn(dead, self.jobs)
                 self.assertNotIn(dead, self.srcs)

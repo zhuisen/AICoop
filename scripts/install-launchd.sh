@@ -147,14 +147,19 @@ emit autosync \
   <key>WatchPaths</key><array><string>$HOME/.codex/auth.json</string></array>" \
     "$ROT" sync || FAILED="$FAILED autosync"
 
-# ★★ keepalive(04:30) 与 refreshquota(07:00) 已于 2026-08-29 按用户要求**取消**，不再生成。
-#    · refreshquota 是真冗余 —— quotad 每 300s 已经全池扫一遍（`tick_usage` → `refresh-all`）。
-#    · keepalive 的职责由 proxy 接手：`_slot_token` 挑到 token 过期的**非活跃**号时会当场
-#      OAuth 续期（双重锁保护）。
-#    ⚠️ **但覆盖面不同**：proxy 只续它**挑得中**的号。一个长期不被挑中的号，token 到期后
-#      **不会自愈** —— 2026-08-29 的 plus5 就是这样断的（11 天没续、access 过期 18.5h、
-#      额度扫描每 300s 静默失败）。补救是手动 `codex-rotate refresh <label>`（非活跃号安全）。
-#    ★ CLI 的 `keepalive` / `refresh-all` 子命令**都还在**，随时可手动跑；取消的只是定时器。
+# ★★ refreshquota(07:00) 2026-08-29 取消后不再生成：quotad 已经定时全池扫（`tick_usage` → `refresh-all`），是真冗余。
+# ★★ keepalive 2026-08-29 取消、**2026-10-22 按用户要求恢复**（「#5 也去处理」）。取消时把续期交给 proxy 的
+#    `_slot_token`，但它只续**挑得中**的号：长期不被挑中的号（停了轮换的、排在后面的）token 到期后**不会自愈**
+#    （2026-08-29 一个 Plus 号就这样断了 11 天，额度扫描每 300s 静默失败）。
+#    · 形态：**每小时拉起一次**，`--idle-window` 让它只在本机 22:00–08:00 干活（白天一拉起就退出，不读 state、不联网）。
+#      ★ 不用 `StartCalendarInterval` 写死 04:30：这个任务上次就是被本脚本以外的东西改写 plist、丢掉日历键、
+#      `runs = 0` 一次没跑过；按小时拉 + 命令自己判，丢一次也只是晚一小时（同 dawnprobe 的形态）。
+#    · 动的凭证：只刷**非活跃**号里 access token 48h 内到期的（`_refresh_slot`，持 `.refresh.lock`，refresh_token 一次性轮换）；
+#      活跃号**永不刷**（codex 自己的刷新器持有它）；已判死的号跳过。刷完按 07-16 选项② 检查 `~/.codex/auth.json` 那个号
+#      还活着没有，死了 / 快过期且 codex 没在跑才换一个健康号进去（`_ensure_live_healthy`）。
+emit keepalive \
+    '  <key>StartInterval</key><integer>3600</integer>' \
+    "$ROT" keepalive 48 --idle-window || FAILED="$FAILED keepalive"
 
 emit quotad \
     '  <key>RunAtLoad</key><true/>
@@ -208,7 +213,7 @@ emit otel \
 
 echo
 echo "==> loaded:"
-for n in autosync quotad proxy dawnprobe agydawn otel; do
+for n in autosync keepalive quotad proxy dawnprobe agydawn otel; do
     printf '  %-13s %s\n' "$n" \
         "$(launchctl print "gui/$UID_NUM/$PREFIX.$n" 2>/dev/null | awk '/^\tstate = /&&!f{print $3; f=1}' || echo '?')"
 done

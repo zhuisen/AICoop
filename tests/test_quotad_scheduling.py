@@ -62,10 +62,55 @@ class DueHandlesAClockThatMovedBackwards(unittest.TestCase):
         self.assertNotIn(">= USAGE_SECS", body)
         self.assertNotIn(">= TICK_SECS", body)
         self.assertNotIn(">= MIN_GAP_SECS", body)
-        for name in ("last_usage, USAGE_SECS", "last_tick, TICK_SECS",
+        for name in ("last_usage, _sweep_period(now)", "last_tick, TICK_SECS",
                      "last_event_refresh, MIN_GAP_SECS"):
             with self.subTest(deadline=name):
                 self.assertIn("_due(now, %s)" % name, body)
+
+
+class TheNightlySweepSlowsDown(unittest.TestCase):
+    """用户 2026-10-22：新加坡时间 22:00–08:00 是空闲时间 ⇒ 全池兜底扫描 300s → 1800s。
+    按本机本地时间判（本机系统时区 = 新加坡；仓库公开，写死新加坡会让别的时区的人白天变慢）。"""
+
+    def setUp(self):
+        import os, time
+        self._tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Asia/Singapore"; time.tzset()
+
+    def tearDown(self):
+        import os, time
+        if self._tz is None: os.environ.pop("TZ", None)
+        else: os.environ["TZ"] = self._tz
+        time.tzset()
+
+    @staticmethod
+    def at(h, m=0, tz="Asia/Singapore"):
+        import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.datetime(2026, 10, 22, h, m, tzinfo=ZoneInfo(tz)).timestamp()
+
+    def test_boundaries(self):
+        cases = {(21, 59): False, (22, 0): True, (23, 30): True, (0, 0): True, (7, 59): True, (8, 0): False, (12, 0): False}
+        for (h, m), want in cases.items():
+            with self.subTest(at="%02d:%02d" % (h, m)):
+                self.assertIs(QD._in_idle(self.at(h, m)), want)
+                self.assertEqual(QD._sweep_period(self.at(h, m)), QD.USAGE_SECS_IDLE if want else QD.USAGE_SECS)
+
+    def test_window_follows_the_local_clock(self):
+        import os, time
+        os.environ["TZ"] = "America/New_York"; time.tzset()
+        self.assertTrue(QD._in_idle(self.at(23, tz="America/New_York")), "纽约本地 23 点是空闲")
+        self.assertFalse(QD._in_idle(self.at(23, tz="Asia/Singapore")), "新加坡 23 点 = 纽约 11 点，不空闲")
+
+    def test_unknown_timezone_keeps_the_normal_cadence(self):
+        self.assertFalse(QD._in_idle(self.at(23), tz="No/Such_Zone"), "读不到时区 ⇒ 不放慢")
+
+    def test_only_the_backstop_slows_reset_and_activity_paths_do_not(self):
+        src = (ROOT / "daemon" / "quota_daemon.py").read_text(encoding="utf-8")
+        body = "\n".join(l for l in src[src.index("def main("):].splitlines() if not l.lstrip().startswith("#"))
+        self.assertIn("_due(now, last_reset_sweep, RESET_SWEEP_MIN_GAP)", body)
+        self.assertIn("_due(now, last_event_refresh, MIN_GAP_SECS)", body)
+        self.assertEqual(body.count("_sweep_period("), 1)
 
 
 class ResetCrossedTriggersAnImmediateSweep(unittest.TestCase):

@@ -1867,6 +1867,8 @@ const LOG_SOURCES: &[(&str, &str)] = &[
     ("proxy", "proxy/proxy.log"),
     ("quotad", "quotad.log"),
     ("autosync", "autosync.log"),
+    // 2026-10-22 恢复：每小时拉起、只在本机 22–08 干活；白天那几次一拉起就退出、不写一行。
+    ("keepalive", "keepalive.log"),
     ("dawnprobe", "dawnprobe.log"),
     ("agydawn", "agydawn.log"),
     // Claude Code OTel 接收端（2026-10-19 起正式服务）。平时只有启动那一行；端口被占时原因在这里。

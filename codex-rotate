@@ -60,6 +60,27 @@ OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REFRESH_LOCK = STORE / ".refresh.lock"   # cross-process: ALL credential movement (refresh + slot↔live copies)
 STATE_LOCK = STORE / ".state.lock"       # cross-process state.json RMW mutex (shared with the proxy)
 IDENT_FIELDS = ("email", "name", "plan", "sub_until", "sub_checked")
+# ★ 用户的空闲时段（2026-10-22「按照新加坡时间晚上 22 点~8 点，是我的空闲时间」）。quotad 放慢兜底扫描、
+#   定时 keepalive 只在这段里跑，两处共用这一份。
+#   ★ 按**本机本地时间**判，不写死 Asia/Singapore：仓库是公开的，`.dmg` 用户在别的时区，写死新加坡会让他们白天变慢。
+#     本机系统时区就是新加坡，效果与「新加坡时间 22–08」相同；`IDLE_TZ` 只给测试与将来要钉时区时用。
+IDLE_TZ = None
+IDLE_HOURS = (22, 8)      # [22:00, 08:00)
+
+
+def _in_idle(now=None, tz=IDLE_TZ, hours=IDLE_HOURS):
+    """`now`（epoch 秒）落在空闲时段里吗。`tz=None` = 本机本地时间。时区名认不出 ⇒ False：quotad 照常节拍、keepalive 不跑。"""
+    t = time.time() if now is None else now
+    try:
+        if tz is None:
+            h = datetime.datetime.fromtimestamp(t).hour
+        else:
+            from zoneinfo import ZoneInfo
+            h = datetime.datetime.fromtimestamp(t, ZoneInfo(tz)).hour
+    except Exception:
+        return False
+    start, end = hours
+    return (h >= start or h < end) if start > end else (start <= h < end)
 
 
 def _load_json(p):
@@ -1522,6 +1543,9 @@ def cmd_keepalive(args):
     token). `--dry-run` lists targets only. Was: last_refresh>4d — but B9 skip-if-valid froze
     last_refresh while tokens stayed healthy, so that gate never fired."""
     dry = "--dry-run" in args
+    # ★ `--idle-window`（launchd 每小时拉起时带它，2026-10-22）：不在用户空闲时段就什么都不做、不读 state、不联网。
+    if "--idle-window" in args and not _in_idle():
+        return
     pos = [a for a in args if not a.startswith("--")]
     thresh_h = float(pos[0]) if pos else 48.0
     s = _state()
@@ -1531,6 +1555,10 @@ def cmd_keepalive(args):
         label = slot.get("label", _mask(aid))
         if aid == active:
             skipped.append(f"{label}:active")
+            continue
+        # 服务端已判死的号（refresh_token 作废 / 被 revoke）刷了也是 invalid_grant；每小时撞一次 OAuth 只是噪声。要重登。
+        if slot.get("auth_dead"):
+            skipped.append(f"{label}:dead")
             continue
         left = _slot_access_left_h(slot)
         if dry:

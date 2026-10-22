@@ -48,6 +48,11 @@ DEBOUNCE_SECS = 3   # let a burst of turns settle into one refresh
 MIN_GAP_SECS = 20   # floor between activity-driven API reads (endpoint rate-limits bursts)
 TICK_SECS = 15      # rollout tail (local file read)
 USAGE_SECS = 300    # full-pool sweep
+# ★ 用户 2026-10-22「按照新加坡时间晚上 22 点~8 点，是我的空闲时间」：这段时间固定节拍放慢到 30 分钟。
+#   只放慢**兜底节拍**：活动驱动刷新（真有人用 codex）与「窗口跨过重置点立即扫」照常 —— 那两条是有事才发。
+#   7 个号：300s 一扫 = 每夜 10h × 12 × 7 ≈ 840 次 GET /usage → 1800s 一扫 ≈ 140 次（按代码节拍推算，非实测计数；
+#   常规扫描不写日志）。按本机本地时间判（本机就是新加坡时区），判定在 `codex-rotate::_in_idle`。
+USAGE_SECS_IDLE = 1800
 RESCAN_SECS = 60    # how often to re-find the newest rollout file
 
 # /usage sits behind an INTERMITTENT Cloudflare bot challenge: a 403 says nothing about the account or
@@ -62,6 +67,15 @@ CLOCK_BACK_TOL_SECS = 300
 RESET_SWEEP_MIN_GAP = 60
 
 HISTORY = Path.home() / ".codex/history.jsonl"
+
+
+# 空闲时段的判定只有一份，在 codex-rotate（定时 keepalive 也用它）。
+IDLE_TZ, IDLE_HOURS, _in_idle = cli.IDLE_TZ, cli.IDLE_HOURS, cli._in_idle
+
+
+def _sweep_period(now):
+    """全池兜底扫描的节拍：空闲时段 `USAGE_SECS_IDLE`，其余 `USAGE_SECS`。"""
+    return USAGE_SECS_IDLE if _in_idle(now) else USAGE_SECS
 
 
 def _due(now, last, period):
@@ -261,7 +275,8 @@ def tick_usage():
 
 def main():
     log(f"started · activity={WATCH_SECS}s(debounce {DEBOUNCE_SECS}s, gap {MIN_GAP_SECS}s) · "
-        f"rollout={TICK_SECS}s · sweep={USAGE_SECS}s (all GET, zero quota)")
+        f"rollout={TICK_SECS}s · sweep={USAGE_SECS}s, {USAGE_SECS_IDLE}s in {IDLE_HOURS[0]:02d}–{IDLE_HOURS[1]:02d} "
+        f"{IDLE_TZ or 'local'} (all GET, zero quota)")
 
     watch = ActivityWatch()
     last_usage = last_tick = last_event_refresh = last_reset_sweep = 0.0
@@ -318,7 +333,7 @@ def main():
         # 那一刻旧读数已经作废,而它偏偏是显示"未知"最久的一段(最坏 300s)。
         reset_due = (_due(now, last_reset_sweep, RESET_SWEEP_MIN_GAP)
                      and _reset_crossed(state, now, reset_served))
-        if _due(now, last_usage, USAGE_SECS) or reset_due:
+        if _due(now, last_usage, _sweep_period(now)) or reset_due:
             if reset_due:
                 last_reset_sweep = now
                 log("window reset crossed → sweep now (not waiting for the 300s tick)")

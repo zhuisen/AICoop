@@ -80,7 +80,7 @@ ENTRIES = {
 STEP_WRAPPER = "wrapper"
 
 #: `install-launchd.sh` 装的全部常驻服务（闸从安装器现解析核对，别只改一边）。
-SERVICES = ["autosync", "quotad", "proxy", "dawnprobe", "agydawn", "otel"]
+SERVICES = ["autosync", "keepalive", "quotad", "proxy", "dawnprobe", "agydawn", "otel"]
 
 
 # ── 小工具 ────────────────────────────────────────────────────────────────────

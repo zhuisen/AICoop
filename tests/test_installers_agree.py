@@ -24,7 +24,7 @@ PS1 = ROOT / "scripts" / "install-windows.ps1"
 #:   所以从那天起新加的服务只进 `install-launchd.sh`。名单只放那之后新加的服务；
 #:   名单外的服务两边仍必须一致（下面 `test_same_service_set` 照旧守着）。
 #:   ⚠️ 别把已有的服务挪进来让闸变绿 —— 那等于静默删掉 Windows 上的一个常驻进程。
-MACOS_ONLY = {"otel"}
+MACOS_ONLY = {"otel", "keepalive"}
 
 
 class InstallersDefineTheSameServices(unittest.TestCase):
