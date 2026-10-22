@@ -28,7 +28,7 @@ export default function ExpiryStack({ items }: { items: ExpiryWarn[] }) {
   if (items.length === 0) return null;
   const now = Date.now();
   return (
-    <span className="ov-xs" tabIndex={0} data-ov-expiry={items.length} data-layers={Math.min(items.length, 3)}
+    <span className="ov-xs" data-level="weak" tabIndex={0} data-ov-expiry={items.length} data-layers={Math.min(items.length, 3)}
           title={items.map((w) => `${w.node} · ${text(w)}${w.date ? `（${w.date}）` : ""}`).join("\n")}>
       <span className="ov-xs-chip"><Warn />{items.length} 项快到期</span>
       <span className="ov-xs-pop" role="tooltip">

@@ -207,6 +207,17 @@
   transform: translateY(calc(var(--i) * -36px + var(--i) * 4px)) scale(calc(1 - var(--i) * .05));
   transition: transform 340ms var(--sp) calc(var(--i) * 35ms); }
 .ov-xs-it > svg { color: var(--xsTx, var(--ovWarnTx)); }
+/* ★ 悬浮堆叠两档颜色（用户 2026-10-22「弱警告黄色、强警告红色，都带透明度」）：底色 = 本色 14% 混进面板色、再留 8% 透明
+   + 背景模糊；描边是本色半透明。同一组数在 `tpsHover.css` 的空闲面板告警里（强），闸 `test_warn_tones.py` 核两边一致。 */
+.ov-xs[data-level="weak"] { --xsTx: #FACC15; --xsLine: rgba(250,204,21,.42);
+  --xsBg: color-mix(in srgb, color-mix(in srgb, #FACC15 14%, #161c25) 92%, transparent); }
+.ov-xs[data-level="strong"] { --xsTx: #FF8A73; --xsLine: rgba(255,77,46,.45);
+  --xsBg: color-mix(in srgb, color-mix(in srgb, #FF4D2E 16%, #161c25) 92%, transparent); }
+.cb-light .ov-xs[data-level="weak"] { --xsTx: #854d0e; --xsLine: rgba(202,138,4,.45);
+  --xsBg: color-mix(in srgb, color-mix(in srgb, #EAB308 16%, #ffffff) 92%, transparent); }
+.cb-light .ov-xs[data-level="strong"] { --xsTx: #b42318; --xsLine: rgba(220,38,38,.4);
+  --xsBg: color-mix(in srgb, color-mix(in srgb, #FF4D2E 12%, #ffffff) 92%, transparent); }
+.ov-xs[data-level] .ov-xs-it, .ov-xs[data-level] .ov-xs-chip { -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .ov-xs-it > b { font-weight: 600; }
 .ov-xs-tx { color: var(--xsTx, var(--ovWarnTx)); }
 .ov-xs-dt { margin-left: auto; padding-left: 6px; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; color: var(--tx3); }

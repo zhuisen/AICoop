@@ -35,17 +35,17 @@ export function cacheNotes(mode: CacheMode): StackNote[] {
  * 混了别的就写「N 项提示」。
  *
  * 原注：Token 消耗页「价格待核」弱警告（用户 2026-10-22 #11「做个弱警告的悬浮堆叠的警告条就好了」）。
- * 与总览「N 项快到期」同一套堆叠（`.ov-xs*`），换成中性色：它说的是「费用这个估算可能不准」，不是要动手的事。
+ * 与总览「N 项快到期」同一套堆叠（`.ov-xs*`），弱警告档（黄）：它说的是「费用这个估算可能不准」，不是要动手的事。
  * 判据在 `rates.ts::priceWarnings`。
  */
 export default function PriceStack({ t, items, extra = [] }: { t: Theme; items: PriceWarn[]; extra?: StackNote[] }) {
   const rows: StackNote[] = [...extra, ...items.map((w) => ({ key: w.key, head: w.model, text: text(w) }))];
   if (rows.length === 0) return null;
   const p = tkPal(t);
-  const vars = { "--xsTx": p.label, "--xsLine": p.border, "--xsBg": p.tipBg, "--xsShadow": "none",
-                 "--tx": p.text, "--tx3": p.label, "--sp": SPRING } as CSSProperties;
+  // 底色 / 描边 / 字色走 `.ov-xs[data-level="weak"]`（黄、带透明度，用户 2026-10-22）
+  const vars = { "--xsShadow": "none", "--tx": p.text, "--tx3": p.label, "--sp": SPRING } as CSSProperties;
   return (
-    <span className="ov-xs" tabIndex={0} data-price-warn={items.length} data-warn-n={rows.length} data-layers={Math.min(rows.length, 3)} style={vars}
+    <span className="ov-xs" data-level="weak" tabIndex={0} data-price-warn={items.length} data-warn-n={rows.length} data-layers={Math.min(rows.length, 3)} style={vars}
           title={rows.map((w) => `${w.head} · ${w.full ?? w.text}`).join("\n")}>
       <span className="ov-xs-chip"><Info />{rows.length} 项{extra.length ? "提示" : "价格待核"}</span>
       <span className="ov-xs-pop" role="tooltip">

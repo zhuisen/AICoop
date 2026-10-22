@@ -74,7 +74,8 @@ class TheTokenPageShowsIt(unittest.TestCase):
         self.assertIsNotNone(m, "价格待核堆叠的结构变了（找不到 data-price-warn + style）")
         self.assertGreaterEqual(int(m.group(1)), 1)
         self.assertIn("项价格待核", h)
-        self.assertNotRegex(m.group(2).lower(), r"--xstx:\s*(#f5b544|#8a5a0e|#9a6512)", "弱警告不能染琥珀")
+        # 2026-10-22 用户改口：弱警告 = 黄、带透明度（颜色走 `.ov-xs[data-level="weak"]`，闸在 test_warn_tones.py）
+        self.assertIn('data-level="weak"', h[max(0, m.start() - 10):m.end()], "价格待核是弱警告档")
 
 
 if __name__ == "__main__":
