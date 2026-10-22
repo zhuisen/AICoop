@@ -1414,6 +1414,12 @@ pub mod draw {
 
 #[cfg(test)]
 mod tests {
+    /// 在跑悬停面板飞回胶囊的 logo 按前端 `PILL_LOGO` 画；与这里的 `LOGO` 不一致 ⇒ 落地那一帧跳大小（用户 2026-10-22「折叠那一下卡顿」）。
+    #[test]
+    fn the_hover_panel_flies_logos_at_the_pill_size() {
+        let ts = include_str!("../../src/tpsHoverLogic.ts");
+        assert!(ts.contains(&format!("export const PILL_LOGO = {};", super::LOGO as i64)), "tpsHoverLogic.ts PILL_LOGO ≠ tray_pill::LOGO");
+    }
     use super::*;
     /// JetBrains Mono 步进 0.6 em：11.5 pt 实测 6.9 ⇒ 12.5 pt 7.5。
     const CW: f64 = 9.0;   // JetBrains Mono 15 的步进 ≈ 0.6 em

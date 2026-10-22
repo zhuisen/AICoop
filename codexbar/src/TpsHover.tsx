@@ -177,7 +177,10 @@ export default function TpsHover() {
     goRef.current = go;
     setFlying(start);
     invoke("tray_pill_hide_logos", { hidden: true }).catch(noop);
-    later(() => { invoke("tray_pill_hide_logos", { hidden: false }).catch(noop); setFlying([]); }, L.restoreLogosAt(start.length));
+    // 交接 = 先让托盘画回 logo，覆盖层留到 Rust 藏窗之后再清：两者同位同尺寸，重叠看不出，
+    // 而「覆盖层先没、托盘晚一拍才画回」那一下是空的（托盘重画要过 IPC + 主线程）
+    later(() => { invoke("tray_pill_hide_logos", { hidden: false }).catch(noop); }, L.restoreLogosAt(start.length));
+    later(() => setFlying([]), L.RUST_HIDE_MS + 40);
   }, []);
 
   // 两拍起飞：第一拍放在起点（无过渡）并强制算一次样式，第二拍给终点 + 过渡
@@ -337,7 +340,8 @@ export default function TpsHover() {
           );
         })}
         <div className="hv-foot" data-hover-foot style={{ opacity: isOpen ? 1 : 0, transition: footT }}>
-          <span>今日 <b>{live ? fmtTokens(live.today.tokens) : "—"}</b> · 均 <b>{L.fmtAvg(live?.today.avg_tps)}</b> t/s</span>
+          {/* 「均」不跨 AI（2026-10-22）：两家以上今天有实测时后端给 null，这里整段不画 */}
+          <span>今日 <b>{live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{L.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
           <a href="#" className="hv-link" data-hover-link onClick={openLink}>请求页 →</a>
         </div>
       </div>

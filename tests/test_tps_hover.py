@@ -86,7 +86,7 @@ class Flights(unittest.TestCase):
         got = node("m.planFlights(%s, ['codex','claude','agy','grok'], [41,80,119,158])" % self.LAY)
         self.assertEqual([f["key"] for f in got], ["codex", "claude", "grok"], "胶囊里没有的那家不飞")
         self.assertEqual(got[0]["pill"], {"x": 234, "y": 6, "s": 1})
-        self.assertEqual(got[2]["row"], {"x": 77, "y": 188, "s": 1.5}, "落点 = 面板 + (37, 那一行的 logoY)，12→18")
+        self.assertEqual(got[2]["row"], {"x": 77, "y": 188, "s": 1}, "落点 = 面板 + (37, 那一行的 logoY)；胶囊 logo 与行内同为 18 ⇒ 不缩放")
         self.assertEqual([f["delayIn"] for f in got], [0, 35, 70], "相邻错开 35 ms（按飞行者计，不留空档）")
         self.assertEqual([f["delayBack"] for f in got], [110, 85, 60], "飞回：右边先走，60 + 25·k")
 

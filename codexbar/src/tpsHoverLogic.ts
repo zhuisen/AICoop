@@ -33,7 +33,9 @@ export const DIVIDER_H = 1;
 /** 底栏 36 + 上描边 1。 */
 export const FOOT_H = 37;
 export const LOGO = 18;
-export const PILL_LOGO = 12;
+// ★ 必须等于托盘胶囊画 logo 的尺寸 `tray_pill.rs::LOGO`（闸在那边的 Rust 测试）。胶囊 logo 10-22 从 12 放大到 18、
+//   这里没跟 ⇒ 飞回胶囊落地那一帧 12 px 换成托盘的 18 px、还偏 6 px —— 用户报的「鼠标移开、折叠那一下卡顿」。
+export const PILL_LOGO = 18;
 /** logo 在面板里的 x：描边 1 + 左内边距 14 + 箭头列 14 + 列间距 8（原型 `rowLogoX`）。 */
 export const LOGO_X = BORDER + 14 + 14 + 8;
 /** 没有一行是多会话时不留箭头列（用户 2026-10-19「左边这里有点空旷」）：logo 与底栏「今日」左对齐 = 描边 1 + 内边距 14。 */
@@ -120,7 +122,7 @@ export function parseLayout(raw: unknown): HoverLayout | null {
 export interface Pt { x: number; y: number; s: number }
 export interface FlightPlan { key: string; pill: Pt; row: Pt; delayIn: number; delayBack: number }
 
-/** 第 i 行的 logo 在窗口里的落点（缩放 12→18 = 1.5，变换原点左上）。 */
+/** 第 i 行的 logo 在窗口里的落点（缩放 `LOGO / PILL_LOGO`，变换原点左上）。 */
 export function rowLogoPoint(layout: HoverLayout, logoY: number, chev = true): Pt {
   return { x: layout.panel.x + (chev ? LOGO_X : LOGO_X_NOCHEV), y: layout.panel.y + logoY, s: LOGO / PILL_LOGO };
 }
