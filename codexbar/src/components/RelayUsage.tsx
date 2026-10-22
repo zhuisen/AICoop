@@ -334,7 +334,7 @@ export default function RelayUsage({ t }: { t: Theme }): React.ReactElement {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12,
                     flexWrap: "wrap", rowGap: 7 }}>
         <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>用量</span>
-        {/* ★ 口径牌照 `CacheChip` 的先例：被它改变的数字就在下面，不挂牌子页面就会静默说谎。 */}
+        {/* ★ 口径牌照（原 `CacheChip`，2026-10-22 并进 `PriceStack` 的弱提示堆叠）的先例：被它改变的数字就在下面，不挂牌子页面就会静默说谎。 */}
         <span data-scope-chip style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 8px",
                        borderRadius: 6, whiteSpace: "nowrap", fontFamily: MONO,
                        border: "1px solid rgba(224,162,28,.5)", color: MONEY }}>

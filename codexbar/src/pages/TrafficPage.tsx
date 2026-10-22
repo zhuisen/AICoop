@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Theme, modelColor } from "../theme";
-import CacheChip from "../components/CacheChip";
-import PriceStack from "../components/tk/PriceStack";
+import PriceStack, { cacheNotes } from "../components/tk/PriceStack";
 import { priceWarnings } from "../rates";
 import Toast from "../components/Toast";
 import { introEnabled } from "../hooks/useIntro";
@@ -190,12 +189,11 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
         {/* 数据来源的披露常驻在这里（刷新按钮在首扫完成前不出现，评审）。 */}
         <span data-src title="汇总各 CLI 写在本机的 transcript · 不消耗额度"
               style={{ fontSize: 12, color: p.label, fontFamily: MONO, cursor: "help" }}>ⓘ</span>
-        {/* 缓存口径不是 full 时，数字会静默换成另一套口径 ⇒ 挂牌（偏离 R2-4）。 */}
-        <CacheChip mode={cacheMode} />
         {/* ★ 平台胶囊并进标题行（用户 2026-10-22「全部 Claude Codex… 放在消耗的右侧」），省掉第二行 */}
         <PlatChips t={t} chips={list.map((r) => ({ key: r.key, name: r.name, color: r.color }))} sel={soloOk}
                    onPick={setSolo} withAll L={L} aria="按平台筛选" fit />
-        <PriceStack t={t} items={priceWarns} />
+        {/* 弱提示一律进这一个悬浮堆叠（用户 2026-10-22）：价格待核 + 缓存口径（原 CacheChip，口径不是 full 时数字会换一套口径） */}
+        <PriceStack t={t} items={priceWarns} extra={cacheNotes(cacheMode)} />
         <span data-range-label style={{ fontSize: 12, color: p.label, fontFamily: MONO, flexShrink: 0 }}>
           {rangeText(st, today, labels, gran && gran !== "day" ? granLabel(gran) : null)}
         </span>

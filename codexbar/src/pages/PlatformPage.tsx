@@ -1,13 +1,13 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { type Theme, modelColor } from "../theme";
-import { costOf, fmtUSD, priceOf, isPriced } from "../rates";
+import { costOf, fmtUSD, priceOf, isPriced, priceWarnings } from "../rates";
 import type { TrafficData, RangeState, CacheMode, Bucket, Platform, PlatformPrefs } from "../traffic";
 import Seg from "../components/Seg";
 import Toast from "../components/Toast";
 import { todayOf, resolveRange, diffDays, effGran, granLabel, md, prevSum, tickTitle, orderedKeys, noCacheCostOfBucket } from "../traffic";
 import { rangeLabel, bucketsFor, sumBuckets, costOfBucket, savingOfBucket, fmtTok,
          countsCacheRead, countedClasses, mixParts } from "../traffic";
-import CacheChip from "../components/CacheChip";
+import PriceStack, { cacheNotes } from "../components/tk/PriceStack";
 import { type Density, blendWritePrice, breakevenReads, fmtIntL, fmtPt, fmtTokL, fmtUsdL, hitRate, lowHit, modelLabel,
          nonNullRuns, titleSize } from "../tokenView";
 import TkArea, { type TkLayer } from "../components/tk/TkArea";
@@ -396,7 +396,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
     const parts = mixParts(sumBuckets(bucketsFor(raw, pk, st, today).buckets), cacheMode);
     return parts.length ? parts.map((x) => `${x.name} ${x.pct.toFixed(1)}%`).join(" · ") : null;
   }, [raw, pk, st, today, cacheMode]);
-  const anyEst = (v?.models ?? []).some((m) => !isPriced(m.m));
+  // 「标 * 的是估算价」原是表下常驻的琥珀脚注 ⇒ 并进标题行的弱提示堆叠（同「消耗」页的价格待核）
+  const priceWarns = useMemo(() => priceWarnings((v?.models ?? []).map((m) => ({ model: m.m, platform: pk })), today), [v, pk, today]);
   const hitCol = countsCacheRead(cacheMode);
   const cols = modelCols(L, hitCol);
   const dpt = fmtPt(cache?.dpt ?? null);
@@ -423,7 +424,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
         <span data-src title={`${SRC[pk] ?? ""}${SRC[pk] ? " · " : ""}读本地 transcript · 不消耗额度`}
               style={{ fontSize: 12, color: p.label, fontFamily: MONO, cursor: "help" }}>{me?.src ?? "ⓘ"}</span>
         <RouteSplit t={t} p={data?.platforms[pk]} labels={labels} rangeTxt={rangeTxt} />
-        <CacheChip mode={cacheMode} />
+        {/* 弱提示进悬浮堆叠（用户 2026-10-22）：缓存口径 + 这一家用到的模型里价格待核的（行尾 * 是同一件事） */}
+        <PriceStack t={t} items={priceWarns} extra={cacheNotes(cacheMode)} />
         <span style={{ flex: 1 }} />
         <RefreshAgo t={t} generatedAt={data?.generated_at ?? null} L={L} busy={busy} onRefresh={onRefresh} />
         <RangeSeg t={t} st={st} today={today} L={L} onChange={setSt} onToast={showToast} />
@@ -599,7 +601,6 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
           <span title="费用 = 各类 token 分别乘单价求和；牌价取自各家官网，费率表在 src/rates.ts">
             费用 = {countedClasses(cacheMode)} 类 token × 牌价（2026-09-29）· 等效 API 成本，订阅制下非实付
           </span>
-          {anyEst && <span style={{ color: p.amber }}>· 标 * 的是估算价，按同平台最接近的档位推的，不是准数</span>}
         </div>
       </div>
     </div>

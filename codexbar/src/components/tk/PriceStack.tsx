@@ -3,6 +3,7 @@ import { SPRING } from "../../tpsHoverLogic";
 import type { PriceWarn } from "../../rates";
 import { tkPal } from "./tkPal";
 import type { Theme } from "../../theme";
+import { cacheModeDesc, cacheModeLabel, type CacheMode } from "../../traffic";
 
 const Info = () => (
   <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
@@ -15,27 +16,45 @@ function text(w: PriceWarn): string {
   return w.kind === "promo" ? `优惠价 ${w.date?.slice(5)} 已到期，费用仍按旧价算` : "没有牌价，按同平台兜底价估";
 }
 
+/** 堆叠里的另一条弱提示（缓存口径、估算价……）：`head` 是等宽粗体的那一段。 */
+export interface StackNote { key: string; head: string; text: string; /** 悬停提示里的全文（条目一行放不下时） */ full?: string }
+
 /**
- * Token 消耗页「价格待核」弱警告（用户 2026-10-22 #11「做个弱警告的悬浮堆叠的警告条就好了」）。
+ * 缓存口径不是 full 时的那条（原 `CacheChip`）：不在数字旁边说一声，页面会把 34.2B 显示成 0.46B 而毫无提示。
+ * 口径名放在粗体那段，排除了什么放后半句；改口径在设置里。
+ */
+export function cacheNotes(mode: CacheMode): StackNote[] {
+  // 条目一行高 30、最宽 340 ⇒ 只写短句；口径的完整解释进悬停提示
+  return mode === "full" ? [] : [{ key: "cache", head: cacheModeLabel(mode), text: "数字按这个口径算 · 设置里改",
+                                   full: `${cacheModeDesc(mode)}（口径在「设置 › 缓存计入口径」里改）` }];
+}
+
+/**
+ * 「消耗」页 / 平台详情页的弱提示堆叠。原来只装「价格待核」；用户 2026-10-22「这些弱警告都改成悬浮折叠警告条」⇒
+ * 缓存口径牌（原 `CacheChip`）、「标 * 的是估算价」脚注也并进来（`extra`）。只有价格条目时标签仍是「N 项价格待核」，
+ * 混了别的就写「N 项提示」。
+ *
+ * 原注：Token 消耗页「价格待核」弱警告（用户 2026-10-22 #11「做个弱警告的悬浮堆叠的警告条就好了」）。
  * 与总览「N 项快到期」同一套堆叠（`.ov-xs*`），换成中性色：它说的是「费用这个估算可能不准」，不是要动手的事。
  * 判据在 `rates.ts::priceWarnings`。
  */
-export default function PriceStack({ t, items }: { t: Theme; items: PriceWarn[] }) {
-  if (items.length === 0) return null;
+export default function PriceStack({ t, items, extra = [] }: { t: Theme; items: PriceWarn[]; extra?: StackNote[] }) {
+  const rows: StackNote[] = [...extra, ...items.map((w) => ({ key: w.key, head: w.model, text: text(w) }))];
+  if (rows.length === 0) return null;
   const p = tkPal(t);
   const vars = { "--xsTx": p.label, "--xsLine": p.border, "--xsBg": p.tipBg, "--xsShadow": "none",
                  "--tx": p.text, "--tx3": p.label, "--sp": SPRING } as CSSProperties;
   return (
-    <span className="ov-xs" tabIndex={0} data-price-warn={items.length} data-layers={Math.min(items.length, 3)} style={vars}
-          title={items.map((w) => `${w.model} · ${text(w)}`).join("\n")}>
-      <span className="ov-xs-chip"><Info />{items.length} 项价格待核</span>
+    <span className="ov-xs" tabIndex={0} data-price-warn={items.length} data-warn-n={rows.length} data-layers={Math.min(rows.length, 3)} style={vars}
+          title={rows.map((w) => `${w.head} · ${w.full ?? w.text}`).join("\n")}>
+      <span className="ov-xs-chip"><Info />{rows.length} 项{extra.length ? "提示" : "价格待核"}</span>
       <span className="ov-xs-pop" role="tooltip">
-        {items.map((w, i) => (
-          <span key={w.key} className="ov-xs-it" data-price-warn-item={w.kind}
-                style={{ "--i": i, zIndex: items.length - i } as CSSProperties}>
+        {rows.map((w, i) => (
+          <span key={w.key} className="ov-xs-it" data-price-warn-item={w.key.split(":")[0]}
+                style={{ "--i": i, zIndex: rows.length - i } as CSSProperties}>
             <Info />
-            <b style={{ fontFamily: "'JetBrains Mono', monospace" }}>{w.model}</b>
-            <span className="ov-xs-tx">{text(w)}</span>
+            <b style={{ fontFamily: "'JetBrains Mono', monospace" }}>{w.head}</b>
+            <span className="ov-xs-tx">{w.text}</span>
           </span>
         ))}
       </span>
