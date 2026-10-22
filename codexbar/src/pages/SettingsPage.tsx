@@ -14,6 +14,7 @@ import logo from "../../src-tauri/icons/128x128@2x.png";
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import type { Theme } from "../theme";
 import { MultiSeg, SBtn, SegSlide, SGroup, Toggle, presetOpts } from "../components/settings/SetKit";
+import ShimText from "../components/ShimText";
 import CmdRules from "../components/settings/CmdRules";
 import { useWinDensity } from "./TrafficPage";
 import { titleSize } from "../tokenView";
@@ -839,11 +840,11 @@ function DiscoverPanel({ t, snap }: { t: Theme; snap: TrafficData | null }) {
         <span data-scan-status={busy ? "run" : warnN ? "warn" : sources ? "ok" : "none"}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap",
                        color: busy ? amber : warnN ? amber : sources ? (t.isDark ? "#5eead4" : "#0e7a6e") : t.muted }}>
-          <i style={{ width: 7, height: 7, borderRadius: 4, background: "currentColor", display: "block" }} />{status}
+          <i style={{ width: 7, height: 7, borderRadius: 4, background: "currentColor", display: "block" }} />{busy ? <ShimText text={status} lift={t.isDark} /> : <span>{status}</span>}
         </span>
         <SBtn t={t} onClick={() => { void run(); }} disabled={busy} attrs={{ "data-act": "discover" }}
               title="遍历本机候选目录,找还有哪些地方存着 AI token 用量。只读本地文件,不联网、不碰凭证">
-          {busy ? "扫描中…" : res ? "重新扫描" : "扫描"}
+          {busy ? <ShimText text="扫描中…" lift={t.isDark} /> : res ? "重新扫描" : "扫描"}
         </SBtn>
       </OneLineRow>
       {/* ★ 没东西可显示时整块 `display:none`（仍在 DOM 里，§5c）；分隔线只画在下一行上沿（settings.css）。 */}

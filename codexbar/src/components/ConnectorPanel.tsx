@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Theme } from "../theme";
+import ShimText from "./ShimText";
 
 /**
  * 账号池接入面板（Connector）。
@@ -217,7 +218,7 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
                                  padding: "9px 20px", borderRadius: 9, cursor: busy ? "default" : "pointer",
                                  color: t.accentText, background: t.accent,
                                  border: `1px solid ${t.accent}`, opacity: busy ? .6 : 1 }}>
-                    {running === "one" ? "接入中…" : "一键接入"}
+                    {running === "one" ? <ShimText text="接入中…" lift={false} /> : "一键接入"}
                   </span>
                   <div style={{ fontSize: 9.5, color: t.muted, marginTop: 4, textAlign: "center" }}>
                     {needCount} 项 · 可撤销
@@ -232,7 +233,7 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
                                  padding: "9px 14px", borderRadius: 9, cursor: busy ? "default" : "pointer",
                                  color: t.text2, background: "transparent",
                                  border: `1px solid ${t.divider}`, opacity: busy ? .6 : 1 }}>
-                    {running === "all" ? "接入中…" : "连 codex 一起接管"}
+                    {running === "all" ? <ShimText text="接入中…" lift={t.isDark} /> : "连 codex 一起接管"}
                   </span>
                   <div style={{ fontSize: 9.5, color: t.muted, marginTop: 4, textAlign: "center" }}>
                     {/* ★ 代价写在按钮底下，不藏进 title —— 只写进悬浮等于没写（本仓 §5d）。 */}
@@ -308,7 +309,7 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
                              background: chosen.length && !plan.blocked ? t.accent : "transparent",
                              border: `1px solid ${chosen.length && !plan.blocked ? t.accent : t.divider}`,
                              opacity: running === "advanced" ? .6 : 1 }}>
-                {running === "advanced" ? "接入中…" : chosen.length ? `接入（${chosen.length} 项）` : "没有要做的"}
+                {running === "advanced" ? <ShimText text="接入中…" lift={false} /> : chosen.length ? `接入（${chosen.length} 项）` : "没有要做的"}
               </span>
             </div>
           </div>
@@ -320,7 +321,7 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
                            color: confirmRemove ? "#E0524D" : t.muted,
                            border: `1px solid ${confirmRemove ? "#E0524D" : t.divider}`,
                            opacity: busy === "remove" ? .6 : 1 }}>
-              {busy === "remove" ? "撤销中…" : confirmRemove ? "再点一次确认撤销" : "撤销接入"}
+              {busy === "remove" ? <ShimText text="撤销中…" lift={t.isDark} /> : confirmRemove ? "再点一次确认撤销" : "撤销接入"}
             </span>
             {plan.ready && !plan.blocked && (
               <span style={{ fontSize: 10.5, color: "#27B26B" }}>✓ 这台机器已经接入轮换</span>

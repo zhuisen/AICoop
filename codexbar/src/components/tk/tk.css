@@ -20,7 +20,17 @@
 .tk-intro .tk-entc:nth-child(5) { animation-delay: .25s; }
 .tk-intro .tk-entc:nth-child(n+6) { animation-delay: .28s; }
 @media (prefers-reduced-motion: reduce) {
-  .tk-dir, .tk-intro .tk-entk, .tk-intro .tk-entc { animation: none !important; }
+  /* .tk-dir / .tk-intro：同名关键帧在文件末尾只剩淡入，不再整条关掉（阶段 7 评审） */
   /* 减弱动态效果：位移类过渡（浮层滑动、条宽、行高）一并关掉，只留瞬时切换（评审）。 */
   [data-token-page] *, [data-token-detail] *, [data-rot-page] * { transition: none !important; }
+}
+
+/* 减弱动态效果：同名关键帧的「只剩透明度」版本。★ 必须写在定义它的同一个文件末尾 ——
+   跨文件时 bundle 的 CSS 顺序不受控（共享块排在入口块之前），后定义的那份才生效。见 `reducedMotion.css`。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes tkUp { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes tkRA { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes tkRB { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes tkLA { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes tkLB { from { opacity: 0; } to { opacity: 1; } }
 }

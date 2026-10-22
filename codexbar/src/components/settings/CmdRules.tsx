@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Theme } from "../../theme";
 import { CMD_TABS, copyOf, type CmdTab } from "../../settingsCmds";
 
@@ -33,6 +33,17 @@ async function copyText(s: string): Promise<boolean> {
 export default function CmdRules({ t }: { t: Theme }): React.ReactElement {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<CmdTab["k"]>("entry");
+  // Auto Height 的替代（P99）：展开 / 切签时**正文**整块淡入 + 上移 4px，A/B 两套同样的关键帧交替才能重播（README §3.5）。
+  // 签条常驻不重播（评审 P7-codex-2）。高度本身一步到位 —— 同一份稿的性能规矩不许做高度类布局动画（PLAN 44）。
+  const [ab, setAb] = useState(false);
+  // Animated Tabs（P99「P9 指令与规则：选中块滑过去」）：量选中签的真实位置，同 `SetKit.SegSlide`。收起时量不到（display:none）⇒ 展开那一帧再量。
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState<{ x: number; w: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const b = tabsRef.current?.querySelector<HTMLElement>(`[data-cmd-tab="${tab}"]`);
+    setPill(b ? { x: b.offsetLeft, w: b.offsetWidth } : null);
+  }, [open, tab]);
   const [copied, setCopied] = useState<{ k: string; ok: boolean } | null>(null);
   const timer = useRef(0);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -47,7 +58,7 @@ export default function CmdRules({ t }: { t: Theme }): React.ReactElement {
   };
   return (
     <>
-      <div className="set-row" role="button" data-cmd-rules={open ? "open" : "closed"} onClick={() => setOpen((v) => !v)}
+      <div className="set-row" role="button" data-cmd-rules={open ? "open" : "closed"} onClick={() => { if (!open) setAb((v) => !v); setOpen((v) => !v); }}
            style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 44, padding: "7px 0", boxSizing: "border-box", cursor: "pointer" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -62,15 +73,17 @@ export default function CmdRules({ t }: { t: Theme }): React.ReactElement {
       <div className="set-sub" data-cmd-panel style={{ display: open ? "block" : "none", padding: "0 0 10px 18px" }}>
         <div style={{ padding: "10px 14px 12px", borderRadius: 10, background: t.isDark ? "#0e1319" : "#f6f8fb",
                       border: `1px solid ${t.cardBorder}`, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div role="tablist" style={{ display: "inline-flex", alignSelf: "flex-start", padding: 2, gap: 2, borderRadius: 8,
+          <div role="tablist" ref={tabsRef} style={{ position: "relative", display: "inline-flex", alignSelf: "flex-start", padding: 2, gap: 2, borderRadius: 8,
                                        background: t.cardBg, border: `1px solid ${t.cardBorder}` }}>
+            {pill && <i className="set-pill" data-cmd-pill style={{ transform: `translateX(${pill.x - 2}px)`, width: pill.w, background: t.accent }} />}
             {CMD_TABS.map((x) => (
-              <button key={x.k} type="button" role="tab" aria-selected={tab === x.k} data-cmd-tab={x.k} onClick={() => setTab(x.k)}
+              <button key={x.k} type="button" role="tab" aria-selected={tab === x.k} data-cmd-tab={x.k} onClick={() => { if (x.k !== tab) { setTab(x.k); setAb((v) => !v); } }}
                       className="set-seg-btn"
-                      style={{ height: 24, padding: "0 10px", borderRadius: 6, border: 0, fontSize: 12, fontFamily: "inherit", cursor: "pointer",
-                               background: tab === x.k ? t.accent : "transparent", color: tab === x.k ? t.accentText : t.text2 }}>{x.name}</button>
+                      style={{ position: "relative", height: 24, padding: "0 10px", borderRadius: 6, border: 0, fontSize: 12, fontFamily: "inherit", cursor: "pointer",
+                               background: "transparent", color: tab === x.k ? t.accentText : t.text2 }}>{x.name}</button>
             ))}
           </div>
+          <div className={ab ? "set-in-b" : "set-in-a"} data-cmd-body style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ fontSize: 12, color: t.muted }}>{cur.note}</div>
           <div style={{ display: "grid", gridTemplateColumns: "236px minmax(0,1fr) 22px", gap: "6px 14px", fontSize: 12.5, lineHeight: 1.6 }}>
             {cur.rows.map((r) => {
@@ -92,6 +105,7 @@ export default function CmdRules({ t }: { t: Theme }): React.ReactElement {
                 ),
               ];
             })}
+          </div>
           </div>
         </div>
       </div>

@@ -6,3 +6,9 @@
   /* ★ 只去掉过渡：卡片的纵向位置就在 transform 里，`transform: none` 会把每张卡都钉回顶上（评审 codex 阶段 5）。 */
   [data-relay-page] [data-route-hover] { transition: opacity .12s linear !important; }
 }
+
+/* 减弱动态效果：同名关键帧的「只剩透明度」版本。★ 必须写在定义它的同一个文件末尾 ——
+   跨文件时 bundle 的 CSS 顺序不受控（共享块排在入口块之前），后定义的那份才生效。见 `reducedMotion.css`。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes rlFlow { 0%, 100% { opacity: 1; } }
+}

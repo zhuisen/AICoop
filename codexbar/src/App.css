@@ -19,7 +19,13 @@ body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-se
 /* 主窗 Toast 堆（ToastStack.tsx，交接包 P5 §7）：入场只给 from，to 落到元素自己的堆叠位姿。 */
 @keyframes cbTIn { from { opacity:0; transform:translateY(14px) scale(.96); } }
 .cb-toast { animation: cbTIn .4s cubic-bezier(.34,1.3,.64,1); }
-@media (prefers-reduced-motion: reduce) { .cb-toast { animation: none; transition: opacity .2s !important; } }
+/* 减弱动态效果：cbToast / cbTIn 的同名淡入版在文件末尾；这里不再 `animation: none`（会把淡入也吞掉） */
+/* Shimmering Text（`components/ShimText.tsx`）：底层字不动，`::after` 叠一道只落在字形上的亮 / 暗带扫过。 */
+@keyframes cbShimText { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.cb-shim-text { position: relative; display: inline-block; }
+.cb-shim-text::after { content: attr(data-t); position: absolute; inset: 0; pointer-events: none; white-space: nowrap; color: transparent;
+  background: linear-gradient(100deg, transparent 38%, var(--shim) 50%, transparent 62%); background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; animation: cbShimText 1.6s linear infinite; }
 @keyframes cbShimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
 /* Expiring reset-card badge — verbatim from the design handoff §6. (The previous cbPulse was an
    opacity blink and had no callers; this is the amber halo the handoff specifies.) */
@@ -119,3 +125,17 @@ body { background: transparent; font-family: 'Space Grotesk', system-ui, sans-se
   .cb-nv-tip { animation-name: cbNvTipFade; animation-timing-function: ease-out; }
 }
 @keyframes cbNvTipFade { from { opacity: 0; transform: translate3d(0,-50%,0); } to { opacity: 1; transform: translate3d(0,-50%,0); } }
+
+/* 减弱动态效果：同名关键帧的「只剩透明度」版本。★ 必须写在定义它的同一个文件末尾 ——
+   跨文件时 bundle 的 CSS 顺序不受控（共享块排在入口块之前），后定义的那份才生效。见 `reducedMotion.css`。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes cbShimText { 0%, 100% { background-position: 0 0; } }
+  @keyframes cbSpin { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  @keyframes cbToast { from { opacity: 0; transform: translate(-50%, 0); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes cbTIn { from { opacity: 0; } }
+  @keyframes cbShimmer { 0%, 100% { opacity: 1; } }
+  @keyframes cbFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes cbSuccess { 0%, 100% { opacity: 1; } }
+  @keyframes cbWipe { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes cbNvTipIn { from { opacity: 0; transform: translate3d(0, -50%, 0); } to { opacity: 1; transform: translate3d(0, -50%, 0); } }
+}

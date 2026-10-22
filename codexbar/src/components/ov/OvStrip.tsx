@@ -8,7 +8,8 @@ const Chev = () => (
 
 /**
  * 已停用（或失效）的号：默认折叠成底部一条虚线框（数量 + 号名 + 说明），点开在**同一个网格**里展开
- * （420 ms 临界阻尼，交接包 page5「账号区」）。
+ * （P99 Accordion：展开 320 ms / 收起 240 ms，只动 transform / opacity，行高一步到位 —— 见 overview.css `.ov-fold`；
+ * 取代 page5 的 420 ms grid-rows 动画，PLAN 44）。
  * ★ 折叠用 CSS（`grid-template-rows: 0fr→1fr` + `visibility`），不是条件渲染 —— 内容一直在 DOM 里，
  *   展开不会重挂卡片（ui.md「收起用 visibility」）。收起态加 `inert`：看不见的按钮也不能被 Tab 到。
  */
@@ -17,7 +18,8 @@ export function OvStrip({ kind, count, names, note, open, onToggle, cols, childr
   cols: number; children: ReactNode;
 }) {
   return (
-    <div data-ov-strip={kind} style={{ display: "flex", flexDirection: "column", gap: open ? 12 : 0, transition: "gap 420ms var(--sp)" }}>
+    <div data-ov-strip={kind} style={{ display: "flex", flexDirection: "column", gap: open ? 12 : 0,
+                                          transition: open ? "none" : "gap 0s linear 240ms" }}>
       <div className="ov-strip" data-open={open ? "1" : "0"} role="button" tabIndex={0} onClick={onToggle}
            onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}>
         <span style={{ flexShrink: 0 }}>{kind === "off" ? "已停用" : "失效"} {count}</span>

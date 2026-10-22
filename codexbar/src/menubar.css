@@ -479,3 +479,12 @@
 .mb-menu-item:hover { background: var(--hov2); }
 .mb-trow { transition: background .15s; border-radius: 6px; }
 .mb-trow:hover { background: var(--hov); }
+
+/* 减弱动态效果：同名关键帧的「只剩透明度」版本。★ 必须写在定义它的同一个文件末尾 ——
+   跨文件时 bundle 的 CSS 顺序不受控（共享块排在入口块之前），后定义的那份才生效。见 `reducedMotion.css`。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes cbFade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes mbSlideIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes mbReveal { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes mbRise { from { opacity: 0; } to { opacity: 1; } }
+}

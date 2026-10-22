@@ -1,0 +1,20 @@
+/*
+ * 减弱动态效果（AICoop P99「减弱动态效果：只剩淡入淡出，不缩放、不滑动」，阶段 7）。四个窗口的入口都 import 这一份。
+ *
+ * ① 过渡（这里）：只放行颜色 / 透明度类属性，统一 150 ms。位移、尺寸、布局（transform / width / grid-template-rows / gap …）一律瞬时到位。
+ *    用 `transition-property` + `!important` 改写，不用 `transition: none`：淡入淡出照常，内联写的过渡也被盖住，
+ *    且与 CSS 顺序无关。
+ * ② 关键帧（不在这里）：每个移动类关键帧在**定义它的那个文件末尾**有一份同名、只剩透明度的版本（App.css / menubar.css /
+ *    overview.css / tk.css / relay.css）。同名关键帧取最后一份生效的，而跨文件时 bundle 的 CSS 顺序不受控
+ *    （共享块排在入口块之前，实测这份文件排第一），所以必须同文件。转圈改成透明度呼吸：仍看得出「在进行」，但不转。
+ * 闸：`tests/test_motion_p99.py`。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-property: opacity, color, background-color, border-color, outline-color, box-shadow, fill, stroke, filter, visibility !important;
+    /* ★ 时长统一成 150 ms、不延迟：改写属性列表后，时长按**下标**取模配对，不按属性名（CSS Transitions §2.5）——
+       原来写 `transform 0ms, opacity 240ms` 的元素，opacity 会配到 0ms，淡入被误杀（评审 P7-gemini-1）。 */
+    transition-duration: 150ms !important;
+    transition-delay: 0s !important;
+  }
+}

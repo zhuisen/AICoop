@@ -160,11 +160,16 @@
 .ov-strip:hover { border-color: var(--ovLineH); }
 .ov-strip .ov-chev { transition: transform 300ms var(--sp); }
 .ov-strip[data-open="1"] .ov-chev { transform: rotate(180deg); }
-.ov-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 420ms var(--sp); }
-.ov-fold[data-open="1"] { grid-template-rows: 1fr; }
+/* Accordion（P99「高度 320 / 240 ms，不逐张」+「不做 grid-rows 类布局动画」）：行高**不做动画** ——
+   展开时一步到位、内容从上方 12px 滑入并淡入（320 ms）；收起时内容先滑出淡出（240 ms），行高在那之后一步收起。
+   只动 transform / opacity；整块一起动，不逐张。外层 `overflow:hidden` 裁掉滑入时露出的那 12px。 */
+.ov-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0s linear 240ms; }
+.ov-fold[data-open="1"] { grid-template-rows: 1fr; transition: none; }
 .ov-fold > .ov-fold-in { overflow: hidden; min-height: 0; }
-.ov-fold .ov-fold-grid { opacity: 0; visibility: hidden; transition: opacity 240ms ease-out, visibility 0s linear 240ms; }
-.ov-fold[data-open="1"] .ov-fold-grid { opacity: 1; visibility: visible; transition: opacity 240ms ease-out 120ms, visibility 0s; }
+.ov-fold .ov-fold-grid { opacity: 0; visibility: hidden; transform: translate3d(0, -12px, 0);
+  transition: opacity 240ms ease-in, transform 240ms ease-in, visibility 0s linear 240ms; }
+.ov-fold[data-open="1"] .ov-fold-grid { opacity: 1; visibility: visible; transform: none;
+  transition: opacity 320ms ease-out, transform 320ms cubic-bezier(.2, .9, .3, 1), visibility 0s; }
 
 /* 头部开关（28×16） */
 .ov-sw { position: relative; display: block; width: 28px; height: 16px; border-radius: 8px; background: var(--ovSwOff);
@@ -175,11 +180,11 @@
 .ov-sw[data-on="1"] > i { left: 14px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ov-root .ov-pg { animation: none; }
-  .ov-card, .ov-fold, .ov-fold .ov-fold-grid, .ov-strip .ov-chev, .ov-tag, .ov-bar, .ov-cm-hl,
+  .ov-card, .ov-strip .ov-chev, .ov-tag, .ov-bar, .ov-cm-hl,
   .ov-sw, .ov-sw > i { transition-duration: 0s !important; transition-delay: 0s !important; }
   /* README §3.5：减弱动态效果时一律只淡入淡出 —— 不缩放、不滑动、不扫光 */
-  .ov-card .ov-fact, .ov-tp, .ov-cmenu, .ov-swl, .ov-shine, [data-flip] { animation: none !important; }
+  /* 浮层 / 换字 / 操作组入场：不再整条关掉 —— 文件末尾的同名关键帧只剩淡入淡出（关掉换字会让新旧两层叠在一起 420 ms，评审 P7-codex-1） */
+  .ov-shine, [data-flip] { animation: none !important; }
   .ov-shine { display: none; }
 }
 
@@ -277,5 +282,24 @@
 .ov-sec { grid-column: 1 / -1; height: 12px; line-height: 12px; font-size: 12px; padding-left: 2px; margin-bottom: 0; }
 .ov-sec-rest { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
-  .ov-pop, .ov-dlg, .ov-kpal, .ov-sheet { animation: none !important; transition-duration: 0s !important; }
+  /* .ov-pop / .ov-dlg / .ov-kpal / .ov-sheet：不再整条关掉 —— 位移由 reducedMotion.css 剥掉，同名关键帧（文件末尾）只剩淡入（阶段 7 评审） */
+}
+
+/* 减弱动态效果：同名关键帧的「只剩透明度」版本。★ 必须写在定义它的同一个文件末尾 ——
+   跨文件时 bundle 的 CSS 顺序不受控（共享块排在入口块之前），后定义的那份才生效。见 `reducedMotion.css`。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes ovPgIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ovInUp { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ovSpin { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  @keyframes ovTipIn { from { opacity: 0; transform: translateX(-50%); } to { opacity: 1; transform: translateX(-50%); } }
+  @keyframes ovDdIn { from { opacity: 0; } }
+  @keyframes ovShineA { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes ovShineB { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes ovSwOutA { to { opacity: 0; } }
+  @keyframes ovSwOutB { to { opacity: 0; } }
+  @keyframes ovSwInA { from { opacity: 0; } }
+  @keyframes ovSwInB { from { opacity: 0; } }
+  @keyframes ovPopIn { from { opacity: 0; } }
+  @keyframes ovDlgIn { from { opacity: 0; transform: translate(-50%, -50%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+  @keyframes ovKIn { from { opacity: 0; transform: translate3d(-50%, 0, 0); } to { opacity: 1; transform: translate3d(-50%, 0, 0); } }
 }

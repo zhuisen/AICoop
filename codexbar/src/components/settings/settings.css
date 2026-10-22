@@ -1,4 +1,5 @@
-/* 设置页 S1（AICoop P9）。只动位移 / 透明度 / 颜色；减弱动态效果时直接切换。 */
+/* 设置页 S1（AICoop P9）。只动位移 / 透明度 / 颜色；减弱动态效果时直接切换。
+   开关 / 分段是「直接操作」⇒ ≤ 200 ms、临界阻尼不回弹（P99 性能规矩；阶段 6 的 .24 s 收到 .2 s）。 */
 /* 分隔线只画在「行」的上沿：行与它自己的从属块（.set-sub）之间不画线（评审 P6-gemini-3）。 */
 .set-card > .set-row + .set-row,
 .set-card > .set-sub + .set-row { border-top: 1px solid var(--setLine); }
@@ -7,7 +8,7 @@
 .set-tg .set-knob {
   position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 8px; background: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transform: translateX(0);
-  transition: transform .24s cubic-bezier(.2, .9, .3, 1), width .18s cubic-bezier(.2, .9, .3, 1);
+  transition: transform .2s cubic-bezier(.2, .9, .3, 1), width .16s cubic-bezier(.2, .9, .3, 1);
 }
 .set-tg.on .set-knob { transform: translateX(16px); }
 .set-tg:not([aria-disabled="true"]):active .set-knob { width: 19px; }
@@ -15,7 +16,7 @@
 
 .set-pill {
   position: absolute; left: 2px; top: 2px; height: 24px; border-radius: 6px;
-  transition: transform .24s cubic-bezier(.2, .9, .3, 1), width .24s cubic-bezier(.2, .9, .3, 1);
+  transition: transform .2s cubic-bezier(.2, .9, .3, 1), width .2s cubic-bezier(.2, .9, .3, 1);
 }
 .set-seg-btn { transition: color .2s, background-color .2s; }
 .set-seg-btn:not(:disabled):active, .set-btn:not(:disabled):active { transform: scale(.97); }
@@ -23,8 +24,18 @@
 .set-chev.open { transform: rotate(90deg); }
 
 .set-fold { display: grid; transition: opacity .25s ease-out; }
+@keyframes setInA { from { opacity: 0; transform: translate3d(0, -4px, 0); } }
+@keyframes setInB { from { opacity: 0; transform: translate3d(0, -4px, 0); } }
+.set-in-a { animation: setInA .22s cubic-bezier(.2, .9, .3, 1) both; }
+.set-in-b { animation: setInB .22s cubic-bezier(.2, .9, .3, 1) both; }
 
 @media (prefers-reduced-motion: reduce) {
   .set-tg, .set-tg .set-knob, .set-pill, .set-seg-btn, .set-fold, .set-chev { transition: none !important; }
   .set-seg-btn:active, .set-btn:active { transform: none !important; }
+}
+
+/* 减弱动态效果：同名关键帧只剩淡入（同文件末尾才稳定生效，见 reducedMotion.css）。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes setInA { from { opacity: 0; } }
+  @keyframes setInB { from { opacity: 0; } }
 }
