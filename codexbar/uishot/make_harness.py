@@ -1511,6 +1511,8 @@ function relayEntry() {
         return Promise.resolve(null);
       case 'notch_layout':
         return Promise.resolve(null);
+      case 'grip_resize_start':          // 主窗口右下抓手（Rust 跟光标改尺寸）；测试用 __harnessFire('grip-size', …) 模拟回报
+        return Promise.resolve(null);
       case 'tpshover_resize':
       case 'tpshover_dismiss':
       case 'tray_pill_hide_logos':

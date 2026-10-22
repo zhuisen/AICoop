@@ -34,6 +34,8 @@ import Overview from "./components/ov/Overview";
 import { useLive } from "./hooks/useLive";
 import { useClaudeQuota } from "./hooks/useClaudeQuota";
 import { NavRail, type NavPage } from "./components/NavRail";
+import WindowGrip from "./components/WindowGrip";
+import { isBlankHeader } from "./windowDrag";
 import "./App.css";
 
 // 平台详情页不进导航栏,只能从流量总览钻取(图例行 / 卡片「明细→」/ 点图层),用户定稿 2026-08-09。
@@ -259,8 +261,8 @@ export default function App() {
   return (
     // ★ `cb-light` 供 App.css 的滚动条规则按主题反色 —— 白色拇指在浅色底上等于隐形。
     //   加这个 class 之前那条规则是**死规则**(写完顺手核了一下才发现根节点没有它)。
-    <div className={theme === "light" ? "cb-light" : undefined} data-nav-count={navN}
-         style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", background: t.appBg, color: t.text, fontFamily: "'Space Grotesk'", borderRadius: winUI ? 12 : 0, overflow: "hidden", boxShadow: t.shadow, transition: "background-color .35s ease, color .35s ease" }}>
+    <div className={theme === "light" ? "cb-root cb-light" : "cb-root"} data-nav-count={navN}
+         style={{ position: "relative", width: "100vw", height: "100vh", display: "flex", flexDirection: "column", background: t.appBg, color: t.text, fontFamily: "'Space Grotesk'", borderRadius: winUI ? 12 : 0, overflow: "hidden", boxShadow: t.shadow, transition: "background-color .35s ease, color .35s ease" }}>
 
       {/* Title bar —— 只剩 Windows 那一版（macOS 用户 2026-10-22「顶部占位的地方去掉」：红黄绿进侧栏顶、眼睛与版本进侧栏底） */}
       {winUI && <div data-tauri-drag-region style={{ height: 38, flexShrink: 0, display: "flex", alignItems: "center", padding: "0 14px", gap: 8, borderBottom: `1px solid ${t.chromeBorder}`, background: t.chromeBg, position: "relative", transition: "background-color .35s ease" }}>
@@ -336,9 +338,17 @@ export default function App() {
                    </span>
                  </>} />
 
-        {/* Content —— 去掉标题栏后，顶上 12 px 是拖动条（按下即拖窗口；页面里的控件不受影响） */}
-        <div style={{ position: "relative", flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {!winUI && <div data-tauri-drag-region style={{ position: "absolute", top: 0, left: 0, right: 0, height: 12, zIndex: 5 }} />}
+        {/* Content —— 去掉标题栏后，顶上一条带（`HEADER_BAND`）里点空白处拖窗口、双击缩放；控件照常（`windowDrag.ts`） */}
+        <div style={{ position: "relative", flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", overflow: "hidden" }}
+             data-drag-band
+             onMouseDown={winUI ? undefined : (e) => {
+               if (e.button !== 0 || e.detail !== 1 || !isBlankHeader(e.target, e.currentTarget, e.clientY)) return;
+               e.preventDefault();
+               win.startDragging().catch(() => {});
+             }}
+             onDoubleClick={winUI ? undefined : (e) => {
+               if (isBlankHeader(e.target, e.currentTarget, e.clientY)) win.toggleMaximize().catch(() => {});
+             }}>
           {page === "overview" && (
             <Overview t={t} isDark={theme === "dark"} privacy={privacy} provider={provider} setProvider={setProvider}
               colors={{ codex: colorOf(traffic, "codex"), claude: colorOf(traffic, "claude"),
@@ -380,6 +390,7 @@ export default function App() {
       </div>
 
       <ToastStack items={toasts} isDark={theme === "dark"} onHold={holdToasts} onDismiss={dismissToast} />
+      {!winUI && <WindowGrip />}
     </div>
   );
 }

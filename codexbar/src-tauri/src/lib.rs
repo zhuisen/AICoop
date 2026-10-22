@@ -21,6 +21,9 @@ mod tray_idle;
 /// 托盘胶囊的悬停面板窗口 `tpshover`（page 2）。
 #[cfg(target_os = "macos")]
 mod tps_hover;
+/// 主窗口拖动松手靠边吸附 + 右下抓手缩放（用户 2026-10-22 选 S1 / S3）。
+#[cfg(target_os = "macos")]
+mod win_chrome;
 
 /// 仓库根目录 —— `codex-rotate` / `traffic/scan.py` / `state.json` 都从这里找。
 ///
@@ -536,6 +539,13 @@ fn zoom_next(cur: f64, target: f64) -> Option<f64> {
     None
 }
 
+/// 抓手缩放到 (w, h) 停稳后会用的倍率（与 `apply_main_zoom` 同一个判据，含滞回）。胶囊据此算「总览 N 列」。
+#[cfg(target_os = "macos")]
+fn predicted_zoom(w: f64, h: f64) -> f64 {
+    let cur = LAST_ZOOM.load(Ordering::Relaxed) as f64 / 1000.0;
+    zoom_next(cur, zoom_for(w, h)).unwrap_or(if cur > 0.0 { cur } else { 1.0 })
+}
+
 fn apply_main_zoom(win: &tauri::WebviewWindow) {
     let (Ok(size), Ok(sf)) = (win.inner_size(), win.scale_factor()) else { return };
     let l = size.to_logical::<f64>(sf);
@@ -848,6 +858,15 @@ fn set_idle_prefs(glow: bool, hello: String, last_hello: Option<f64>, last_activ
 fn tpshover_dismiss(app: AppHandle) {
     #[cfg(target_os = "macos")]
     tps_hover::dismiss(&app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// 主窗口右下抓手按下：Rust 跟光标改尺寸、吸档位，直到松手（`win_chrome::grip_start`）。
+#[tauri::command]
+fn grip_resize_start(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    win_chrome::grip_start(&app);
     #[cfg(not(target_os = "macos"))]
     let _ = app;
 }
@@ -3043,6 +3062,10 @@ pub fn run() {
                                        | tauri::WindowEvent::ScaleFactorChanged { .. }) {
                         schedule_main_zoom(&handle_close);
                     }
+                    #[cfg(target_os = "macos")]
+                    if matches!(event, tauri::WindowEvent::Moved(_)) {
+                        win_chrome::on_moved(&handle_close);
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         if let Some(win) = handle_close.get_webview_window("main") {
@@ -3067,6 +3090,7 @@ pub fn run() {
             read_state,
             run_rotate,
             run_traffic,
+            grip_resize_start,
             run_discover,
             read_integration,
             read_rotation_board, read_agy_board,
