@@ -97,7 +97,7 @@ class _Base(unittest.TestCase):
 
     def fake_p(self, pool, fetch, **extra):
         ns = dict(load=lambda: pool, fetch_quota=fetch, quota_by_group=P.quota_by_group, carry_missing_groups=P.carry_missing_groups,
-                  _iso_ts=P._iso_ts, save=lambda p: None, _lock=lambda path: open(os.devnull),
+                  _iso_ts=P._iso_ts, save=lambda p: None, merge_back=lambda snap, before, keys=(): snap, _lock=lambda path: open(os.devnull),
                   POOL=None)
         ns.update(extra)
         self.cli.P = types.SimpleNamespace(**ns)

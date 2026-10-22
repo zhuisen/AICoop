@@ -15,7 +15,7 @@
 2. 沿用桶的重置时刻已过 ⇒ 值改成「读不到」（`remainingFraction` 缺省 ⇒ `—`），不拿已重置窗口的旧数冒充。
 3. 选号投影跟着沿用（不因一组缺失就把号排到最后）。
 4. 沿用不叠加：连续缺失时 `seenAt` 保持**第一次**看到的时刻，不被刷新成「刚刚」。
-5. 读失败（err）仍不写数字（原契约不变）。
+5. 读失败（err）不写新数字、**也不抹旧读数**（2026-10-22 改：原来清成 None）；从没读成过仍无数字。
 6. 前端把 `seenAt` 带成 `seen_at`（卡片据此降级显示）。
 """
 try:
@@ -133,13 +133,33 @@ class TheMissingGroupIsCarried(unittest.TestCase):
             self.store(a, [third(T0 + dt)])
         self.assertEqual(self.gemini_buckets(a)["gemini-weekly"]["seenAt"], T0, "★ 连续缺失把旧读数刷成了「刚刚」")
 
-    def test_a_failed_read_still_writes_no_numbers(self):
+    def test_a_failed_read_keeps_the_last_reading(self):
+        """★★ 2026-10-22 全方面评审改契约（§7.0b）：读失败**不写新数字，也不抹旧数字**。
+        原来清成 None 并把 `quota_at` 推到现在 ⇒ 一次抖动卡片整块「—」，「上次是几点读的」也丢了。"""
         a = {"label": "dbk"}
         self.store(a, [gem(), third(T0)])
+        before = (a["quota"], a["quota_summary"])
         self.clock.t = T0 + 180
         self.store(a, None, err="HTTP 500")
-        self.assertIsNone(a["quota"])
-        self.assertIsNone(a["quota_summary"])
+        self.assertEqual((a["quota"], a["quota_summary"]), before, "★ 读失败抹掉了上次读数")
+        self.assertEqual(a["quota_at"], T0, "★ 读失败把读数时刻推到了现在 —— 旧数会冒充新数")
+        self.assertEqual(a["quota_err"], "HTTP 500")
+        self.assertEqual(a["quota_stale_since"], T0 + 180)
+        self.clock.t = T0 + 360
+        self.store(a, None, err="HTTP 500")
+        self.assertEqual(a["quota_stale_since"], T0 + 180, "连续失败要记第一次")
+        self.clock.t = T0 + 540
+        self.store(a, [gem(), third(T0 + 540)])
+        self.assertIsNone(a["quota_err"])
+        self.assertNotIn("quota_stale_since", a, "读成功后陈旧标记没清")
+        self.assertEqual(a["quota_at"], T0 + 540)
+
+    def test_a_failed_first_read_writes_no_numbers(self):
+        """从没读成过 ⇒ 仍然没有数字（不编造）。"""
+        a = {"label": "new"}
+        self.store(a, None, err="HTTP 500")
+        self.assertIsNone(a.get("quota"))
+        self.assertIsNone(a.get("quota_summary"))
 
 
 class EveryWritePathCarries(unittest.TestCase):

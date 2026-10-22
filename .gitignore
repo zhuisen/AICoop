@@ -6,6 +6,7 @@ state.json
 .keepalive.lock
 .refresh.lock
 .state.lock
+.probe-*.lock
 .proxy-sessions-v1/
 native-codex/
 output/

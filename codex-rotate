@@ -1466,6 +1466,12 @@ def _codex_running():
     return False
 
 
+def _can_go_live(slot):
+    """ensure-live 能不能把这个号换进 auth.json:没暂停(`paused()` 的约定)、没判死、不在冷却。"""
+    return not (paused(slot) or slot.get("auth_dead")
+                or (slot.get("cooling_until") or 0) > time.time())
+
+
 def _ensure_live_healthy(s, *, force=False, quiet=False):
     """Keep ~/.codex/auth.json (the account plain `codex` + `omc ask codex` use) SERVER-ALIVE by rotating
     a fresh, server-healthy slot INTO it when the current live account is dead/near-expiry. 用户定稿
@@ -1494,7 +1500,7 @@ def _ensure_live_healthy(s, *, force=False, quiet=False):
     # 2) live 死/临近过期 → 找最新鲜的**服务端健康**非活跃 slot,switch 进来。
     candidates = []
     for aid, slot in s["slots"].items():
-        if aid == active or (slot.get("cooling_until") or 0) > time.time():
+        if aid == active or not _can_go_live(slot):
             continue
         try:
             tok = (_load_json(AUTH_DIR / slot["file"]).get("tokens") or {})
@@ -1513,14 +1519,26 @@ def _ensure_live_healthy(s, *, force=False, quiet=False):
     if not candidates:
         return "no server-healthy slot to rotate in (\\codex login 补活号 / 等 keepalive 刷)"
     candidates.sort(key=lambda c: c[0], reverse=True)  # JWT 最新鲜优先
-    _, target, tslot = candidates[0]
     # 3) 凭证移动 = cmd_switch 同款:syncback 现 live→其槽,再锁内 slot→LIVE→activate→save。
-    _syncback(s)
-    with _cred_lock():
-        auth = _load_json(AUTH_DIR / s["slots"][target]["file"])
-        _atomic_write(LIVE, auth)
-        _activate(s, target)
-        _save_state(s)
+    # ★ 上面的探测是联网的(几秒到一分钟)且不持 state 锁;提交时在锁内**重读** state,按磁盘上的新状态
+    #   再核一次 —— 否则期间 quotad/用户写的额度、置顶、冷却、暂停会被这份旧 s 整份盖掉(B15 同族,
+    #   2026-10-22 全方面评审),探测期间被暂停的号也照样换进来。当值号变了 = 用户刚切过 ⇒ 放弃。
+    with _state_mutex():
+        cur = _state()
+        if cur.get("active") != active:
+            return "skip: active changed during probe"
+        live_now = [(left, aid) for left, aid, _ in candidates
+                    if aid in cur["slots"] and aid != active and _can_go_live(cur["slots"][aid])]
+        if not live_now:
+            return "skip: candidates changed during probe"
+        target = live_now[0][1]
+        _syncback(cur)
+        with _cred_lock():
+            auth = _load_json(AUTH_DIR / cur["slots"][target]["file"])
+            _atomic_write(LIVE, auth)
+            _activate(cur, target)
+            _save_state(cur)
+        tslot = cur["slots"][target]
     who = tslot.get("label", _mask(target))
     if not quiet:
         print(f"[ensure-live] rotated auth.json → [{who}] (server-healthy; plain codex/omc 现在有活号)")
@@ -1529,8 +1547,9 @@ def _ensure_live_healthy(s, *, force=False, quiet=False):
 
 def cmd_ensure_live(args):
     """选项②手动入口:检测 ~/.codex/auth.json 死/临近过期 → 轮换一个服务端健康号进来。`--force` 强制轮换。"""
-    s = _state()
-    _autosync_live(s)
+    with _state_mutex():  # autosync 是纯磁盘 RMW,锁内做;联网探测在 _ensure_live_healthy 里锁外做
+        s = _state()
+        _autosync_live(s)
     msg = _ensure_live_healthy(s, force="--force" in args)
     print(f"ensure-live: {msg}")
 
@@ -2190,6 +2209,27 @@ def _write_last_probe(aid, **fields):
     _mutate_state(f)
 
 
+def _probe_claims(targets):
+    """逐号占计费锁 → `(aid, 占到没有)`;调用方进入下一个号时释放上一个。
+
+    ★★ 计费探针跨进程互斥(2026-10-22 全方面评审):菜单栏、总览、⌘K、dawn-probe 各自起一个
+      `probe` 子进程,前端的在途锁只管它自己那个 webview ⇒ 同一个号能被两个进程同时计费。
+      锁按号(不是全局):全池探针与单号探针只在**重叠的那个号**上互斥。
+      占不到 = 别的进程正在探它 ⇒ 跳过,不排队等(等完再探就是第二次计费)。"""
+    for aid in targets:
+        fh = open(STORE / f".probe-{uuid.uuid5(uuid.NAMESPACE_OID, aid).hex[:12]}.lock", "w")  # 文件名不带 account id
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fh.close()
+            yield aid, False
+            continue
+        try:
+            yield aid, True
+        finally:
+            fh.close()
+
+
 def cmd_probe(args, aids=None):
     """★ 计费探针:对指定号各发一次最小真实补全("hi" → "ok"),验证它**真的能用**,并顺带把
     响应头里的额度写回 state。
@@ -2285,9 +2325,13 @@ def cmd_probe(args, aids=None):
     print(f"计费探测 · model={model} effort={effort} · {len(targets)} 个号 "
           f"—— 每号一次真实请求(问「{PROBE_PROMPT}」),会消耗周额度")
     ok_n = 0
-    for i, aid in enumerate(targets):
+    for i, (aid, mine) in enumerate(_probe_claims(targets)):
         slot = s["slots"][aid]
         label = slot.get("label", _mask(aid))
+        if not mine:
+            # 不写 last_probe:那个进程会写它自己的结果,这里写「跳过」会把它盖掉。
+            print(f"  [{label:<8}] ⏭ 另一个进程正在探这个号 —— 跳过,不重复计费")
+            continue
         if i:
             time.sleep(2.0)          # 端点对突发有脾气,同 refresh-all 的节流思路
 

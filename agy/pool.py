@@ -187,6 +187,39 @@ def save(pool):
     os.replace(tmp, POOL)
 
 
+def merge_back(snapshot, before, touched_pool_keys=()):
+    """联网之后的写回：锁内**重读**池，只把这条命令自己改过的字段（`snapshot` 相对 `before` 变了的）
+    合并进去 → 落盘后的池。
+
+    ★★ 不许拿联网前读的快照整份 `save`（2026-10-22 全方面评审）：`quota` 一跑十几秒，期间终端或
+      `bin/agy` wrapper 改的置顶 / 停轮换 / 切号 / 增删会被整份回滚；丢掉的 `rotate_off` 会让定时探针
+      和自动切号再去用这个号。期间被删掉的号**不复活**。
+    `before` = 联网前对快照 `accounts` 的深拷贝；`touched_pool_keys` = 这条命令写的池级键（缺 = 删）。"""
+    with _lock(POOL):
+        cur = load()
+        accs = cur.setdefault("accounts", {})
+        for sub, a in (snapshot.get("accounts") or {}).items():
+            b = accs.get(sub)
+            if b is None:
+                continue
+            old = before.get(sub) or {}
+            for k in set(a) | set(old):
+                if k in a and a[k] != old.get(k, _MISSING):
+                    b[k] = a[k]
+                elif k not in a and k in old:
+                    b.pop(k, None)
+        for k in touched_pool_keys:
+            if k in snapshot:
+                cur[k] = snapshot[k]
+            else:
+                cur.pop(k, None)
+        save(cur)
+        return cur
+
+
+_MISSING = object()
+
+
 # ── OAuth client（现取 + 缓存） ────────────────────────────────────────
 def _bin_sig():
     try:

@@ -246,8 +246,15 @@ class FailureNeverRendersAsZero(unittest.TestCase):
     SRC = (ROOT / "agy" / "pool.py").read_text(encoding="utf-8")
 
     def test_quota_is_none_on_error(self):
-        self.assertIn('a["quota"] = q if not err else None', self.CLI,
-                      "★★★ 失败时写了数字 —— 与真的 0% 分不开")
+        """2026-10-22 起失败分支留着上次读数（`test_agy_missing_group_carried`），但**仍不写任何新数字**：
+        `if err:` 必须在第一次写 `quota` / `quota_summary` 之前就 `return None`。"""
+        i = self.CLI.index("def _store_quota(")
+        seg = self.CLI[i:self.CLI.index("\ndef ", i + 10)]
+        seg = "\n".join(l for l in seg.splitlines() if not l.lstrip().startswith("#"))
+        e = seg.index("    if err:\n")
+        first_write = min(seg.index('a["quota"] ='), seg.index('a["quota_summary"] ='))
+        self.assertLess(e, first_write)
+        self.assertIn("return None", seg[e:first_write], "★★★ 失败时写了数字 —— 与真的 0% 分不开")
 
     def test_fetch_quota_returns_none_not_empty_on_http_error(self):
         """⚠️ 窗口从 1200 放宽到函数体全长（2026-09-15）：换端点后 docstring 变长，

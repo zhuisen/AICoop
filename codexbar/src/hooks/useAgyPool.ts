@@ -141,13 +141,16 @@ function toSnapshot(a: AgyPoolAccount): AgySnapshot {
       })),
   })).filter((g) => g.buckets.length > 0);
   // 一个数都没有 = 形状不对，仍按读失败处理（同 `agy-quota::parse_quota`）。
-  const ok = groups.some((g) => g.buckets.some((b) => b.remaining_percent != null)) && !a.quota_err;
+  const hasNums = groups.some((g) => g.buckets.some((b) => b.remaining_percent != null));
+  const ok = hasNums && !a.quota_err;
   return {
     schema: 1, fetched_at: a.quota_at ?? 0, available: ok,
     // ★ 失败时 `quota` 恒 `null`（不是空对象）—— 卡片据此走降级态而不是画一条满格的条。
     reason: ok ? null : "network_error", detail: a.quota_err ?? null, pid: null,
     quota: ok ? ({ groups } as unknown as AgyQuota) : null,
-    last_good: null,
+    // ★★ 读失败时后端留着上次的读数（`agy-rotate::_store_quota`）⇒ 作为陈旧读数交给 `agyShown`，
+    //   卡片画旧数 + 标龄，不再整块变「—」（§7.0b）。
+    last_good: !ok && hasNums ? { quota: { groups } as unknown as AgyQuota, fetched_at: a.quota_at ?? null } : null,
   };
 }
 

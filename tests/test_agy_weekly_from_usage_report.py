@@ -162,7 +162,7 @@ class EachAccountGetsItsOwnReport(unittest.TestCase):
             fetch_quota=lambda token: (json.loads(json.dumps(CLOUD)), ""),
             quota_by_group=P.quota_by_group,
             carry_missing_groups=lambda old, at, new, now=None: new,
-            save=lambda p: None,
+            save=lambda p: None, merge_back=lambda snap, before, keys=(): snap,
             _lock=lambda path: open(os.devnull),
             _keyring_on=lambda: False,
             POOL=None,

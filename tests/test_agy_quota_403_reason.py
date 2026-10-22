@@ -127,7 +127,7 @@ class TheQuotaCommandPersistsAndClearsIt(unittest.TestCase):
         pool = self.pool
         cli.P = types.SimpleNamespace(
             load=lambda: pool, fetch_quota=lambda tok, anchor=None: result,
-            quota_by_group=P.quota_by_group, carry_missing_groups=P.carry_missing_groups, save=lambda p: None,
+            quota_by_group=P.quota_by_group, carry_missing_groups=P.carry_missing_groups, save=lambda p: None, merge_back=lambda snap, before, keys=(): snap,
             _lock=lambda path: open(os.devnull), POOL=None)
         cli._refresh_one = lambda sub, a, pool, skew=120: ({"token": {"access_token": "t"}}, "")
         cli._mark_live = lambda pool: None
