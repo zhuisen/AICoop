@@ -486,7 +486,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
         )}
         {!win && s.idleIcons && (<>
         <OneLineRow t={t} label="菜单栏显示几家" desc={s.idleSlots === 3 ? "常驻 2 家 + 动态 1 家" : "只放常驻 2 家"}
-                    title="常驻按排名或手动固定；动态位放 24 小时内最近用过的那家，剩余 < 10% 的插队占动态位，带红点。">
+                    title="按排名或手动固定；第 3 家是排名第 3 的那家，剩余 < 10% 的插队占第 3 位，带红点。">
           <SegSlide t={t} opts={[2, 3] as const} cur={s.idleSlots} label={(v) => `${v} 家`} on={(v) => updIdle({ idleSlots: v })} />
         </OneLineRow>
         <OneLineRow t={t} label="排序依据" desc="决定常驻哪 2 家和悬停面板顺序" title="按统计窗口内的请求数或 Token 数降序。">

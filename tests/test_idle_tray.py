@@ -57,14 +57,16 @@ class PickIdleSlots(unittest.TestCase):
         self.assertEqual([s["red"] for s in got], [False, False, True], "★ 只有剩 <10% 的那家带红点")
         self.assertEqual(got[0]["remaining"], 67, "★ 一家的数 = 各窗口里剩得最少的那个")
 
-    def test_without_a_low_one_the_most_recent_takes_the_dynamic_slot(self):
-        ps = [p for p in BOARD if p["key"] != "deepseek"]
-        got = pick(ps)
-        self.assertEqual([s["key"] for s in got], ["codex", "claude", "agy"], "★ 动态位 = 24h 内最近用过的非常驻")
+    def test_without_a_low_one_the_third_slot_is_rank_three(self):
+        """★ 用户 2026-10-22：第 3 家也按排名（取代稿里的「24h 内最近用过」）。
+        grok 刚用过、但 14 天 Token 比 Gemini 少 ⇒ 第 3 家是 Gemini。"""
+        ps = [P("codex", 10, 3e8, [50], 1), P("claude", 50, 7e9, [50], 0.1),
+              P("agy", 30, 3e8 - 1, [50], 5), P("grok", 2, 3e7, [50], 0.05)]
+        self.assertEqual([s["key"] for s in pick(ps, by="tokens")], ["claude", "codex", "agy"])
 
-    def test_dynamic_slot_stays_empty_rather_than_padding(self):
-        ps = [P("codex", 10, 1, [50], 0.1), P("claude", 5, 1, [50], 0.1), P("kimi", 1, 1, [50], 30)]
-        self.assertEqual([s["key"] for s in pick(ps)], ["codex", "claude"], "★★ 24h 外的不凑数，胶囊变窄")
+    def test_third_slot_stays_empty_rather_than_padding(self):
+        ps = [P("codex", 10, 1, [50], 0.1), P("claude", 5, 1, [50], 0.1), P("kimi", 0, 0, [50], None)]
+        self.assertEqual([s["key"] for s in pick(ps)], ["codex", "claude"], "★★ 统计窗口内没用过的不凑数，胶囊变窄")
 
     def test_two_slots_means_residents_only(self):
         self.assertEqual([s["key"] for s in pick(BOARD, slots=2)], ["codex", "claude"])

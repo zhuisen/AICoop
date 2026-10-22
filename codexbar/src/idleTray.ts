@@ -6,7 +6,9 @@
  * 规则（逐条照稿）：
  *   · 位数：默认 3 家 = 常驻 2 + 动态 1；可改 2 家（只有常驻）。
  *   · 常驻 2 家：手动固定的优先（最多 2 家）；没固定的位置按统计窗口内请求数（或 Token 数）降序补。
- *   · 动态 1 家：常驻以外、24 小时内最近用过的那家；没有就空着，不凑数。
+ *   · 第 3 家：常驻以外、排名最高的那家（统计窗口内用过才算；没有就空着，不凑数）。
+ *     ★ 用户 2026-10-22 取代稿里的「24 小时内最近用过」：「grok 近 14 天没有 Gemini 高，所以排序不对」——
+ *       三家都按统计窗口内的排名（默认 14 天 Token 数）。
  *   · 插队：统计窗口内用过、剩余 < 10% 的平台抢占动态位并带红点；不动常驻；多家取排名最高的。
  *   · 顺序：常驻按排名降序，动态位永远在最右。
  *   · 稳定：排名每天 00:00 重算一次，且只在空闲、鼠标不在托盘上时生效（`shouldRerank`）。
@@ -48,7 +50,6 @@ export interface IdleOptions {
 }
 
 export const LOW_PCT = 10;
-export const RECENT_MS = 24 * 3600 * 1000;
 
 /**
  * 多个窗口取剩余最少的那个。没有窗口，或**任一**窗口读不到 ⇒ null（不是 100，也不是 0）：
@@ -101,10 +102,7 @@ export function pickIdleSlots(ps: IdlePlatform[], o: IdleOptions): IdleSlot[] {
   const rest = ranked.filter((p) => !resident.includes(p.key));
   const insert = rest.find((p) => isLow(tightest(p.remaining)));
   if (insert) return [...out, mk(insert.key, "insert")];
-  const recent = rest
-    .filter((p) => p.lastUsedAt !== null && o.now - p.lastUsedAt <= RECENT_MS)
-    .sort((x, y) => (y.lastUsedAt ?? 0) - (x.lastUsedAt ?? 0))[0];
-  return recent ? [...out, mk(recent.key, "dynamic")] : out;
+  return rest.length ? [...out, mk(rest[0].key, "dynamic")] : out;
 }
 
 /** 托盘认得的六家（顺序 = Rust `tray_idle::KEYS`）。别的平台没有托盘 logo，不参与。 */
