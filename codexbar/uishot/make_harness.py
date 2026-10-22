@@ -1725,6 +1725,21 @@ function relayEntry() {
           if (el) el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
         }, 2000);
       }
+      // `hvcursor=<行>`：模仿 Rust 光标轮询（app 不在前台、网页收不到鼠标事件时唯一的来源）——
+      // 每 16 ms 报一次那一行里的坐标、带 1–2 px 抖动（Rust 只在坐标变了时报）。`hvcursorleave=1` 在 2 s 时报 null。
+      if (p.get('hvcursor')) {
+        setTimeout(function () {
+          var el = rowEl(p.get('hvcursor'));
+          clicks.push('hvcursor →命中 ' + (el ? 1 : 0));
+          if (!el) return;
+          var r = el.getBoundingClientRect(), n = 0;
+          var id = setInterval(function () {
+            fire('tpshover-cursor', [r.left + r.width / 2 + (n % 3), r.top + r.height / 2]);
+            if (++n >= 40) clearInterval(id);
+          }, 16);
+        }, 1000);
+        if (p.get('hvcursorleave') === '1') setTimeout(function () { fire('tpshover-cursor', null); }, 2000);
+      }
       if (p.get('hvclick') === 'link') setTimeout(function () {
         var a = document.querySelector('[data-hover-link]');
         clicks.push('hvclick →命中 ' + (a ? 1 : 0));
@@ -1744,6 +1759,7 @@ function relayEntry() {
                                                                   w: pnl.getBoundingClientRect().width }));
         b.setAttribute('data-hv-calls', JSON.stringify(hvCalls));
         b.setAttribute('data-hv-emit', JSON.stringify(emittedJ));
+        b.setAttribute('data-hv-clicks', JSON.stringify(clicks));
         b.setAttribute('data-hv-errors', JSON.stringify(errors.concat(unknown)));
       }, parseInt(p.get('hvat') || '1800', 10));
     });

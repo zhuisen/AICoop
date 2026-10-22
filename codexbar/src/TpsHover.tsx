@@ -109,8 +109,17 @@ export default function TpsHover() {
   const st = useRef({ shown, blocks, layout, reduce, kind });
   st.current = { shown, blocks, layout, reduce, kind };
 
+  // 光标停在哪一行：网页 mouseenter 与 Rust 光标（`tpshover-cursor`）两路都经 `setHit`，同一行只派发一次
+  const hitRef = useRef<string | null>(null);
+  const setHit = useCallback((next: string | null) => {
+    const multi = (k: string) => { const s = st.current.shown.find((x) => x.key === k); return !!s && isMulti(s.row); };
+    for (const e of L.hitEvents(hitRef.current, next, multi, Date.now())) dispatch(e);
+    hitRef.current = next;
+  }, []);
+
   const startOpen = useCallback((raw: unknown) => {
     clearTimers();
+    hitRef.current = null;
     setTheme(loadTheme());
     const red = prefersReduce();
     setReduce(red);
@@ -183,8 +192,17 @@ export default function TpsHover() {
   useEffect(() => {
     const a = listen("tpshover-open", (e) => startOpen(e.payload));
     const b = listen<string>("tpshover-close", (e) => startClose(String(e.payload)));
-    return () => { [a, b].forEach((u) => { u.then((f) => f()).catch(noop); }); clearTimers(); };
-  }, [startOpen, startClose]);
+    // ★ 展开会话不能只靠网页 mouseenter：AICoop 是 Accessory 应用、面板不当 key 窗口，
+    //   app 不在前台时 WKWebView 收不到鼠标移动（用户 2026-10-22 实报「悬浮不展开会话」）。
+    //   Rust 轮询线程读 `NSEvent mouseLocation`，光标在面板里就报面板内坐标，离开报 null。
+    const c = listen<[number, number] | null>("tpshover-cursor", (e) => {
+      const p = e.payload;
+      if (!p) { setHit(null); return; }
+      const el = document.elementFromPoint(p[0], p[1]);
+      setHit(el?.closest("[data-hover-row]")?.getAttribute("data-hover-row") ?? null);
+    });
+    return () => { [a, b, c].forEach((u) => { u.then((f) => f()).catch(noop); }); clearTimers(); };
+  }, [startOpen, startClose, setHit]);
 
   // 高度上报：长高立刻报（窗口要先够高），变矮等收起动画走完再报（先缩会把动画裁掉）
   const lastH = useRef<number | null>(null);
@@ -258,8 +276,8 @@ export default function TpsHover() {
               <div className="hv-clip">
                 {i > 0 && <div className="hv-div" />}
                 <div data-hover-row={k} data-hover-open={open ? "1" : "0"}
-                     onMouseEnter={() => dispatch({ t: "enter", key: k, multi, now: Date.now() })}
-                     onMouseLeave={() => dispatch({ t: "leave", key: k, now: Date.now() })}>
+                     onMouseEnter={() => setHit(k)}
+                     onMouseLeave={() => { if (hitRef.current === k) setHit(null); }}>
                   <div className="hv-grid hv-row" aria-expanded={multi ? open : undefined}
                        style={{ height: open ? L.ROW_H_OPEN : L.ROW_H, cursor: multi ? "pointer" : "default",
                                 background: ex.hov === k ? "var(--hv-hov)" : "transparent",

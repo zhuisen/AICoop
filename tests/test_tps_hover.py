@@ -146,6 +146,17 @@ class ExpandRule(unittest.TestCase):
         self.assertTrue(got[4]["codex"])
         self.assertEqual(got[5], {})
 
+    def test_repeated_hits_on_one_row_do_not_restart_the_dwell(self):
+        """Rust 每 16 ms 报一次光标：同一行重复命中若每次都派发 enter，250 ms 计时永远走不完。"""
+        got = node("(() => { let s = m.EXPAND0, prev = null; const multi = () => true;"
+                   " for (let t = 0; t <= 400; t += 16) { for (const e of m.hitEvents(prev, 'claude', multi, t)) s = m.expandReduce(s, e);"
+                   " prev = 'claude'; s = m.expandReduce(s, {t:'tick', now:t}); } return s.open; })()")
+        self.assertTrue(got.get("claude"), got)
+        self.assertEqual(node("m.hitEvents('a', 'a', () => true, 0)"), [])
+        self.assertEqual(node("m.hitEvents('a', 'b', () => false, 5)"),
+                         [{"t": "leave", "key": "a", "now": 5}, {"t": "enter", "key": "b", "multi": False, "now": 5}])
+        self.assertEqual(node("m.hitEvents('a', null, () => true, 5)"), [{"t": "leave", "key": "a", "now": 5}])
+
     def test_next_due(self):
         self.assertEqual(node("[m.nextDue(m.EXPAND0), m.nextDue(m.expandReduce(m.EXPAND0, {t:'enter',key:'a',multi:true,now:10}))]"),
                          [None, 260])
@@ -322,6 +333,17 @@ class TheBundleRenders(unittest.TestCase):
         left = dom("&hv=4&hvexpand=claude&hvleave=1&hvat=2600")
         self.assertEqual(attr(left, "data-hover-open"), ["0", "0", "0", "0"], "离开这一行 250 ms 后折叠")
         single = dom("&hv=4&hvexpand=agy")
+        self.assertEqual(attr(single, "data-hover-open"), ["0", "0", "0", "0"], "单会话的行不展开")
+
+    def test_rust_cursor_alone_expands_and_collapses(self):
+        """用户 2026-10-22：「悬浮弹窗后进一步悬浮没有展开会话」。AICoop 不在前台时 WKWebView 收不到鼠标移动，
+        展开只能靠 Rust 报的光标（`tpshover-cursor`）。这里**不发任何网页鼠标事件**，只按 16 ms 报坐标。"""
+        opened = dom("&hv=4&hvcursor=claude")
+        self.assertIn("hvcursor →命中 1", body_json(opened, "data-hv-clicks"))
+        self.assertEqual(attr(opened, "data-hover-open"), ["0", "1", "0", "0"])
+        left = dom("&hv=4&hvcursor=claude&hvcursorleave=1&hvat=2600")
+        self.assertEqual(attr(left, "data-hover-open"), ["0", "0", "0", "0"], "光标离开面板（null）250 ms 后折叠")
+        single = dom("&hv=4&hvcursor=agy")
         self.assertEqual(attr(single, "data-hover-open"), ["0", "0", "0", "0"], "单会话的行不展开")
 
     def test_sessions_stay_in_the_dom_when_folded(self):

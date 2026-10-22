@@ -208,6 +208,16 @@ export function expandReduce(s: ExpandState, e: ExpandEv): ExpandState {
   }
 }
 
+/** 光标所在行变了 → 要派发的事件。同一行重复命中**不派发**：`enter` 会把 250 ms 计时重新起算，
+ *  而 Rust 光标轮询每 16 ms 报一次，每次都派发的话计时永远走不完。网页 `mouseenter` 与 Rust 光标两路都走这里。 */
+export function hitEvents(prev: string | null, next: string | null, multi: (k: string) => boolean, now: number): ExpandEv[] {
+  if (prev === next) return [];
+  const ev: ExpandEv[] = [];
+  if (prev) ev.push({ t: "leave", key: prev, now });
+  if (next) ev.push({ t: "enter", key: next, multi: multi(next), now });
+  return ev;
+}
+
 export function nextDue(s: ExpandState): number | null {
   return s.due.length ? Math.min(...s.due.map((d) => d.at)) : null;
 }

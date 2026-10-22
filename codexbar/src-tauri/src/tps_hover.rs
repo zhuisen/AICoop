@@ -271,6 +271,7 @@ pub fn on_enter(app: &AppHandle) {
         let mut dwell_from = start;
         let mut out_since: Option<Instant> = None;
         let mut accepting = false;
+        let mut last_cur: Option<(f64, f64)> = None;
         let mut geom_at = Instant::now();
         loop {
             std::thread::sleep(TICK);
@@ -315,6 +316,12 @@ pub fn on_enter(app: &AppHandle) {
             let panel = (wx + px, wy + py, pw, *PANEL_H.lock().unwrap());
             let in_panel = contains(panel, x, y);
             if in_panel != accepting { accepting = in_panel; set_accepting(&app, in_panel); }
+            // 面板内光标坐标交给网页做行命中（展开会话）：app 不在前台时 WKWebView 收不到鼠标移动。只在变了时报
+            let cur = in_panel.then(|| (x - wx, y - wy));
+            if cur != last_cur {
+                last_cur = cur;
+                let _ = app.emit_to(LABEL, "tpshover-cursor", cur.map(|(a, b)| [a, b]));
+            }
             if in_tray || in_panel {
                 out_since = None;
             } else if out_since.get_or_insert_with(Instant::now).elapsed() >= CLOSE_DWELL {
