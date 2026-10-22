@@ -4,7 +4,7 @@ import { maskId } from "../helpers";
 import PlatformLogo from "../components/PlatformLogo";
 import { useRequests } from "../hooks/useRequests";
 import {
-  PLATFORM_NAME, PLATFORM_ORDER, DASH, accountLabel, cacheRate, dayKeys, dayMetrics, emptyCopy,
+  PLATFORM_NAME, PLATFORM_ORDER, DASH, accountLabel, cacheRate, dayKeys, daySummary, emptyCopy, topMetrics,
   filterPlatform, fmtHHMM, fmtInt, fmtSecs, fmtTokens, fmtTps, fmtWhen, footerText, modelName,
   rowsForDay, selectedIndex, slowWhy, sourceLabel, sourceNote, timeSplit, toMs, ttftTone, tzLabel,
   type ReqDay, type ReqFilter, type ReqPlatform, type ReqRow, type Tone,
@@ -95,7 +95,10 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
   const all = useMemo(() => rowsForDay(payload?.requests ?? [], day === "today" ? keys.today : keys.yest),
     [payload, day, keys.today, keys.yest]);
   const list = useMemo(() => filterPlatform(all, f), [all, f]);
-  const m = useMemo(() => dayMetrics(all), [all]);
+  const m = useMemo(() => topMetrics(all), [all]);
+  // 右侧「今天总计」：选了一家 ⇒ 这一家；「全部」⇒ 各家一行（不跨 AI 合计）
+  const sums = useMemo(() => (f === "all" ? PLATFORM_ORDER : [f]).map((p) => ({ p, s: daySummary(filterPlatform(all, p)) }))
+    .filter((x) => f !== "all" || x.s.n > 0), [all, f]);
   const sel = selectedIndex(list, selKey);
   const r: ReqRow | undefined = list[sel];
   const stale = err != null;
@@ -174,6 +177,7 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
             占位留在第一行，指标会掉到第二行的**左边**；`auto` 外边距在哪一行都把它推到右边。 */}
         <div data-req-kpis style={{ display: "flex", gap: 22, alignItems: "baseline", marginLeft: "auto" }}>
           {kpi(day === "today" ? "今天" : "昨天", m.n ? String(m.n) : DASH, "次")}
+          {/* 均速 / 首字两家以上有实测时写 —：四家口径不同，不跨 AI（各家的数在右侧「今天总计」） */}
           {kpi("均速", fmtTps(m.avgTps), "t/s")}
           {kpi("首字中位", m.ttftMedianS == null ? DASH : m.ttftMedianS.toFixed(1), "s")}
         </div>
@@ -256,6 +260,38 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
 
         <aside aria-label="请求详情" data-req-detail
                style={{ display: "flex", flexDirection: "column", gap: 16, padding: 18, border: `1px solid ${t.cardBorder}`, borderRadius: 14, background: t.cardBg, minHeight: 0, minWidth: 0, overflowY: "auto" }}>
+          {/* 用户 2026-10-22：「选择 claude 右侧不只是只有单条请求的内容，还有今天总请求的总结」 */}
+          <div data-req-summary={f} style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 14, borderBottom: `1px solid ${t.divider}`, flexShrink: 0 }}>
+            <div style={{ fontSize: 11, color: t.muted, ...NOWRAP }}>{day === "today" ? "今天" : "昨天"}总计{f === "all" ? " · 各家分开算" : ` · ${PLATFORM_NAME[f]}`}</div>
+            {f !== "all" && sums[0] && (() => {
+              const x = sums[0].s;
+              return <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px 16px" }}>
+                  {field("请求", x.n ? `${x.n} 次` : DASH)}
+                  {field("均速", x.avgTps != null ? `${fmtTps(x.avgTps)} t/s` : DASH, x.avgTps != null ? pal.num[f] : t.muted)}
+                  {field("输入", x.n ? fmtTokens(x.input) : DASH)}
+                  {field("输出", x.n ? fmtTokens(x.output) : DASH)}
+                  {field("缓存", x.cacheRate == null ? DASH : `${x.cacheRate} %`)}
+                  {field("首字中位", x.ttftMedianS == null ? DASH : `${x.ttftMedianS.toFixed(1)} s`)}
+                </div>
+                {x.n > 0 && <div data-req-summary-measured style={{ fontSize: 11, color: t.muted, ...NOWRAP }}>均速只算有实测速度的 {x.measured} / {x.n} 条</div>}
+              </>;
+            })()}
+            {f === "all" && (sums.length === 0
+              ? <div style={{ fontSize: 12, color: t.muted }}>{DASH}</div>
+              : sums.map(({ p, s: x }) => (
+                <div key={p} data-req-summary-row={p} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", columnGap: 12, alignItems: "center", fontSize: 12.5 }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, ...NOWRAP }}>
+                    <PlatformLogo platform={p} isDark={t.isDark} size={14} />{PLATFORM_NAME[p]}
+                    <span style={{ ...NUM, color: t.muted, fontSize: 11.5 }}>{x.n} 次</span>
+                  </span>
+                  <span style={{ ...NUM, color: t.text2, textAlign: "right" }}>{fmtTokens(x.input + x.output)}</span>
+                  <span style={{ ...NUM, fontWeight: 600, textAlign: "right", color: x.avgTps != null ? pal.num[p] : t.muted }}>
+                    {fmtTps(x.avgTps)}<span style={{ fontSize: 10, fontWeight: 400, color: t.muted }}> t/s</span>
+                  </span>
+                </div>
+              )))}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ ...NUM, fontSize: 11, color: t.muted }}>{r ? fmtWhen(toMs(r.t_end), tz) : ""}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>

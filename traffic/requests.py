@@ -22,10 +22,14 @@
 
 ## t/s 公式（每家一条，`est` 的口径统一：**分母里含首字时间** = 拿不到纯生成时长 = 估）
 
-* codex  = 可见输出 ÷ (响应结束 − 第一个输出项)。可见输出 = `output − reasoning`：推理 token 产生在
-           第一个输出项**之前**（推理项写盘时才算"首字"），留在分子里会虚高（实测中位 157 vs 102 t/s）。
+* 统一定义（三方评审 2026-10-22）：**同窗口解码速度** —— 分子只算分母那段时间里产出的 token。
+  thinking 在窗口里就算（Claude / agy），在首字之前就扣掉（Codex）。首字、工具、排队不进分母。
+* codex  = 可见输出 ÷ (响应结束 − 首字)。首字 = 开头**连续推理项的最后一项**写盘时刻（`_codex_out`；
+           原来取第一项，202/1039 条多推理项被算低，中位 54 vs 171）。可见输出 = `output − reasoning`：推理 token
+           产生在首字**之前**，留在分子里会虚高（实测中位 157 vs 102 t/s）。
            生成段 < 0.3 s 或可见输出为 0 ⇒ 退回 输出 ÷ 整条响应时长，`est=true`。
-* claude = output ÷ ((duration_ms − ttft_ms)/1000)；transcript 退回 output ÷ (末行 − 触发行)，`est=true`。
+* claude = output ÷ ((duration_ms − ttft_ms)/1000)；> `CLAUDE_FAST` 且生成段不到一半 ⇒ 整包，`est=true`；
+           transcript 退回 output ÷ (末行 − 触发行)，`est=true`。
 * agy    = usage `f3`(输出，**含 thinking**) ÷ streaming_duration，只在 streaming ≥ 0.3 s、可见输出 `f10` > 0、
            **streaming ≥ 一半模型时间（ttft + streaming）且结果 ≤ `TPS_CEIL`** 时算实测；
            否则 output ÷ (ttft + streaming)，`est=true`。
@@ -37,7 +41,9 @@
            2026-10-21 实测 439 条 est=false，按模型 × thinking 占比分组，f3÷streaming 组间一致
            （argon <20% / 20–50% / >50% = 138 / 230 / 157，flash 426 / 474 / 625），f10÷streaming 在 thinking
            占比 >50% 的组掉到 33 / 26（用户看到的「Gemini 3 t/s」= 95 可见 ÷ 31.4 s，那条 thinking 2854）。
-* grok   = outputTokens ÷ (apiDurationMs/1000)（一轮里所有模型调用的 API 时间之和）。
+* grok   = outputTokens ÷ (apiDurationMs/1000)（一轮里所有模型调用的 API 时间之和），**恒 `est=true`**：
+           分母含每次调用的首字等待（2026-10-22 前写死 est=false，三方评审一致判 bug）。
+* 托盘 / 悬停 / 刘海的会话速度只取**实测**；没有实测 ⇒ null（显示 —），不退回估值。「今日 · 均」不跨 AI。
 * 任何分母 ≤ 0、或输出为 0 ⇒ `tps = null`（不写 0：0 t/s 会把均速拉低，而那条请求根本没生成）。
 
 ## 增量与落盘（§7.0b 三问）
@@ -46,7 +52,7 @@
   （半行不消费）。锚点对不上 / 文件变短 / 换 inode ⇒ 这个文件从头重解（按 `key` 去重，不会双计）。
   agy 库记已处理的 `gen_metadata.idx`；`.zst` 记签名，变了整份重解。
 * 账本 `YYYY-MM.jsonl`（按 `t_end` 的本地月份）**只追加**；读取按 `key` 去重、新值覆盖，**新值里的 null
-  不覆盖旧值**（§7.0b 第 3 问）。`.window.json` 是窗口内记录的物化视图（丢了从账本重建）。
+  不覆盖旧值**（§7.0b 第 3 问）—— 速度字段 `SPEED_KEYS` 除外，整组取新值（见 `_merge`）。`.window.json` 是窗口内记录的物化视图（丢了从账本重建）。
 * 读失败：那个文件的游标**不前进**（下次重试），旧记录原样保留，顶层 `ok:false` + `error` + `stale_since`
   （第一次失败的时刻，连续失败不刷新）。"没装这个 CLI"（根目录不存在）是合法的空，不算失败。
 
@@ -100,13 +106,23 @@ KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "se
 
 MIN_GEN_S = 0.3              # 生成段短于它就不当分母（毫秒级的段除出来是噪音）
 AGY_STREAM_SHARE = 0.5       # agy：streaming 至少占模型时间这一比例才算实测（见模块 docstring agy 那条）
-TPS_CEIL = 1000.0            # agy：超过它的「实测」不可信，退回估值（本机实测流式档 p99 远低于它）
+TPS_CEIL = 1000.0            # 超过它的「实测」不可信，退回估值（agy 流式档、Claude span 的 p99 都远低于它）
+#: Claude span 整包守卫（三方评审 2026-10-22）：**快得离谱（> CLAUDE_FAST）且**生成段不到整条时长一半 ⇒ 估值。
+#:   ★ 不能照搬 agy 的「生成段 ≥ 一半」：Claude 的 tool_use 响应输出短、首字 ~3.4 s，生成段本来就短
+#:     （Opus 实测生成段 ≈ 0.09 s + out/108），单用占比会把 4338 条实测砍到 2143（本机 10-22 实测）。
+#:   被当实测的整包行 8 条：t/s 308–929、生成段只占 10–21%；实测 p99 217、p99.9 391。
+CLAUDE_STREAM_SHARE = 0.5
+CLAUDE_FAST = 300.0
 ANCHOR = 64
 DISCOVER_EVERY = 0           # 每次都全量发现（实测四家合计 < 70 ms）；留着这个钩子以备变慢
 #: 游标版本（与输出契约的 `V` 分开）。2 = 游标状态里加了 `open`（轮次开着没）；旧游标作废、全量重解一次。
 #: 3 = agy t/s 分子改成 f3（2026-10-21）；全量重解一次，按 `key` 覆盖旧记录里的错数。
 #: 4 = agy 整包响应退估值（2026-10-22，streaming 占比 + 上限）；同上，全量重解一次。
-CUR_V = 4
+#: 5 = 三方评审 t/s 修正（2026-10-22）：Codex 首字取开头连续推理项的**最后一项** · Claude span 整包守卫 ·
+#:     Grok 分母含首字 ⇒ 估值 · agy 缺 ttft ⇒ 估值。速度字段整组替换（见 `_merge`），旧数不复活。
+CUR_V = 5
+#: 速度相关字段：同一次计算的产物，必须整组替换 —— 新算法主动给 null（判不出）时，不许留着旧算法的数。
+SPEED_KEYS = ("ttft_ms", "gen_ms", "total_ms", "tps", "est")
 #: ★ 判停的兜底窗口：轮次开着、但这么久没写过文件 ⇒ 当它停了（崩溃 / 被杀 / Ctrl-C 没来得及写结束标记）。
 #:   取 10 分钟的依据（2026-10-19 实测 Claude transcript 一轮之内相邻两次写入的静默间隔，n=95684）：
 #:   p50 0.1 s · p90 10 s · p99 99 s · p99.9 600 s（长工具调用 / 子 agent / 等权限）。
@@ -179,7 +195,8 @@ def _i0(d, k):
 def agy_tps(out, vis, ttft, strm):
     """agy 一条响应的 `(tps, est)`（公式见模块 docstring agy 那条）。纯函数，ttft / strm 单位秒，可为 None。"""
     total = (ttft or 0) + (strm or 0)
-    if strm is not None and strm >= MIN_GEN_S and vis > 0 and strm >= AGY_STREAM_SHARE * total:
+    # ★ 缺 ttft 不能当 0：那样「streaming 占比」恒为 100%，整包响应也会过关（codex 评审 2026-10-22 的夹具）
+    if ttft is not None and strm is not None and strm >= MIN_GEN_S and vis > 0 and strm >= AGY_STREAM_SHARE * total:
         tps = _div(out, strm)
         if tps is not None and tps <= TPS_CEIL:
             return tps, False
@@ -216,13 +233,19 @@ def _whitelist(rec):
 
 
 def _merge(old, new):
-    """按 key 合并：新值覆盖旧值，**但新值里的 None 不覆盖旧值**（§7.0b 第 3 问）。"""
+    """按 key 合并：新值覆盖旧值，**但新值里的 None 不覆盖旧值**（§7.0b 第 3 问）。
+
+    ★ 例外：`SPEED_KEYS` 是同一次计算的产物，**整组**取新值（2026-10-22）。新算法判出「测不了」给 null 时，
+      留着旧算法的 t/s 就是把作废的数当现值（codex 评审用夹具证实：旧 120 在新值置 null 后仍保留）。
+      判据是新记录**带不带 `est`** —— 每条解析出来的记录都带；只补账号之类的局部更新不带，不动速度。
+    """
     if old is None:
         return _whitelist(new)
     out = dict(old)
+    whole = new.get("est") is not None
     for k in KEYS:
         v = new.get(k)
-        if v is not None:
+        if v is not None or (whole and k in SPEED_KEYS):
             out[k] = v
     return out
 
@@ -339,6 +362,23 @@ def _codex_timing(rec, ttft_at):
     return rec
 
 
+def _codex_out(state, ts, is_reasoning):
+    """记一个输出项。首字 = 开头**连续推理项**的最后一项写盘时刻（`rlead`）。
+
+    ★ 2026-10-22（Opus 评审实测）：1039 条里 202 条开头连着 ≥2 个推理项。原来取第一个推理项当首字，
+      后面那几段推理的生成时间落进分母、它们的 token 却被扣出分子 ⇒ 这批中位 54 t/s（单推理项的 171）。
+      推理项在**它自己**那段推理结束时落盘，所以开头连续推理的最后一项 ≈ 可见输出开始的时刻。
+    """
+    if state["first"] is None:
+        state["first"], state["rfirst"] = ts, is_reasoning
+        state["rlead"], state["rrun"] = (ts if is_reasoning else None), is_reasoning
+    elif state.get("rrun"):
+        if is_reasoning:
+            state["rlead"] = ts
+        else:
+            state["rrun"] = False
+
+
 def _codex_close(state, payload):
     """结束标记收的是**当前这一轮**：turn_id 对不上（旧轮的尾巴晚到）就不收。任一边没有 turn_id 时照收。"""
     tid = payload.get("turn_id") if isinstance(payload, dict) else None
@@ -363,8 +403,7 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
         if typ == b"response_item":
             is_out = pt in _CODEX_OUT or (pt == b"message" and b'"role":"assistant"' in line[:400])
             if is_out:
-                if state["first"] is None:
-                    state["first"], state["rfirst"] = ts, pt == b"reasoning"
+                _codex_out(state, ts, pt == b"reasoning")
                 state["last"] = ts
             elif state["first"] is None:
                 state["req"] = ts
@@ -392,14 +431,14 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
                 "session_req_n": state["n"],
                 "_file": path,                    # 内部字段：只给排障用，`_whitelist` 会剥掉
             }
-            _codex_timing(rec, state["first"] if state["rfirst"] else None)
+            _codex_timing(rec, state.get("rlead") if state["rfirst"] else None)
             if first_in_turn and state["turn"]:
                 pend = state["pend"]
                 pend[state["turn"]] = _whitelist(rec)
                 for k in list(pend)[:-8]:
                     del pend[k]
             state["turn_n"] += 1
-            state.update(req=ts, first=None, rfirst=False, last=None, tool=0)
+            state.update(req=ts, first=None, rfirst=False, rlead=None, rrun=False, last=None, tool=0)
             if rec["t_end"] >= horizon:
                 emit(rec)
             continue
@@ -410,8 +449,8 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
                 except ValueError:
                     continue
                 tid = p.get("turn_id") or (p.get("turn_attribution") or {}).get("turn_id")
-                state.update(turn=tid, turn_t0=ts, turn_n=0, req=ts, first=None, rfirst=False, last=None, tool=0,
-                             open=True)
+                state.update(turn=tid, turn_t0=ts, turn_n=0, req=ts, first=None, rfirst=False, rlead=None, rrun=False,
+                             last=None, tool=0, open=True)
                 continue
             if pt == b"task_complete":
                 try:
@@ -437,8 +476,7 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
                     pass
             if pt == b"item_completed" and any(x in line[:400] for x in _CODEX_MODEL_ITEMS):
                 # 模型项的完成事件紧挨着对应的 response_item 写盘 —— 是输出，不能把请求起点推到这里。
-                if state["first"] is None:
-                    state["first"], state["rfirst"] = ts, b'"type":"Reasoning"' in line[:400]
+                _codex_out(state, ts, b'"type":"Reasoning"' in line[:400])
                 state["last"] = ts
                 continue
             if pt == b"item_completed":
@@ -650,10 +688,14 @@ def _claude_rec(rid, t, sp, span_n):
         #   output/gen 中位 98 t/s，与无 thinking 的 93 条（131）同量级；扣掉 thinking 只剩 28，对不上。
         # ★ 生成段 < 0.3 s 不当分母：实测 528 条 span 里 118 条 `duration − ttft` ≤ 300 ms（整段几乎一次到达），
         #   直接除出来最高 75,875 t/s。退回 output ÷ duration，`est=true`。
-        if gen is not None and gen >= MIN_GEN_S * 1000:
-            tps, est = _div(out, gen / 1000.0), False
-        else:
-            tps, est = _div(out, dur / 1000.0 if dur is not None else None), True
+        # ★ 整包守卫（2026-10-22）：见 `CLAUDE_FAST` —— 只拦「快得离谱且生成段短」的，正常的短生成段不动。
+        tps, est = None, True
+        if gen is not None and gen >= MIN_GEN_S * 1000 and dur:
+            tps = _div(out, gen / 1000.0)
+            est = (tps is None or tps > TPS_CEIL
+                   or (tps > CLAUDE_FAST and gen < CLAUDE_STREAM_SHARE * dur))
+        if est:
+            tps = _div(out, dur / 1000.0 if dur is not None else None)
         sess = (t or {}).get("sess") or sp["sess"]
         base.update(t_start=sp["t0"], t_end=sp["t1"], model=sp["model"] or (t or {}).get("model"),
                     ttft_ms=ttft, gen_ms=gen, total_ms=dur, tps=tps, est=est,
@@ -1025,7 +1067,9 @@ def _grok_updates(lines, fresh, state, sess, title, ev, horizon, emit):
               "reasoning": _int(u.get("reasoningTokens")), "ttft_ms": ttft,
               "gen_ms": (api - ttft) if (api is not None and ttft is not None and api >= ttft) else None,
               "total_ms": el, "tool_ms": turn["tool"] if turn else None,
-              "tps": _div(out, api / 1000.0 if api is not None else None), "est": False,
+              # ★ 估值（三方评审 2026-10-22 一致）：apiDurationMs 是一轮里所有模型调用之和、含每次的首字等待，
+              #   而模块 docstring 规定「分母含首字 = 估」。原来写死 est=False，混进了均速。
+              "tps": _div(out, api / 1000.0 if api is not None else None), "est": True,
               "session_req_n": state["n"]})
     return state
 
@@ -1320,7 +1364,9 @@ def _day_stats(rs):
       均值拉偏几倍；按 token 加权又要各家同一个分母，而四家的分子分母口径本来就不同（见模块 docstring）。
     """
     tps = [r["tps"] for r in rs if r.get("tps") is not None and not r.get("est")]
-    ttft = [r["ttft_ms"] / 1000.0 for r in rs if r.get("ttft_ms") is not None]
+    # ★ 首字中位只取实测行（2026-10-22，gemini 评审）：整包行的生成时间全算在 ttft 里，
+    #   Gemini 87% 是整包行，混进来首字中位成了 10.3 s —— 那是整包总耗时，不是首字等待。
+    ttft = [r["ttft_ms"] / 1000.0 for r in rs if r.get("ttft_ms") is not None and not r.get("est")]
     return {"n": len(rs), "avg_tps": round(_median(tps), 1) if tps else None,
             "ttft_median_s": round(_median(ttft), 2) if ttft else None,
             "tokens": sum((r.get("input") or 0) + (r.get("output") or 0) for r in rs)}
@@ -1403,7 +1449,9 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
                 # ★★ 速度取最近一条**实测**（用户 2026-10-21「数字偏低」）：Claude 的 transcript 占位估值
                 #   约 2 s 后才被 OTel 实测覆盖，`agent_summary` 旁路请求只能估（p50 5.1）且挂在主会话上 ——
                 #   直接取最新一条，就是让这些估值盖住上一条实测。一条实测都没有才退回估值。
-                s["last_t_end"], s["tps"] = last["t_end"], (meas or last).get("tps")
+                # ★ 2026-10-22 三方评审：一条实测都没有 ⇒ null（托盘写 —），不再退回估值 —— 不加「估」字地
+                #   显示 5.2 / 31.7 t/s，会被读成「模型变慢了」。
+                s["last_t_end"], s["tps"] = last["t_end"], (meas.get("tps") if meas else None)
                 if s["title"] is None:
                     s["title"] = last.get("session_title")
             if s["active"] or last is not None:
@@ -1413,13 +1461,18 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
         tv = [s["tps"] for s in act if s["tps"] is not None]
         # ★ 只在同一个 AI 内相加；在跑但还没完成第一条响应的会话 tps 是 null，不计。
         plats[p] = {"running": bool(act), "n_sessions": len(act),
+                    "avg_tps": _day_stats([r for r in today if r["platform"] == p])["avg_tps"],
                     "tps": round(sum(tv), 1) if tv else None,
                     "tokens_today": sum((r.get("input") or 0) + (r.get("output") or 0)
                                         for r in today if r["platform"] == p),
                     "sessions": lst[:20]}
     ds = _day_stats(today)
+    # ★ 「今日 · 均」不跨 AI（2026-10-22 Opus 评审：四家口径不同，混在一起取中位违反「任何界面不跨 AI 合计」）：
+    #   今天只有一家有实测 ⇒ 就是那一家的；两家以上 ⇒ null，界面不显示「均」，各家的均速在 `platforms[p].avg_tps`。
+    meas_p = [p for p in PLATFORMS if plats[p]["avg_tps"] is not None]
     out = {"v": V, "generated_at": int(now), **_meta(cur), "platforms": plats,
-           "today": {"tokens": ds["tokens"], "avg_tps": ds["avg_tps"], "n": ds["n"]}}
+           "today": {"tokens": ds["tokens"], "avg_tps": plats[meas_p[0]]["avg_tps"] if len(meas_p) == 1 else None,
+                     "n": ds["n"]}}
     try:
         _atomic_write(Path(rt["ledger"]) / ".live.json", json.dumps(out, ensure_ascii=False))
     except OSError:

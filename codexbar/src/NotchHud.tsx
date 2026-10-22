@@ -613,7 +613,7 @@ export default function NotchHud() {
                     <div className="nh-foot" data-notch-runfoot style={{ height: 36, opacity: isOpen ? 1 : 0, transition: `opacity ${hT}` }}>
                       {/* ★ 今日总量与 Tab 标签、今日 Tab 同一个数（`todayView`，与菜单栏今日 Tab 同源）—— 同一张卡片里两个「今日」不能不一样；
                           快照还没读到才退回实时账本那份。均速 = 请求账本（与悬停面板同源）。 */}
-                      <span>今日 <b>{today ? fmtTok(today.totalTok) : live ? fmtTokens(live.today.tokens) : "—"}</b> · 均 <b>{HL.fmtAvg(live?.today.avg_tps)}</b> t/s</span>
+                      <span>今日 <b>{today ? fmtTok(today.totalTok) : live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
                       <a href="#" className="nh-link" data-notch-link="requests" onClick={go("requests")}>请求页 →</a>
                     </div>
                   </div>
@@ -672,7 +672,7 @@ export default function NotchHud() {
                       );
                     })}
                     <div className="nh-foot" data-notch-todayfoot style={{ height: 32 }}>
-                      <span>今日 <b>{live ? fmtCount(live.today.n) : "—"}</b> 次请求 · 均 <b>{HL.fmtAvg(live?.today.avg_tps)}</b> t/s</span>
+                      <span>今日 <b>{live ? fmtCount(live.today.n) : "—"}</b> 次请求{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
                       <a href="#" className="nh-link" data-notch-link="traffic" onClick={go("traffic")}>Token 消耗 →</a>
                     </div>
                   </div>

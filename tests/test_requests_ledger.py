@@ -534,9 +534,11 @@ class LiveShowsTheLastMeasuredSpeed(unittest.TestCase):
         by = self.live([(60, 90.0, False, "S"), (20, 130.0, False, "S"), (5, 4.0, True, "S")])
         self.assertEqual(by["S"]["tps"], 130.0, "取的是最近一条实测，不是最早一条")
 
-    def test_a_session_with_only_estimates_still_shows_one(self):
+    def test_a_session_with_only_estimates_shows_a_dash(self):
+        """★ 2026-10-22 三方评审一致（用户在 PLAN 上拍板）：托盘只用实测。原来退回估值，不加「估」字地显示
+        5.2 / 31.7 t/s，会被读成「模型变慢了」。"""
         by = self.live([(30, 20.0, True, "S"), (5, 35.0, True, "S")])
-        self.assertEqual(by["S"]["tps"], 35.0, "一条实测都没有 ⇒ 退回最近的估值，不画成 —")
+        self.assertIsNone(by["S"]["tps"], "一条实测都没有 ⇒ null（托盘写 —），不退回估值")
 
     def test_last_t_end_still_follows_the_newest_record(self):
         by = self.live([(30, 118.0, False, "S"), (5, 5.1, True, "S")])

@@ -184,7 +184,8 @@ export interface DayMetrics { n: number; avgTps: number | null; ttftMedianS: num
  */
 export function dayMetrics(rows: readonly ReqRow[]): DayMetrics {
   const tps = rows.filter((r) => !r.est).map((r) => r.tps).filter((x): x is number => x != null);
-  const ttft = rows.map((r) => r.ttft_ms).filter((x): x is number => x != null);
+  // ★ 首字中位只取实测行（2026-10-22，与后端 `_day_stats` 同）：整包行的生成时间全在 ttft 里。
+  const ttft = rows.filter((r) => !r.est).map((r) => r.ttft_ms).filter((x): x is number => x != null);
   const t = median(ttft);
   const a = median(tps);
   return { n: rows.length, avgTps: a == null ? null : pyRound1(a), ttftMedianS: t == null ? null : t / 1000 };
@@ -278,6 +279,34 @@ export type Tone = "normal" | "muted" | "amber";
 export function ttftTone(ms: number | null): Tone {
   if (ms == null) return "muted";
   return ms > SLOW_TTFT_MS ? "amber" : "normal";
+}
+
+/**
+ * 顶栏三项（不跟筛选走，画板口径）。★ 速度与首字**不跨 AI**（2026-10-22 Opus 评审：四家口径不同，混在一起取中位
+ * 违反「任何界面不跨 AI 合计」）：只有一家有实测 ⇒ 就是那一家的；两家以上 ⇒ null（写 —，各家的数在右侧「今天总计」）。
+ */
+export function topMetrics(rows: readonly ReqRow[]): DayMetrics {
+  const m = dayMetrics(rows);
+  const measured = PLATFORM_ORDER.filter((p) => rows.some((r) => r.platform === p && !r.est && r.tps != null));
+  if (measured.length <= 1) return measured.length ? { ...dayMetrics(rows.filter((r) => r.platform === measured[0])), n: m.n } : m;
+  return { n: m.n, avgTps: null, ttftMedianS: null };
+}
+
+/** 右侧「今天总计」（用户 2026-10-22：选了 Claude，右侧除了单条，还要今天总请求的总结）。只算一家，不跨 AI。 */
+export interface DaySummary {
+  n: number; input: number; cached: number; output: number; cacheRate: number | null;
+  avgTps: number | null; ttftMedianS: number | null;
+  /** 有实测速度的条数（均速只取它们） */
+  measured: number;
+}
+
+export function daySummary(rows: readonly ReqRow[]): DaySummary {
+  const m = dayMetrics(rows);
+  const sum = (k: "input" | "cached" | "output") => rows.reduce((a, r) => a + (r[k] ?? 0), 0);
+  const input = sum("input"), cached = sum("cached");
+  return { n: rows.length, input, cached, output: sum("output"), cacheRate: cacheRate(input, cached),
+           avgTps: m.avgTps, ttftMedianS: m.ttftMedianS,
+           measured: rows.filter((r) => !r.est && r.tps != null).length };
 }
 
 /** 缓存命中率（%，整数）。★ `input` 按含缓存的总输入算（契约口径：输入含缓存命中）。 */
