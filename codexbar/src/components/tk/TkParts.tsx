@@ -28,7 +28,7 @@ export function InfoI({ color }: { color: string }) {
 }
 
 /**
- * 刷新：图标 +「N 分钟前」（860 只留图标），完整时间在悬停提示。
+ * 刷新：图标 +「N mins」（绿；超过 30 分钟琥珀；860 只留图标），完整时间在悬停提示。
  * ★ 稿上没有点击 —— 现行「点了重扫、扫描中转圈」是已有功能，保留（偏离 R2-3）。
  * 颜色分级沿用旧 `StaleHint`：≤ 30 分钟灰、> 30 分钟琥珀（稿里琥珀正是 43 分钟没刷新）。
  */
@@ -46,11 +46,12 @@ export function RefreshAgo({ t, generatedAt, L, busy, onRefresh, hint }: {
   if (generatedAt == null) return null;
   const at = new Date(generatedAt * 1000);
   const mins = Math.max(0, Math.floor((now - at.getTime()) / 60_000));
-  const ago = mins < 1 ? "刚刚" : mins >= 60 ? `${Math.floor(mins / 60)} 小时前` : `${mins} 分钟前`;
+  // 用户 2026-10-22：绿色、「分钟」写 min / mins、不要「前」
+  const ago = mins < 1 ? "刚刚" : mins >= 60 ? `${Math.floor(mins / 60)} h` : `${mins} ${mins === 1 ? "min" : "mins"}`;
   const tz = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(at)
     .find((x) => x.type === "timeZoneName")?.value ?? "";
   const hhmm = at.toTimeString().slice(0, 5);
-  const color = busy ? p.accent : mins > 30 ? p.amber : p.label;
+  const color = busy ? p.accent : mins > 30 ? p.amber : p.up;
   return (
     <span data-refresh onClick={busy ? undefined : onRefresh}
           title={busy ? "扫描中…" : `上次刷新 ${hhmm}（${tz}）· ${hint ?? "点击重新扫描本机 CLI 记录（只读本地文件，不消耗额度）"}`}
@@ -59,7 +60,7 @@ export function RefreshAgo({ t, generatedAt, L, busy, onRefresh, hint }: {
                    userSelect: "none", whiteSpace: "nowrap", flexShrink: 0 }}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
            style={{ animation: busy ? "cbSpin .8s linear infinite" : "none", transformOrigin: "center" }}>
-        <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke={busy ? p.accent : p.label}
+        <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke={color}
               strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       {L < 2 && <span>{busy ? "扫描中" : ago}</span>}
