@@ -62,6 +62,7 @@ pub fn capsule_bg(ap: Appearance) -> Rgb {
 }
 
 /// 菜单栏的参考底色（对比度闸用）。真机菜单栏半透明、压在壁纸上，没有固定底色 —— 这是去底色的代价，用户看过 demo 后接受。
+#[cfg(test)]
 pub fn menubar_ref(ap: Appearance) -> Rgb {
     match ap { Appearance::Light => Rgb(0xEC, 0xEC, 0xEC), Appearance::Dark => Rgb(0x2A, 0x2A, 0x2C) }
 }
@@ -824,6 +825,7 @@ fn draw_now(app: &tauri::AppHandle) {
                 }
                 let _ = tray.set_icon(Some(img));
                 let _ = tray.set_icon_as_template(false);
+                draw::native_size();
             }
             Err(e) => fail_open(app, &inp, &format!("decode: {}", e)),
         },
@@ -919,7 +921,7 @@ pub mod draw {
     const FONT_700: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-700-normal.woff2");
 
     /// 只建一次的资源（AppKit 对象，Retained 不是 Send，存成指针；进程内永不释放）。
-    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, f700: usize, fsup: usize,
+    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f600: usize, f700: usize, fsup: usize,
                  cw: f64, cw_sup: f64, sup_raise: f64, icon: usize }
     // 只在持有它的线程（主线程 / 单测线程）上用
     static RES: std::sync::OnceLock<Res> = std::sync::OnceLock::new();
@@ -964,7 +966,7 @@ pub mod draw {
             let ss: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(fsup, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
             let cw = if sz.width > 0.0 { sz.width / 10.0 } else { FONT_SIZE * 0.6 };
-            Res { logos, logos_light, ghosts, f500, f600, f700, fsup, cw,
+            Res { logos, logos_light, ghosts, f600, f700, fsup, cw,
                   cw_sup: if ss.width > 0.0 { ss.width / 10.0 } else { SUP_SIZE * 0.6 },
                   // 上标的顶对齐正文的顶：各自竖直居中后，上标再抬高两者行高差的一半
                   sup_raise: if sz.height > 0.0 && ss.height > 0.0 { (sz.height - ss.height) / 2.0 } else { 2.5 }, icon }
@@ -1235,7 +1237,7 @@ pub mod draw {
         restore();
     }
 
-    /// 画一帧 → PNG（2× 位图，`set_icon` 按 18 pt 高缩回去）。失败返回 None（调用方 fail-open）。
+    /// 画一帧 → PNG（2× 位图；`set_icon` 会缩到 18 pt 高，`native_size` 再改回 `H`）。失败返回 None（调用方 fail-open）。
     pub fn render(f: &Frame, ap: Appearance, hide_logos: bool, t: &TitleLayer) -> Option<Vec<u8>> {
         objc2::rc::autoreleasepool(|_| unsafe { render_inner(f, ap, hide_logos, t) })
     }
@@ -1332,6 +1334,51 @@ pub mod draw {
             }
         }
         None
+    }
+
+    /// ★★ 按 1 : 1 显示（用户 2026-10-22「为什么 tollm 的 svg 可以做那么大」）。
+    /// `tray-icon` 0.24 的 `set_icon` 把任何图都**硬缩到 18 pt 高**（`platform_impl/macos/mod.rs` 的 `icon_height = 18.0`），
+    /// 所以我们画的 22 pt 图在菜单栏上只剩 82%：logo 18 → 14.7、字 15 → 12.3（改之前的 20 pt 图也被缩到 90%）。
+    /// Tollm 是原生 Swift，直接给 22 pt 的图，logo 17 / 字 14 原样显示 —— 差的就是这一步。
+    /// 这里在 `set_icon` 之后（它是同步的：tauri 的 `run_item_main_thread!` 等主线程执行完才返回）把按钮上那张图的尺寸改回
+    /// `H` 高、宽按比例，再让按钮重新量一次尺寸。找按钮的方式同 `lib.rs::paint_tray_title`（按类名在本进程的窗口里找）。
+    /// fail-open：找不到就保持 18 pt（只是小一点）。主线程。
+    pub fn native_size() {
+        use objc2_app_kit::NSApplication;
+        let Some(mtm) = objc2_foundation::MainThreadMarker::new() else { return };
+        let app = NSApplication::sharedApplication(mtm);
+        unsafe fn find(v: *mut AnyObject) -> *mut AnyObject {
+            let is_btn: bool = msg_send![v, isKindOfClass: class!(NSStatusBarButton)];
+            if is_btn { return v; }
+            let subs: *mut AnyObject = msg_send![v, subviews];
+            let n: usize = msg_send![subs, count];
+            for i in 0..n {
+                let sv: *mut AnyObject = msg_send![subs, objectAtIndex: i];
+                let b = find(sv);
+                if !b.is_null() { return b; }
+            }
+            std::ptr::null_mut()
+        }
+        unsafe {
+            for w in app.windows().iter() {
+                if !w.class().name().to_string_lossy().contains("StatusBar") { continue; }
+                let wp: *const AnyObject = (&*w as *const objc2_app_kit::NSWindow).cast();
+                let cv: *mut AnyObject = msg_send![wp, contentView];
+                if cv.is_null() { continue; }
+                let btn = find(cv);
+                if btn.is_null() { continue; }
+                let img: *mut AnyObject = msg_send![btn, image];
+                if img.is_null() { continue; }
+                let sz: NSSize = msg_send![img, size];
+                if sz.height <= 0.0 || (sz.height - H).abs() < 0.01 { return; }
+                let _: () = msg_send![img, setSize: NSSize::new(sz.width * H / sz.height, H)];
+                // `tray-icon` 自己也是先 setImage 再 setSize —— 按钮在排版时才读尺寸；这里让它重新量一次
+                let _: () = msg_send![btn, invalidateIntrinsicContentSize];
+                let _: () = msg_send![btn, setNeedsLayout: true];
+                let _: () = msg_send![btn, setNeedsDisplay: true];
+                return;
+            }
+        }
     }
 
     /// 「减弱动态效果」。
