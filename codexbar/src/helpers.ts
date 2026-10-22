@@ -149,8 +149,8 @@ export function cardLeftText(days: number): string {
   return `${Math.max(1, Math.floor(days * 24))}小时`;
 }
 
-/** ≤ this many days left ⇒ amber + pulse (design handoff §4). */
-export const CARD_WARN_DAYS = 3;
+/** ≤ this many days left ⇒ amber + pulse (design handoff §4). User 2026-10-22: 3 → 2 (「快到期按卡 ≤2 天」). */
+export const CARD_WARN_DAYS = 2;
 
 export const now = () => Date.now() / 1000;
 export const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
