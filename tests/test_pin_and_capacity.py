@@ -12,12 +12,13 @@
   **永远说不上话**。新实现只有一处不同，而那是全部：**未置顶的号在第二段全部并列**
   （`_pin_rank` 对它们一律返回 `len(pinned)`），于是容量立刻接管。
 
-## 三段排序键
+## 三段排序键（2026-10-22 第二次反转：置顶跨档）
 
-    (套餐档, 置顶队列位次, 最紧窗口已用%)
+    (置顶队列位次, 套餐档, 最紧窗口已用%)
 
-- **套餐档** —— Plus 优先、Pro 保底（2026-09-07 策略 C，**本次仍不变**）；
-- **置顶** —— 用户点亮的号，按点击先后排队，只在档内生效；
+- **置顶** —— 用户点亮的号，按点击先后排队。★ 2026-10-22 用户：「#7 越过 Plus 优先、Pro 保底，
+  置顶优先，其次是置顶的顺序，最后是余额」⇒ **跨档**（原来只在档内生效）；
+- **套餐档** —— 没置顶的号之间仍 Plus 优先、Pro 保底（策略 C；用户只放开了置顶）；
 - **已用%** —— **默认口径**：没有任何置顶时，全池按它排 = 容量最高优先。
 
 ## 拖拽顺序去哪了
@@ -109,14 +110,19 @@ class PinningJumpsTheQueue(unittest.TestCase):
         self.assertEqual(order(slots, ["已删除", "a"]), ["A", "B"])
 
 
-class PlanTierStillComesFirst(unittest.TestCase):
-    """★ 「Plus 优先、Pro 保底」是 2026-09-07 用户自己定的，本次**明确保留**。"""
+class PinsCrossThePlanTier(unittest.TestCase):
+    """★ 2026-10-22 用户：置顶越过「Plus 优先、Pro 保底」；没置顶的号之间策略 C 照旧。"""
 
-    def test_a_pinned_pro_still_loses_to_any_plus(self):
+    def test_a_pinned_pro_beats_any_unpinned_plus(self):
+        slots = {"p": slot("Pro1", plan="pro", used=0.0),
+                 "u": slot("Plus9", plan="plus", used=0.0)}
+        self.assertEqual(order(slots, ["p"])[0], "Pro1", "★ 置顶的 Pro 没排到没置顶的 Plus 前面")
+
+    def test_pins_follow_click_order_across_tiers(self):
         slots = {"p": slot("Pro1", plan="pro", used=0.0),
                  "u": slot("Plus9", plan="plus", used=99.0)}
-        self.assertEqual(order(slots, ["p", "u"])[0], "Plus9",
-                         "★ 置顶凌驾了套餐档 —— 它只在档内生效")
+        self.assertEqual(order(slots, ["u", "p"]), ["Plus9", "Pro1"])
+        self.assertEqual(order(slots, ["p", "u"]), ["Pro1", "Plus9"], "★ 置顶之间按点击先后，不按套餐档")
 
     def test_capacity_never_crosses_the_tier_either(self):
         slots = {"p": slot("Pro1", plan="pro", used=0.0),
