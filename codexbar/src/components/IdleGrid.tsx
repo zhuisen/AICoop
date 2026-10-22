@@ -48,19 +48,23 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
   }, []);
 
   const cells = data?.cells ?? [];
-  const g = G.gridLayout(cells.length);
   // 周额度 < 10%：那一家格子左上角的小红牌「周 N%」（用户 2026-10-22 选 A1，取代底部长条）
   const weekOf = new Map((data?.warns ?? []).map((w) => [w.key, w.rem]));
   // 藏起来的几家（B1）：面板底部一行一家，带「撤销」
   const snoozed = cells.length ? data?.snoozed ?? [] : [];
+  // 面板宽跟格子数走；比格子宽（只有「已隐藏」行撑着）时格子居中
+  const panelW = G.panelWidth(cells.length, snoozed.length > 0);
+  const g0 = G.gridLayout(cells.length);
+  const ox = (panelW - G.panelWidth(cells.length, false)) / 2;
+  const g = ox ? { ...g0, pos: g0.pos.map((p) => ({ x: Math.round((p.x + ox) * 2) / 2, y: p.y })) } : g0;
   const noteTop = g.h - G.PAD + 2;
   const panelH = snoozed.length ? noteTop + snoozed.length * G.NOTE_H + G.PAD - 2 : g.h;
   const hov = hovKey === null ? -1 : cells.findIndex((c) => c.key === hovKey);
 
   // 高度上报：Rust 按它摆窗口（与在跑面板同一条命令）。只有这一轮是空闲面板时才报 —— 两个面板共用一个窗口高度
   useEffect(() => {
-    if (active && (mode === "open" || mode === "closed")) invoke("tpshover_resize", { h: panelH }).catch(noop);
-  }, [panelH, mode, active]);
+    if (active && (mode === "open" || mode === "closed")) invoke("tpshover_resize", { h: panelH, w: panelW }).catch(noop);
+  }, [panelH, panelW, mode, active]);
 
   // ★ 面板不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 悬停格子（高亮 + 出 ×）靠 Rust 推的光标坐标（同在跑面板展开会话）
   useEffect(() => {
@@ -137,7 +141,7 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
   return (
     <>
       <div className="ig-shell" data-idle-panel data-idle-h={panelH}
-           style={{ left: px, top: py, width: G.PANEL_W, height: panelH, opacity: isOpen ? 1 : 0,
+           style={{ left: px, top: py, width: panelW, height: panelH, opacity: isOpen ? 1 : 0,
                     transform: `scale(${isOpen || reduce ? 1 : 0.97})`, pointerEvents: isOpen ? "auto" : "none",
                     transition: shellTr }}
            onMouseLeave={() => setHovKey(null)}>

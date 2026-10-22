@@ -50,6 +50,8 @@ static SUPPRESS: AtomicBool = AtomicBool::new(false);
 /// 每次打开 / 关闭 +1；延迟隐藏核对自己那一代（中途又打开了就不许把它藏掉）。
 static GEN: AtomicU64 = AtomicU64::new(0);
 static PANEL_H: Mutex<f64> = Mutex::new(240.0);
+/// 空闲面板当前宽（网页报上来；格子满一行时 = `IDLE_PANEL_W`）。
+static IDLE_W: Mutex<f64> = Mutex::new(IDLE_PANEL_W);
 static GEOM: Mutex<Option<Tray>> = Mutex::new(None);
 /// 这一次打开的是哪种面板：空闲额度格子（true）还是在跑速度面板（false）。在 `on_enter` 定下，关闭前不变。
 static IDLE_PANEL: AtomicBool = AtomicBool::new(false);
@@ -86,7 +88,7 @@ fn pill_and_panel(t: &Tray) -> (serde_json::Value, f64) {
     if IDLE_PANEL.load(Ordering::SeqCst) {
         let pill = if crate::tray_pill::idle_icons_shown() { crate::tray_pill::idle_rects() }
                    else { serde_json::json!({ "width": t.w, "height": t.h, "segments": [] }) };
-        (pill, IDLE_PANEL_W)
+        (pill, *IDLE_W.lock().unwrap())
     } else {
         (crate::tray_pill::segment_rects(), PANEL_W)
     }
@@ -459,8 +461,10 @@ static IDLE_CELLS: AtomicBool = AtomicBool::new(false);
 pub fn idle_has_cells() -> bool { IDLE_CELLS.load(Ordering::SeqCst) }
 pub fn set_idle_cells(n: usize) { IDLE_CELLS.store(n > 0, Ordering::SeqCst); }
 
-pub fn set_panel_height(app: &AppHandle, h: f64) {
+/// 高度两个面板都报；宽只有空闲面板报（格子少于一行时收窄，`idleGridLayout.ts::panelWidth`）。
+pub fn set_panel_size(app: &AppHandle, h: f64, w: Option<f64>) {
     *PANEL_H.lock().unwrap() = h.clamp(40.0, 640.0);
+    if let Some(w) = w { *IDLE_W.lock().unwrap() = w.clamp(100.0, IDLE_PANEL_W); }
     if PHASE.load(Ordering::SeqCst) == OPEN { place(app, false); }
 }
 

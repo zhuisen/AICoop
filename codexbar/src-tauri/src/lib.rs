@@ -854,11 +854,11 @@ fn tpshover_dismiss(app: AppHandle) {
 
 /// 悬停面板量出来的自然高度。
 #[tauri::command]
-fn tpshover_resize(app: AppHandle, h: f64) {
+fn tpshover_resize(app: AppHandle, h: f64, w: Option<f64>) {
     #[cfg(target_os = "macos")]
-    tps_hover::set_panel_height(&app, h);
+    tps_hover::set_panel_size(&app, h, w);
     #[cfg(not(target_os = "macos"))]
-    let _ = (app, h);
+    let _ = (app, h, w);
 }
 
 /// 悬停面板的版面（窗口内坐标：面板、胶囊、各段 logo）。`tpshover-open` 带的是同一份；这里给首次挂载用。

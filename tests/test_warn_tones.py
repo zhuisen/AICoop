@@ -136,6 +136,30 @@ class OnTheRealBundle(unittest.TestCase):
         ev = pg.evaluate("() => window.__calls.filter(c => c.c === 'plugin:event|emit').map(c => [c.a.event, c.a.payload])")
         self.assertIn(["idle-snooze", {"key": "grok", "undo": True}], [list(x) for x in ev])
 
+    def _width(self, q):
+        pg = self._page("harness-tpshover.html?hv=idle&" + q, w=520, h=300)
+        return pg.evaluate("""() => { const s = document.querySelector('[data-idle-panel]').getBoundingClientRect();
+          const cs = [...document.querySelectorAll('[data-idle-cell]')].map(e => e.getBoundingClientRect());
+          const rs = window.__calls.filter(c => c.c === 'tpshover_resize').map(c => c.a.w);
+          return { w: s.width, left: cs.length ? Math.min(...cs.map(r => r.left)) - s.left : 0,
+                   right: cs.length ? s.right - Math.max(...cs.map(r => r.right)) : 0, sent: rs[rs.length - 1] }; }""")
+
+    def test_the_panel_shrinks_to_its_cells(self):
+        """★ 用户 2026-10-22「隐藏 grok 后，边框和位置也要调整」：4 格满一行 435；藏掉一家剩 3 格 ⇒
+        面板收到正好包住 3 格（左右留白相等），宽度报给 Rust 让它在托盘下方重新居中。"""
+        full = self._width("hvcells=4")
+        self.assertAlmostEqual(full["w"], 435, delta=0.6, msg="已知阳性：满一行仍是 435")
+        three = self._width("hvsnoozed=1")
+        self.assertLess(three["w"], 340, "★ 藏掉一家后面板还是 4 格宽")
+        self.assertAlmostEqual(three["left"], three["right"], delta=1, msg="★ 格子右边空出一块")
+        self.assertAlmostEqual(three["sent"], three["w"], delta=0.6, msg="★ 宽度没报给 Rust —— 窗口不会重新居中")
+
+    def test_a_single_cell_still_fits_the_note(self):
+        r = self._width("hvcells=1&hvsnoozed=1")
+        self.assertGreaterEqual(r["w"], 280, "「已隐藏 … · 撤销」那行被挤")
+        self.assertAlmostEqual(r["left"], r["right"], delta=1, msg="只剩一格时格子要居中")
+
+
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class MenubarSendsIt(unittest.TestCase):
     def test_menubar_sends_the_weekly_warn(self):

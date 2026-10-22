@@ -67,6 +67,19 @@ export function gridLayout(n: number): GridLayout {
   return { cw, ch: CELL_H, h, pos };
 }
 
+/** 底部「已隐藏 X … · 撤销」一行要的最小面板宽（11px 字，最长那家 Claude + 倒计时实测约 240）。 */
+export const NOTE_MIN_W = 280;
+
+/** 面板宽跟着格子数走（用户 2026-10-22「隐藏 grok 后边框和位置也要调整」）：满一行 = `PANEL_W`，
+ *  少于一行 ⇒ 收到正好包住这几格；底部有「已隐藏」行时不窄于 `NOTE_MIN_W`。Rust 按它居中在托盘下方。 */
+export function panelWidth(n: number, hasNote: boolean): number {
+  if (n >= COLS) return PANEL_W;
+  const cw = (PANEL_W - 2 * PAD - GAP * (COLS - 1)) / COLS;
+  // + 2：外壳 1px 描边（border-box），不算的话右边比左边少 2px
+  const w = n > 0 ? 2 + 2 * PAD + n * cw + (n - 1) * GAP : 0;
+  return Math.round(Math.max(w, hasNote ? NOTE_MIN_W : 0) * 2) / 2;
+}
+
 export function cellDelay(k: number): number { return 80 + k * 45; }
 
 /** Rust `tpshover-open` 给的版面（`mode: "idle"` 那份）。只取这里要的几样。 */
