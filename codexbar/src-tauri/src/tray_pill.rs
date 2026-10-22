@@ -18,23 +18,31 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 pub const KEYS: [&str; 4] = ["codex", "claude", "agy", "grok"];
-/// ★ 用户 2026-10-21「胶囊内容需要放大，AI svg 和字体放大，优先 AI svg」：高 18 → 20、logo 12 → 16（+33%）、
-///   字 11.5 → 12.5（+9%）。菜单栏高 22–24 pt，20 是不顶边的上限。段间距 / 内边距不变。
-pub const H: f64 = 20.0;
+/// ★ 用户 2026-10-22 从 demo（`~/Downloads/codexbar_tray_pill_nobg_demo_20261022.html`）选 B：**在跑胶囊去掉底色**，
+///   图 20 → 22、logo 16 → 18、字 12.5 → 13.5，左右内边距收到 1 / 2。没有底色块就不用上下留空，22 贴着菜单栏可用高度。
+///   （上一档 2026-10-21「胶囊内容需要放大，优先 AI svg」：18 → 20、logo 12 → 16、字 11.5 → 12.5。）
+pub const H: f64 = 22.0;
+/// 空闲「AI 图标」那一档仍画底色块（用户这次只改在跑胶囊）：块高 20、圆角 10，竖直居中在 22 的图里，外观与改之前一致。
+const BG_H: f64 = 20.0;
 const RADIUS: f64 = 10.0;
-pub const LOGO: f64 = 16.0;
+pub const LOGO: f64 = 18.0;
 const INNER_GAP: f64 = 3.0;
 /// logo 与数字之间。交接包是段内统一 3；真机上 logo 贴着数字（用户 2026-10-19「1 家状态下 svg 和速度太近」），放到 5。
 pub const LOGO_GAP: f64 = 5.0;
-/// 基准宽 W =「1 家 · Claude · 3 个会话」的宽度（设计稿 96 pt；放大后按同一式子 = 4 + 16 + 5 + 3×7.5 + 3 + 3×7.5 + 3 + 3×7.5 + 7 ≈ 106）。
-/// 2 家起胶囊 min-width = W。
-pub const W_MIN: f64 = 106.0;
+/// ✗ 已删 `W_MIN`（2 家起胶囊最小宽 106）：它是给底色块定形的；去掉底色后多出来的空档只是菜单栏里一段空白（2026-10-22）。
 /// 停下：那一段降到 40%、保持最后的数字 3 s，然后退出。
 pub const HOLD_SECS: f64 = 3.0;
 pub const STOP_ALPHA: f64 = 0.4;
-pub const FONT_SIZE: f64 = 12.5;
-/// 「t/s」「· N」：#f2f4f7 @ .62（Main.html）
+pub const FONT_SIZE: f64 = 13.5;
+/// 「t/s」：文字色 @ .62（Main.html）
 const SUFFIX_ALPHA: f64 = 0.62;
+/// 多会话：照 Tollm 的状态栏（`tollm/Sources/Tollm/MenuBar/StatusIcon.swift`）—— 紧跟在「t/s」后面的上标「×N」，
+///   小一号粗体、文字色 @ .8，不再写成同字号的「 · N」（用户 2026-10-22「学习 tollm 的方式处理」）。
+///   Tollm 是 13 pt 正文配 8.5 pt 上标；这里 13.5 配 9。上标的顶与正文的顶对齐（抬高 = 两者行高差的一半）。
+pub const SUP_SIZE: f64 = 9.0;
+const SUP_ALPHA: f64 = 0.8;
+/// 上标与「t/s」之间
+const SUP_GAP: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Appearance { Light, Dark }
@@ -46,24 +54,35 @@ impl Rgb {
     pub fn f(self) -> (f64, f64, f64) { (self.0 as f64 / 255.0, self.1 as f64 / 255.0, self.2 as f64 / 255.0) }
 }
 
-/// 胶囊底色：浅色菜单栏 #1C2128、深色菜单栏 #3D4552（交接包 README「平台顺序与颜色」）。
+/// 底色块：浅色菜单栏 #1C2128、深色菜单栏 #3D4552（交接包 README「平台顺序与颜色」）。
+/// ★ 2026-10-22 起只给空闲「AI 图标」那一档用；在跑胶囊没有底色。
 pub fn capsule_bg(ap: Appearance) -> Rgb {
     match ap { Appearance::Light => Rgb(0x1C, 0x21, 0x28), Appearance::Dark => Rgb(0x3D, 0x45, 0x52) }
 }
 
-/// 数字色（按槽位 Codex / Claude / Gemini / grok）。
-/// ⚠️ 偏离交接包一处（事实赢）：交接包要求实装方实测对比度 ≥ 4.5 : 1。实测深色菜单栏胶囊 #3D4552 上
-///   Claude #F09A76 只有 **4.42 : 1**（其余 7 个 4.66–8.69）。改成同色相最小提亮 #F19D7B（4.54 : 1），
-///   肉眼几乎分不出；闸 `number_colors_clear_4_5_to_1_on_their_capsule`。
+/// 菜单栏的参考底色（对比度闸用）。真机菜单栏半透明、压在壁纸上，没有固定底色 —— 这是去底色的代价，用户看过 demo 后接受。
+pub fn menubar_ref(ap: Appearance) -> Rgb {
+    match ap { Appearance::Light => Rgb(0xEC, 0xEC, 0xEC), Appearance::Dark => Rgb(0x2A, 0x2A, 0x2C) }
+}
+
+/// 数字色（按槽位 Codex / Claude / Gemini / grok），直接压在菜单栏上。
+/// 浅色菜单栏：同色相深一档（2026-10-22 去底色；原来那套亮色是配深色胶囊底的）。深色菜单栏沿用原来深色那套
+///   （其中 Claude #F19D7B 是对 #3D4552 胶囊底调出 4.54 : 1 的那一版）。闸 `number_colors_clear_4_5_to_1_on_the_menubar`。
 pub fn num_color(ap: Appearance, slot: usize) -> Rgb {
-    const LIGHT: [Rgb; 4] = [Rgb(0x2D, 0xD4, 0xBF), Rgb(0xE0, 0x78, 0x4F), Rgb(0x4D, 0x9F, 0xFF), Rgb(0xA9, 0x9C, 0xFA)];
+    const LIGHT: [Rgb; 4] = [Rgb(0x0A, 0x74, 0x68), Rgb(0xB0, 0x4A, 0x1C), Rgb(0x1C, 0x63, 0xC4), Rgb(0x5F, 0x4B, 0xD0)];
     const DARK: [Rgb; 4] = [Rgb(0x5E, 0xEA, 0xD4), Rgb(0xF1, 0x9D, 0x7B), Rgb(0x7A, 0xB8, 0xFF), Rgb(0xB9, 0xAE, 0xFB)];
     match ap { Appearance::Light => LIGHT[slot], Appearance::Dark => DARK[slot] }
 }
 
-/// 在跑但还没出数：写 `—`（灰 #aab3c0，Main.html「Claude 还没出数」那一行）。
+/// 在跑但还没出数：写 `—`。深色菜单栏灰 #aab3c0（Main.html「Claude 还没出数」那一行）；浅色菜单栏 #5f6672。
 pub const DASH_COLOR: Rgb = Rgb(0xAA, 0xB3, 0xC0);
-pub const TEXT_COLOR: Rgb = Rgb(0xF2, 0xF4, 0xF7);
+pub fn dash_color(ap: Appearance) -> Rgb {
+    match ap { Appearance::Light => Rgb(0x5F, 0x66, 0x72), Appearance::Dark => DASH_COLOR }
+}
+/// 「t/s」「×N」的文字色（再乘各自的透明度）。
+pub fn text_color(ap: Appearance) -> Rgb {
+    match ap { Appearance::Light => Rgb(0x1D, 0x1F, 0x23), Appearance::Dark => Rgb(0xF2, 0xF4, 0xF7) }
+}
 
 /// 一家的输入。`stopping_since` = 这家停下的时刻（秒）；在跑时为 None。
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,7 +114,7 @@ pub struct Seg {
     pub num_w: f64,
     /// 1 家时的「t/s」宽（含前面的 3 pt 段内间距）；否则 0
     pub unit_w: f64,
-    /// 1 家且会话 ≥ 2 时的「· N」；宽含前面的 3 pt
+    /// 1 家且会话 ≥ 2 时的上标「×N」；宽含前面的 1 pt
     pub sess: Option<String>,
     pub sess_w: f64,
     /// 1 = 在跑；0.4 = 停下（保持 3 s）
@@ -108,7 +127,6 @@ pub struct Layout {
     pub width: f64,
     pub mode: Mode,
     pub segs: Vec<Seg>,
-    pub bg: Rgb,
 }
 
 /// 速度只写整数；读不到写 `—`，不写 0，也不加「≈」。
@@ -127,33 +145,32 @@ pub fn layout(inp: &[PlatformIn; 4], ap: Appearance, cw: f64, now: f64) -> Optio
     let shown: Vec<usize> = (0..4).filter(|&i| inp[i].shown(now)).collect();
     if shown.is_empty() { return None; }
     let mode = match shown.len() { 1 => Mode::Full, 2 => Mode::Compact, _ => Mode::Minimal };
+    // 没有底色块 ⇒ 左右只留 1 / 2（右边贴着系统的下一个图标太紧会粘在一起）；段间距放宽一点替代原来的块边界
     let (pad_l, pad_r, gap) = match mode {
-        Mode::Full => (4.0, 7.0, 8.0),
-        Mode::Compact => (6.0, 7.0, 7.0),
-        Mode::Minimal => (6.0, 7.0, 3.0),
+        Mode::Full => (1.0, 2.0, 8.0),
+        Mode::Compact => (1.0, 2.0, 9.0),
+        Mode::Minimal => (1.0, 2.0, 5.0),
     };
     let mut segs: Vec<Seg> = shown.iter().map(|&i| {
         let p = &inp[i];
         let num = (mode != Mode::Minimal).then(|| fmt_tps(p.tps));
         let num_w = num.as_deref().map_or(0.0, |s| LOGO_GAP + text_w(s, cw));
         let unit_w = if mode == Mode::Full { INNER_GAP + text_w("t/s", cw) } else { 0.0 };
-        let sess = (mode == Mode::Full && p.n_sessions >= 2).then(|| format!("· {}", p.n_sessions));
-        let sess_w = sess.as_deref().map_or(0.0, |s| INNER_GAP + text_w(s, cw));
-        let color = if p.tps.is_some() && num.as_deref() != Some("—") { num_color(ap, i) } else { DASH_COLOR };
+        let sess = (mode == Mode::Full && p.n_sessions >= 2).then(|| format!("×{}", p.n_sessions));
+        // 等宽字体的步进与字号成正比 ⇒ 上标步进 = 正文步进 × 字号比
+        let sess_w = sess.as_deref().map_or(0.0, |s| SUP_GAP + text_w(s, cw * SUP_SIZE / FONT_SIZE));
+        let color = if p.tps.is_some() && num.as_deref() != Some("—") { num_color(ap, i) } else { dash_color(ap) };
         Seg { slot: i, x: 0.0, w: LOGO + num_w + unit_w + sess_w, num, num_w, unit_w, sess, sess_w,
               alpha: if p.running { 1.0 } else { STOP_ALPHA }, color }
     }).collect();
     let n = segs.len() as f64;
-    let content = pad_l + segs.iter().map(|s| s.w).sum::<f64>() + gap * (n - 1.0) + pad_r;
-    let width = if segs.len() >= 2 { content.max(W_MIN) } else { content };
-    // space-evenly：多出来的空间分进 n + 1 个空档（含两端，padding 之内）
-    let e = if segs.len() >= 2 { (width - content) / (n + 1.0) } else { 0.0 };
-    let mut x = pad_l + e;
+    let width = pad_l + segs.iter().map(|s| s.w).sum::<f64>() + gap * (n - 1.0) + pad_r;
+    let mut x = pad_l;
     for s in segs.iter_mut() {
         s.x = x;
-        x += s.w + gap + e;
+        x += s.w + gap;
     }
-    Some(Layout { width, mode, segs, bg: capsule_bg(ap) })
+    Some(Layout { width, mode, segs })
 }
 
 /// 一家的实时读数（来自 `.live.json`）。
@@ -368,7 +385,8 @@ impl Anim {
                 }
                 self.width.target = l.width;
                 if r { self.width.snap(l.width); }
-                self.bg_a.go(1.0, now, r);
+                // 在跑胶囊没有底色（2026-10-22）；从「AI 图标」空闲档过来时那块底色淡出
+                self.bg_a.go(0.0, now, r);
                 self.title_a.go(0.0, now, r);
                 self.title_scale.target = 0.85;
                 if r { self.title_scale.snap(0.85); }
@@ -476,7 +494,7 @@ impl Anim {
             let x = width - s.x_r.pos - w;
             let num_x = x + LOGO + LOGO_GAP;
             let unit_x = x + LOGO + s.num_w.pos.max(0.0) + INNER_GAP;
-            let sess_x = unit_x - INNER_GAP + s.unit_w.pos.max(0.0) + INNER_GAP;
+            let sess_x = unit_x - INNER_GAP + s.unit_w.pos.max(0.0) + SUP_GAP;
             DrawSeg {
                 slot: i, x, w, alpha: s.alpha.value(now) * s.seg_alpha.value(now), logo_alpha: s.alpha.value(now),
                 scale: s.scale.pos,
@@ -899,7 +917,8 @@ pub mod draw {
     const FONT_600: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-600-normal.woff2");
 
     /// 只建一次的资源（AppKit 对象，Retained 不是 Send，存成指针；进程内永不释放）。
-    struct Res { logos: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, cw: f64, icon: usize }
+    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, fsup: usize,
+                 cw: f64, cw_sup: f64, sup_raise: f64, icon: usize }
     // 只在持有它的线程（主线程 / 单测线程）上用
     static RES: std::sync::OnceLock<Res> = std::sync::OnceLock::new();
 
@@ -913,13 +932,13 @@ pub mod draw {
         img as usize
     }
 
-    unsafe fn font_from(bytes: &[u8], weight: f64) -> usize {
+    unsafe fn font_from(bytes: &[u8], weight: f64, size: f64) -> usize {
         let desc = CTFontManagerCreateFontDescriptorFromData(nsdata(bytes) as *const c_void);
         if !desc.is_null() {
-            let f = CTFontCreateWithFontDescriptor(desc, FONT_SIZE, std::ptr::null());
+            let f = CTFontCreateWithFontDescriptor(desc, size, std::ptr::null());
             if !f.is_null() { return f as usize; }
         }
-        let f: *mut AnyObject = msg_send![class!(NSFont), monospacedSystemFontOfSize: FONT_SIZE, weight: weight];
+        let f: *mut AnyObject = msg_send![class!(NSFont), monospacedSystemFontOfSize: size, weight: weight];
         let _: *mut AnyObject = msg_send![f, retain];
         f as usize
     }
@@ -927,14 +946,25 @@ pub mod draw {
     fn res() -> &'static Res {
         RES.get_or_init(|| unsafe {
             let logos: [usize; 6] = std::array::from_fn(|i| image_from(LOGO_SVGS[i]));
+            // 浅色菜单栏上没有深色底了：单色的白 logo（Codex / grok / Kimi，fill #eef2f7）换成深色墨，彩色的原样用
+            let logos_light: [usize; 6] = std::array::from_fn(|i| {
+                let svg = std::str::from_utf8(LOGO_SVGS[i]).unwrap_or("");
+                if svg.contains("fill=\"#eef2f7\"") { image_from(svg.replace("fill=\"#eef2f7\"", "fill=\"#1d1f23\"").as_bytes()) } else { logos[i] }
+            });
             // 灰色剪影（P11「用掉的部分变成灰色剪影」）：logo 形状填浅灰，画时再乘 30%。只建一次。
             let ghosts: [usize; 6] = std::array::from_fn(|i| silhouette(logos[i], (0.86, 0.88, 0.90)));
-            let f500 = font_from(FONT_500, 0.23);
-            let f600 = font_from(FONT_600, 0.3);
+            let f500 = font_from(FONT_500, 0.23, FONT_SIZE);
+            let f600 = font_from(FONT_600, 0.3, FONT_SIZE);
+            let fsup = font_from(FONT_600, 0.3, SUP_SIZE);
             let probe = NSString::from_str("0000000000");
             let sz: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(f500, (1.0, 1.0, 1.0), 1.0)];
+            let ss: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(fsup, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
-            Res { logos, ghosts, f500, f600, cw: if sz.width > 0.0 { sz.width / 10.0 } else { 7.5 }, icon }
+            let cw = if sz.width > 0.0 { sz.width / 10.0 } else { FONT_SIZE * 0.6 };
+            Res { logos, logos_light, ghosts, f500, f600, fsup, cw,
+                  cw_sup: if ss.width > 0.0 { ss.width / 10.0 } else { SUP_SIZE * 0.6 },
+                  // 上标的顶对齐正文的顶：各自竖直居中后，上标再抬高两者行高差的一半
+                  sup_raise: if sz.height > 0.0 && ss.height > 0.0 { (sz.height - ss.height) / 2.0 } else { 2.5 }, icon }
         })
     }
 
@@ -987,8 +1017,9 @@ pub mod draw {
         let _: () = msg_send![t, concat];
     }
 
-    /// 逐位滚动：两串右对齐，变了的那一位旧的往上滑出、新的从下方 7 pt 滑入。
-    unsafe fn rolling(from: &str, to: &str, p: f64, x: f64, cw: f64, font: usize, rgb: (f64, f64, f64), a: f64) {
+    /// 逐位滚动：两串右对齐，变了的那一位旧的往上滑出、新的从下方 `dist` pt 滑入。`dy0` = 整串的竖直偏移（向下为正）。
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn rolling(from: &str, to: &str, p: f64, x: f64, cw: f64, font: usize, rgb: (f64, f64, f64), a: f64, dy0: f64, dist: f64) {
         let f: Vec<char> = from.chars().collect();
         let t: Vec<char> = to.chars().collect();
         let n = t.len();
@@ -998,11 +1029,11 @@ pub mod draw {
             let old = (j >= 0).then(|| f.get(j as usize).copied()).flatten();
             let cx = x + i as f64 * cw;
             if old == Some(*ch) || p >= 0.999 {
-                text(&ch.to_string(), cx, 0.0, font, rgb, a);
+                text(&ch.to_string(), cx, dy0, font, rgb, a);
             } else {
                 let q = p.clamp(0.0, 1.2);
-                if let Some(o) = old { text(&o.to_string(), cx, -7.0 * q, font, rgb, a * (1.0 - q).clamp(0.0, 1.0)); }
-                text(&ch.to_string(), cx, 7.0 * (1.0 - q), font, rgb, a * q.clamp(0.0, 1.0));
+                if let Some(o) = old { text(&o.to_string(), cx, dy0 - dist * q, font, rgb, a * (1.0 - q).clamp(0.0, 1.0)); }
+                text(&ch.to_string(), cx, dy0 + dist * (1.0 - q), font, rgb, a * q.clamp(0.0, 1.0));
             }
         }
     }
@@ -1217,7 +1248,7 @@ pub mod draw {
         // 胶囊底（右对齐：右边缘不动）
         let bx = w - f.width;
         if f.bg_a > 0.001 && f.width > 0.5 {
-            let rr = NSRect::new(NSPoint::new(bx, 0.0), NSSize::new(f.width, H));
+            let rr = NSRect::new(NSPoint::new(bx, (H - BG_H) / 2.0), NSSize::new(f.width, BG_H));
             let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithRoundedRect: rr, xRadius: RADIUS, yRadius: RADIUS];
             let _: () = msg_send![color(capsule_bg(ap).f(), f.bg_a), setFill];
             let _: () = msg_send![p, fill];
@@ -1239,7 +1270,7 @@ pub mod draw {
             scale_about(x + s.w / 2.0, H / 2.0, s.scale);
             if !hide_logos {
                 let lr = NSRect::new(NSPoint::new(x, (H - LOGO) / 2.0), NSSize::new(LOGO, LOGO));
-                let img = r.logos[s.slot] as *mut AnyObject;
+                let img = (if ap == Appearance::Light { r.logos_light[s.slot] } else { r.logos[s.slot] }) as *mut AnyObject;
                 if !img.is_null() {
                     // ★ logo 停下时不变暗（交接包 README「Logo」+ page1 清单）：只跟进出场的透明度走，
                     //   40% 只落在数字 / t/s / · N 上。Main.html 那一行把 `opacity: .4` 写在整段上，与规则冲突，按规则来。
@@ -1252,15 +1283,17 @@ pub mod draw {
                     let _: () = msg_send![p, fill];
                 }
             }
+            let ink = text_color(ap).f();
             if s.num_a > 0.001 {
-                rolling(&s.num_from, &s.num_to, s.num_p, bx + s.num_x, r.cw, r.f600, s.color.f(), s.alpha * s.num_a);
+                rolling(&s.num_from, &s.num_to, s.num_p, bx + s.num_x, r.cw, r.f600, s.color.f(), s.alpha * s.num_a, 0.0, 7.0);
             }
             if s.unit_a > 0.001 {
-                text("t/s", bx + s.unit_x, 0.0, r.f500, TEXT_COLOR.f(), s.alpha * s.unit_a * SUFFIX_ALPHA);
+                text("t/s", bx + s.unit_x, 0.0, r.f500, ink, s.alpha * s.unit_a * SUFFIX_ALPHA);
             }
             if s.sess_a > 0.001 {
-                rolling(&s.sess_from, &s.sess_to, s.sess_p, bx + s.sess_x, r.cw, r.f500, TEXT_COLOR.f(),
-                        s.alpha * s.sess_a * SUFFIX_ALPHA);
+                // 上标「×N」：小一号、抬到正文顶部；滚动距离按字号缩
+                rolling(&s.sess_from, &s.sess_to, s.sess_p, bx + s.sess_x, r.cw_sup, r.fsup, ink,
+                        s.alpha * s.sess_a * SUP_ALPHA, -r.sup_raise, 7.0 * SUP_SIZE / FONT_SIZE);
             }
             restore();
         }
@@ -1313,7 +1346,7 @@ pub mod draw {
 mod tests {
     use super::*;
     /// JetBrains Mono 步进 0.6 em：11.5 pt 实测 6.9 ⇒ 12.5 pt 7.5。
-    const CW: f64 = 7.5;
+    const CW: f64 = 8.1;   // JetBrains Mono 13.5 的步进 ≈ 0.6 em
 
     fn run(tps: Option<f64>, n: u32) -> PlatformIn { PlatformIn { running: true, tps, n_sessions: n, stopping_since: None } }
     fn off() -> PlatformIn { PlatformIn::default() }
@@ -1332,41 +1365,33 @@ mod tests {
         let s = &l.segs[0];
         assert_eq!(s.num.as_deref(), Some("178"));
         assert_eq!(s.sess, None, "1 个会话不加 · N");
-        // 4 + logo + LOGO_GAP 5 + 178 + 3 + t/s + 7（交接包 logo 12 / 字 11.5 时 ≈ 72；2026-10-21 放大到 logo 16 / 字 12.5 ⇒ ≈ 80）
-        assert!(close(l.width, 4.0 + LOGO + LOGO_GAP + 3.0 * CW + 3.0 + 3.0 * CW + 7.0));
-        assert!((l.width - 80.0).abs() < 1.0, "1 家 ≈ 80 pt，实得 {}", l.width);
-        assert!(close(s.x, 4.0));
+        // 1 + logo 18 + LOGO_GAP 5 + 178 + 3 + t/s + 2（2026-10-22 去底色、logo 18 / 字 13.5 ⇒ ≈ 77；有底色时 ≈ 80）
+        assert!(close(l.width, 1.0 + LOGO + LOGO_GAP + 3.0 * CW + 3.0 + 3.0 * CW + 2.0));
+        assert!((l.width - 77.6).abs() < 1.0, "1 家 ≈ 77.6 pt，实得 {}", l.width);
+        assert!(close(s.x, 1.0));
     }
 
     #[test]
-    fn one_ai_with_three_sessions_matches_the_reference_width() {
+    fn one_ai_with_three_sessions_gets_a_tollm_style_superscript() {
+        // 用户 2026-10-22「单 AI 多会话后面的文字学 tollm」：「190 t/s×3」，×3 是紧贴 t/s 的小号上标，不是同字号的「 · 3」
         let l = layout(&inp([off(), run(Some(190.0), 3), off(), off()]), Appearance::Light, CW, 0.0).unwrap();
-        assert_eq!(l.segs[0].sess.as_deref(), Some("· 3"));
-        assert!((l.width - W_MIN).abs() < 1.0, "带会话数 ≈ W（{}），实得 {}", W_MIN, l.width);
-        // W = 96 取的就是这一档（交接包）；logo 间距多出的 2 不改 W（2 家起的胶囊宽照交接包）
-        assert!(l.width <= W_MIN + LOGO_GAP - INNER_GAP + 1e-9, "W 取的就是这一档");
+        let s = &l.segs[0];
+        assert_eq!(s.sess.as_deref(), Some("×3"));
+        assert!(close(s.sess_w, SUP_GAP + 2.0 * CW * SUP_SIZE / FONT_SIZE), "上标按小字号算宽：{}", s.sess_w);
+        assert!(SUP_SIZE < FONT_SIZE * 0.75, "上标要明显小一号");
+        let one = layout(&inp([off(), run(Some(190.0), 1), off(), off()]), Appearance::Light, CW, 0.0).unwrap();
+        assert!(close(l.width - one.width, s.sess_w), "只多出上标那一截");
     }
 
     #[test]
-    fn two_ais_are_compact_at_the_fixed_min_width() {
+    fn two_ais_are_compact_and_sized_by_content() {
         let l = layout(&inp([run(Some(178.0), 1), run(Some(64.0), 1), off(), off()]), Appearance::Light, CW, 0.0).unwrap();
         assert_eq!(l.mode, Mode::Compact);
-        assert_eq!(l.width, W_MIN, "2 家起外框固定 96");
-        assert!(l.segs.iter().all(|s| s.unit_w == 0.0 && s.sess.is_none()), "紧凑：去掉 t/s 与 · N");
-        // space-evenly：左空档 = 中空档 - gap = 右空档
-        let a = &l.segs[0];
-        let b = &l.segs[1];
-        let left = a.x - 6.0;
-        let mid = b.x - (a.x + a.w) - 7.0;
-        let right = l.width - 7.0 - (b.x + b.w);
-        assert!(close(left, mid) && close(mid, right), "等距分布 {} {} {}", left, mid, right);
-    }
-
-    #[test]
-    fn four_digit_speeds_widen_the_pill_past_w() {
-        let l = layout(&inp([run(Some(1780.0), 1), run(Some(6400.0), 1), off(), off()]), Appearance::Dark, CW, 0.0).unwrap();
-        assert!(l.width > W_MIN, "内容超出 W 才撑宽");
-        assert!(close(l.segs[0].x, 6.0), "撑宽后没有多余空档");
+        assert!(l.segs.iter().all(|s| s.unit_w == 0.0 && s.sess.is_none()), "紧凑：去掉 t/s 与 ×N");
+        // 去底色后不再有 106 的最小宽、不再 space-evenly：内容多宽就多宽
+        let (a, b) = (&l.segs[0], &l.segs[1]);
+        assert!(close(a.x, 1.0) && close(b.x - (a.x + a.w), 9.0) && close(l.width - (b.x + b.w), 2.0),
+                "左 1 · 段间 9 · 右 2：{} {} {}", a.x, b.x - (a.x + a.w), l.width - (b.x + b.w));
     }
 
     /// 用户 2026-10-19：「1 家状态下 svg 和速度太近」—— logo 与数字之间 5，不是段内统一的 3。
@@ -1383,7 +1408,7 @@ mod tests {
         let l = layout(&inp([run(Some(1.0), 1), run(Some(2.0), 4), run(None, 1), off()]), Appearance::Dark, CW, 0.0).unwrap();
         assert_eq!(l.mode, Mode::Minimal);
         assert!(l.segs.iter().all(|s| s.num.is_none() && s.w == LOGO), "3 家起不显示数字（不是数字缩小）");
-        assert_eq!(l.width, W_MIN);
+        assert!(close(l.width, 1.0 + 3.0 * LOGO + 2.0 * 5.0 + 2.0));
         let l4 = layout(&inp([run(Some(1.0), 1), run(Some(2.0), 1), run(None, 1), run(Some(3.0), 1)]), Appearance::Dark, CW, 0.0).unwrap();
         assert_eq!(l4.segs.iter().map(|s| s.slot).collect::<Vec<_>>(), vec![0, 1, 2, 3], "顺序 Codex → Claude → Gemini → grok");
     }
@@ -1392,7 +1417,7 @@ mod tests {
     fn running_without_a_first_response_writes_a_dash_not_zero() {
         let l = layout(&inp([run(Some(178.0), 1), run(None, 1), off(), off()]), Appearance::Light, CW, 0.0).unwrap();
         assert_eq!(l.segs[1].num.as_deref(), Some("—"));
-        assert_eq!(l.segs[1].color, DASH_COLOR);
+        assert_eq!(l.segs[1].color, dash_color(Appearance::Light));
         assert_eq!(fmt_tps(Some(0.0)), "0", "真 0 才写 0");
     }
 
@@ -1401,11 +1426,9 @@ mod tests {
         let one = inp([off(), off(), off(), run(Some(82.0), 1)]);
         let light = layout(&one, Appearance::Light, CW, 0.0).unwrap();
         let dark = layout(&one, Appearance::Dark, CW, 0.0).unwrap();
-        assert_eq!(light.bg, Rgb(0x1C, 0x21, 0x28));
-        assert_eq!(dark.bg, Rgb(0x3D, 0x45, 0x52));
-        assert_eq!(light.segs[0].color, Rgb(0xA9, 0x9C, 0xFA));
+        assert_eq!(light.segs[0].color, Rgb(0x5F, 0x4B, 0xD0), "浅色菜单栏：深一档");
         assert_eq!(dark.segs[0].color, Rgb(0xB9, 0xAE, 0xFB));
-        assert_eq!(num_color(Appearance::Light, 0), Rgb(0x2D, 0xD4, 0xBF));
+        assert_eq!(num_color(Appearance::Light, 0), Rgb(0x0A, 0x74, 0x68));
         assert_eq!(num_color(Appearance::Dark, 2), Rgb(0x7A, 0xB8, 0xFF));
     }
 
@@ -1415,17 +1438,37 @@ mod tests {
     }
     fn contrast(a: Rgb, b: Rgb) -> f64 { let (x, y) = (lum(a), lum(b)); (x.max(y) + 0.05) / (x.min(y) + 0.05) }
 
-    /// 交接包「仍需实装方确认：托盘胶囊数字色在两种菜单栏下的对比度需实测 ≥ 4.5 : 1」。
+    /// 交接包「托盘胶囊数字色在两种菜单栏下的对比度需实测 ≥ 4.5 : 1」。2026-10-22 去底色后，对的是菜单栏本身
+    /// （参考色；真机半透明压在壁纸上，没有固定值 —— 用户看过花壁纸 demo 后接受）。文字色 × 透明度后也要过 4.5。
     #[test]
-    fn number_colors_clear_4_5_to_1_on_their_capsule() {
+    fn number_colors_clear_4_5_to_1_on_the_menubar() {
         for ap in [Appearance::Light, Appearance::Dark] {
+            let bg = menubar_ref(ap);
             for i in 0..4 {
-                let c = contrast(num_color(ap, i), capsule_bg(ap));
+                let c = contrast(num_color(ap, i), bg);
                 assert!(c >= 4.5, "{:?} 槽 {} 对比度 {:.2}", ap, i, c);
             }
-            let d = contrast(DASH_COLOR, capsule_bg(ap));
+            let d = contrast(dash_color(ap), bg);
             assert!(d >= 4.5, "{:?} 「—」对比度 {:.2}", ap, d);
+            let mix = |a: f64| { let (t, b) = (text_color(ap), bg);
+                let m = |x: u8, y: u8| (x as f64 * a + y as f64 * (1.0 - a)).round() as u8;
+                Rgb(m(t.0, b.0), m(t.1, b.1), m(t.2, b.2)) };
+            assert!(contrast(mix(SUP_ALPHA), bg) >= 4.5, "{:?} ×N 对比度 {:.2}", ap, contrast(mix(SUP_ALPHA), bg));
         }
+    }
+
+    /// 空闲「AI 图标」档的底色块仍在（用户只改了在跑胶囊）；在跑胶囊落定后没有底色。
+    #[test]
+    fn the_running_pill_has_no_background() {
+        let mut a = Anim::new();
+        a.idle_bg = true;
+        let l = layout(&inp([run(Some(178.0), 1), off(), off(), off()]), Appearance::Dark, CW, 0.0).unwrap();
+        assert!(close(a.frame(0.0).bg_a, 1.0), "空闲 AI 图标档有底色");
+        a.retarget(Some(&l), 80.0, 0.0);
+        let mut now = 0.0;
+        while a.step(now) { now += 0.016; }
+        assert!(a.frame(now).bg_a < 1e-6, "在跑胶囊落定后底色为 0");
+        assert!(BG_H < H && LOGO <= H - 2.0);
     }
 
     #[test]
@@ -1517,9 +1560,11 @@ mod tests {
             a.step(now);
             let f = a.frame(now);
             let g = f.segs.iter().find(|s| s.slot == 3).expect("grok 段一直在");
-            assert!((g.x - prev) * (goal - grok_x0) >= -1e-9, "单调靠近，不抖：{} → {}", prev, g.x);
+            // 去底色后外框宽也在变（不再钉在 106）：外框和段宽是两根弹簧，各自在差 < eps（0.05 pt）时吸附到目标，
+            // 吸附那一帧会有 < 0.05 pt 的回退 —— 亚像素，看不见；超过它才算抖
+            assert!((g.x - prev) * (goal - grok_x0).signum() >= -0.05, "单调靠近，不抖：{} → {}", prev, g.x);
             prev = g.x;
-            assert_eq!(f.width, W_MIN, "2 家起外框不动");
+            assert!((f.width - target.width).abs() < 40.0, "外框跟着弹簧走，不乱跳");
         }
         assert!((prev - goal).abs() < 0.1, "落定在新位置 {} vs {}", prev, goal);
         assert!(a.frame(now).segs.iter().all(|s| s.slot != 1), "Claude 段已退出");
@@ -1566,7 +1611,7 @@ mod tests {
         let f = a.frame(now);
         assert!(close(f.width, l.width) && close(f.segs[0].scale, 1.0) && close(f.segs[0].alpha, 1.0));
         assert!(close(f.segs[0].x, l.segs[0].x), "段落在目标坐标");
-        assert!(close(f.title_a, 0.0) && close(f.bg_a, 1.0));
+        assert!(close(f.title_a, 0.0) && f.bg_a < 1e-6, "去底色：落定后 bg 为 0");
     }
 
     #[test]
@@ -1640,7 +1685,7 @@ mod tests {
     #[ignore]
     fn render_samples() {
         let home = std::env::var("HOME").unwrap();
-        let dir = std::path::PathBuf::from(home).join("Downloads/codexbar_screenshots_20261019_redesign/tray");
+        let dir = std::path::PathBuf::from(home).join("Downloads/codexbar_screenshots_20261022_pill_nobg/tray");
         std::fs::create_dir_all(&dir).unwrap();
         let cw = draw::char_w();
         eprintln!("font JetBrains = {}, cw = {:.3}, logos = {:?}", draw::font_is_jetbrains(), cw,
@@ -1649,7 +1694,7 @@ mod tests {
         let cases: Vec<(&str, [PlatformIn; 4])> = vec![
             ("1ai_codex", inp([run(Some(178.0), 1), off(), off(), off()])),
             ("1ai_claude_3sessions", inp([off(), run(Some(190.0), 3), off(), off()])),
-            ("2ai_compact_96", inp([run(Some(178.0), 1), run(Some(64.0), 1), off(), off()])),
+            ("2ai_compact", inp([run(Some(178.0), 1), run(Some(64.0), 1), off(), off()])),
             ("2ai_claude_dash", inp([run(Some(178.0), 1), run(None, 1), off(), off()])),
             ("3ai_logos_only", inp([run(Some(1.0), 1), run(Some(2.0), 1), run(Some(3.0), 1), off()])),
             ("4ai_logos_only", inp([run(Some(1.0), 1), run(Some(2.0), 1), run(Some(3.0), 1), run(Some(4.0), 1)])),
