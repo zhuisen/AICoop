@@ -33,13 +33,14 @@ pub const LOGO_GAP: f64 = 5.0;
 /// 停下：那一段降到 40%、保持最后的数字 3 s，然后退出。
 pub const HOLD_SECS: f64 = 3.0;
 pub const STOP_ALPHA: f64 = 0.4;
-pub const FONT_SIZE: f64 = 13.5;
-/// 「t/s」：文字色 @ .62（Main.html）
-const SUFFIX_ALPHA: f64 = 0.62;
+/// 用户 2026-10-22「字体需要加大加粗」：13.5 → 15；数字 600 → 700、「t/s」500 → 600、上标 600 → 700。
+pub const FONT_SIZE: f64 = 15.0;
+/// 「t/s」：文字色 @ .78（Main.html 是 .62 —— 那是压在深色底色块上的；去底色后用户报「看不清字」，2026-10-22 提到 .78）
+const SUFFIX_ALPHA: f64 = 0.78;
 /// 多会话：照 Tollm 的状态栏（`tollm/Sources/Tollm/MenuBar/StatusIcon.swift`）—— 紧跟在「t/s」后面的上标「×N」，
 ///   小一号粗体、文字色 @ .8，不再写成同字号的「 · N」（用户 2026-10-22「学习 tollm 的方式处理」）。
-///   Tollm 是 13 pt 正文配 8.5 pt 上标；这里 13.5 配 9。上标的顶与正文的顶对齐（抬高 = 两者行高差的一半）。
-pub const SUP_SIZE: f64 = 9.0;
+///   Tollm 是 13 pt 正文配 8.5 pt 上标；这里 15 配 10。上标的顶与正文的顶对齐（抬高 = 两者行高差的一半）。
+pub const SUP_SIZE: f64 = 10.0;
 const SUP_ALPHA: f64 = 0.8;
 /// 上标与「t/s」之间
 const SUP_GAP: f64 = 1.0;
@@ -915,9 +916,10 @@ pub mod draw {
     /// `JetBrainsMono-SemiBold`，「0」步进 6.9 pt @ 11.5）。建不起来就退回系统等宽字体。
     const FONT_500: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-500-normal.woff2");
     const FONT_600: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-600-normal.woff2");
+    const FONT_700: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-700-normal.woff2");
 
     /// 只建一次的资源（AppKit 对象，Retained 不是 Send，存成指针；进程内永不释放）。
-    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, fsup: usize,
+    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f500: usize, f600: usize, f700: usize, fsup: usize,
                  cw: f64, cw_sup: f64, sup_raise: f64, icon: usize }
     // 只在持有它的线程（主线程 / 单测线程）上用
     static RES: std::sync::OnceLock<Res> = std::sync::OnceLock::new();
@@ -955,13 +957,14 @@ pub mod draw {
             let ghosts: [usize; 6] = std::array::from_fn(|i| silhouette(logos[i], (0.86, 0.88, 0.90)));
             let f500 = font_from(FONT_500, 0.23, FONT_SIZE);
             let f600 = font_from(FONT_600, 0.3, FONT_SIZE);
-            let fsup = font_from(FONT_600, 0.3, SUP_SIZE);
+            let f700 = font_from(FONT_700, 0.4, FONT_SIZE);
+            let fsup = font_from(FONT_700, 0.4, SUP_SIZE);
             let probe = NSString::from_str("0000000000");
             let sz: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(f500, (1.0, 1.0, 1.0), 1.0)];
             let ss: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(fsup, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
             let cw = if sz.width > 0.0 { sz.width / 10.0 } else { FONT_SIZE * 0.6 };
-            Res { logos, logos_light, ghosts, f500, f600, fsup, cw,
+            Res { logos, logos_light, ghosts, f500, f600, f700, fsup, cw,
                   cw_sup: if ss.width > 0.0 { ss.width / 10.0 } else { SUP_SIZE * 0.6 },
                   // 上标的顶对齐正文的顶：各自竖直居中后，上标再抬高两者行高差的一半
                   sup_raise: if sz.height > 0.0 && ss.height > 0.0 { (sz.height - ss.height) / 2.0 } else { 2.5 }, icon }
@@ -1285,10 +1288,10 @@ pub mod draw {
             }
             let ink = text_color(ap).f();
             if s.num_a > 0.001 {
-                rolling(&s.num_from, &s.num_to, s.num_p, bx + s.num_x, r.cw, r.f600, s.color.f(), s.alpha * s.num_a, 0.0, 7.0);
+                rolling(&s.num_from, &s.num_to, s.num_p, bx + s.num_x, r.cw, r.f700, s.color.f(), s.alpha * s.num_a, 0.0, 7.0);
             }
             if s.unit_a > 0.001 {
-                text("t/s", bx + s.unit_x, 0.0, r.f500, ink, s.alpha * s.unit_a * SUFFIX_ALPHA);
+                text("t/s", bx + s.unit_x, 0.0, r.f600, ink, s.alpha * s.unit_a * SUFFIX_ALPHA);
             }
             if s.sess_a > 0.001 {
                 // 上标「×N」：小一号、抬到正文顶部；滚动距离按字号缩
@@ -1346,7 +1349,7 @@ pub mod draw {
 mod tests {
     use super::*;
     /// JetBrains Mono 步进 0.6 em：11.5 pt 实测 6.9 ⇒ 12.5 pt 7.5。
-    const CW: f64 = 8.1;   // JetBrains Mono 13.5 的步进 ≈ 0.6 em
+    const CW: f64 = 9.0;   // JetBrains Mono 15 的步进 ≈ 0.6 em
 
     fn run(tps: Option<f64>, n: u32) -> PlatformIn { PlatformIn { running: true, tps, n_sessions: n, stopping_since: None } }
     fn off() -> PlatformIn { PlatformIn::default() }
@@ -1365,9 +1368,9 @@ mod tests {
         let s = &l.segs[0];
         assert_eq!(s.num.as_deref(), Some("178"));
         assert_eq!(s.sess, None, "1 个会话不加 · N");
-        // 1 + logo 18 + LOGO_GAP 5 + 178 + 3 + t/s + 2（2026-10-22 去底色、logo 18 / 字 13.5 ⇒ ≈ 77；有底色时 ≈ 80）
+        // 1 + logo 18 + LOGO_GAP 5 + 178 + 3 + t/s + 2（2026-10-22 去底色、logo 18 / 字 15 ⇒ ≈ 83；有底色、字 12.5 时 ≈ 80）
         assert!(close(l.width, 1.0 + LOGO + LOGO_GAP + 3.0 * CW + 3.0 + 3.0 * CW + 2.0));
-        assert!((l.width - 77.6).abs() < 1.0, "1 家 ≈ 77.6 pt，实得 {}", l.width);
+        assert!((l.width - 83.0).abs() < 1.0, "1 家 ≈ 83 pt，实得 {}", l.width);
         assert!(close(s.x, 1.0));
     }
 
