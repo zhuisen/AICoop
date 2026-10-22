@@ -453,7 +453,7 @@ impl Anim {
                     // 最后一家退出时反向：外框弹回标题宽，底色淡出，标题放大淡入
                     self.width.target = title_w;
                     if r { self.width.snap(title_w); }
-                    self.bg_a.go(if self.idle_bg { 1.0 } else { 0.0 }, now, r);
+                    self.bg_a.go(0.0, now, r);
                     self.title_a.go(1.0, now, r);
                     self.title_scale.target = 1.0;
                     if r { self.title_scale.snap(1.0); }
@@ -507,7 +507,7 @@ impl Anim {
             }
         }).collect();
         Frame {
-            width, bg_a: if self.pill { self.bg_a.value(now) } else if self.idle_bg { 1.0 } else { 0.0 },
+            width, bg_a: if self.pill { self.bg_a.value(now) } else { 0.0 },
             title_a: if self.pill { self.title_a.value(now) } else { 1.0 },
             title_scale: self.title_scale.pos, segs, idle: !self.pill,
         }
@@ -921,7 +921,7 @@ pub mod draw {
     const FONT_700: &[u8] = include_bytes!("../../public/fonts/jetbrains-mono-latin-700-normal.woff2");
 
     /// 只建一次的资源（AppKit 对象，Retained 不是 Send，存成指针；进程内永不释放）。
-    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], f600: usize, f700: usize, fsup: usize,
+    struct Res { logos: [usize; 6], logos_light: [usize; 6], ghosts: [usize; 6], ghosts_light: [usize; 6], f600: usize, f700: usize, fsup: usize,
                  cw: f64, cw_sup: f64, sup_raise: f64, icon: usize }
     // 只在持有它的线程（主线程 / 单测线程）上用
     static RES: std::sync::OnceLock<Res> = std::sync::OnceLock::new();
@@ -957,6 +957,8 @@ pub mod draw {
             });
             // 灰色剪影（P11「用掉的部分变成灰色剪影」）：logo 形状填浅灰，画时再乘 30%。只建一次。
             let ghosts: [usize; 6] = std::array::from_fn(|i| silhouette(logos[i], (0.86, 0.88, 0.90)));
+            // 空闲托盘去掉底色块后（2026-10-22），浅色菜单栏上浅灰剪影看不见 ⇒ 浅色用深灰剪影
+            let ghosts_light: [usize; 6] = std::array::from_fn(|i| silhouette(logos[i], (0.20, 0.22, 0.25)));
             let f500 = font_from(FONT_500, 0.23, FONT_SIZE);
             let f600 = font_from(FONT_600, 0.3, FONT_SIZE);
             let f700 = font_from(FONT_700, 0.4, FONT_SIZE);
@@ -966,7 +968,7 @@ pub mod draw {
             let ss: NSSize = msg_send![&*probe, sizeWithAttributes: attrs(fsup, (1.0, 1.0, 1.0), 1.0)];
             let icon = image_from(include_bytes!("../icons/tray.png"));
             let cw = if sz.width > 0.0 { sz.width / 10.0 } else { FONT_SIZE * 0.6 };
-            Res { logos, logos_light, ghosts, f600, f700, fsup, cw,
+            Res { logos, logos_light, ghosts, ghosts_light, f600, f700, fsup, cw,
                   cw_sup: if ss.width > 0.0 { ss.width / 10.0 } else { SUP_SIZE * 0.6 },
                   // 上标的顶对齐正文的顶：各自竖直居中后，上标再抬高两者行高差的一半
                   sup_raise: if sz.height > 0.0 && ss.height > 0.0 { (sz.height - ss.height) / 2.0 } else { 2.5 }, icon }
@@ -1165,15 +1167,16 @@ pub mod draw {
     }
 
     /// 空闲托盘那一层（P11）：logo 右对齐画在 `right` 以左；整层随过渡淡出 / 缩小（同文字标题）。
-    unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64, backing: (f64, f64, f64), bg_a: f64) {
-        use crate::tray_idle::{BACKING_R, DOT_D, DOT_RGB, DOT_RING, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
+    unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64, ap: Appearance) {
+        use crate::tray_idle::{BACKING_R, DOT_D, DOT_RGB, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
+        let light = ap == Appearance::Light;
         if a <= 0.001 || f.width <= 0.0 { return; }
         let r = res();
         let x0 = right - f.width;
         let rgb = |c: (u8, u8, u8)| (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
         save();
         scale_about(right - f.width / 2.0, H / 2.0, k);
-        // 堆叠（2026-10-22）：从右往左画，左边的压在上面；每只先垫一块底色圆把下面那只切开
+        // 堆叠（2026-10-22）：从右往左画，左边的压在上面；每只先把身后一圈擦成透明（镂空），把下面那只切开
         let mut order: Vec<&crate::tray_idle::IdleDraw> = f.logos.iter().collect();
         order.sort_by(|p, q| q.x.partial_cmp(&p.x).unwrap_or(std::cmp::Ordering::Equal));
         for l in order {
@@ -1195,19 +1198,23 @@ pub mod draw {
                         toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
                 }
             }
-            if bg_a > 0.001 {
+            {
+                // 镂空：destination-out（NSCompositingOperationDestinationOut = 8）按不透明度擦掉已画的像素，画完改回 source-over（2）
                 let c = NSRect::new(NSPoint::new(x + IL / 2.0 - BACKING_R, y + IL / 2.0 - BACKING_R), NSSize::new(2.0 * BACKING_R, 2.0 * BACKING_R));
                 let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: c];
-                let _: () = msg_send![color(backing, la * bg_a), setFill];
+                let gc: *mut AnyObject = msg_send![class!(NSGraphicsContext), currentContext];
+                let _: () = msg_send![gc, setCompositingOperation: 8usize];
+                let _: () = msg_send![color((0.0, 0.0, 0.0), la), setFill];
                 let _: () = msg_send![p, fill];
+                let _: () = msg_send![gc, setCompositingOperation: 2usize];
             }
             let lr = NSRect::new(NSPoint::new(x, y), NSSize::new(IL, IL));
             // 灰色剪影（整只），再盖上「还剩的那部分」原色
-            let ghost = r.ghosts[l.logo] as *mut AnyObject;
+            let ghost = (if light { r.ghosts_light[l.logo] } else { r.ghosts[l.logo] }) as *mut AnyObject;
             if !ghost.is_null() {
                 let _: () = msg_send![ghost, drawInRect: lr, fromRect: NSRect::ZERO, operation: 2usize, fraction: GHOST_ALPHA * la, respectFlipped: true, hints: std::ptr::null_mut::<AnyObject>()];
             }
-            let img = r.logos[l.logo] as *mut AnyObject;
+            let img = (if light { r.logos_light[l.logo] } else { r.logos[l.logo] }) as *mut AnyObject;
             let keep = (1.0 - l.cut / 100.0).clamp(0.0, 1.0);
             if !img.is_null() && keep > 0.0 {
                 save();
@@ -1234,8 +1241,12 @@ pub mod draw {
                 let cy = (y + IL + 2.0 - DOT_D / 2.0).min(H - DOT_D / 2.0 - 1.0);
                 let ring = NSRect::new(NSPoint::new(cx - d / 2.0 - 1.0, cy - d / 2.0 - 1.0), NSSize::new(d + 2.0, d + 2.0));
                 let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: ring];
-                let _: () = msg_send![color(rgb(DOT_RING), la), setFill];
+                // 1 pt 描边改成镂空（菜单栏半透明、没有固定底色可描）：先擦出一圈透明，再画红点
+                let gc: *mut AnyObject = msg_send![class!(NSGraphicsContext), currentContext];
+                let _: () = msg_send![gc, setCompositingOperation: 8usize];
+                let _: () = msg_send![color((0.0, 0.0, 0.0), la), setFill];
                 let _: () = msg_send![p, fill];
+                let _: () = msg_send![gc, setCompositingOperation: 2usize];
                 let dot = NSRect::new(NSPoint::new(cx - d / 2.0, cy - d / 2.0), NSSize::new(d, d));
                 let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: dot];
                 let _: () = msg_send![color(rgb(DOT_RGB), la), setFill];
@@ -1270,7 +1281,7 @@ pub mod draw {
         match t {
             TitleLayer::Text(t) => title(t, ap, w, f.title_a, f.title_scale),
             // 悬停面板飞 logo 期间托盘不画自己的 logo（同在跑胶囊那条）
-            TitleLayer::Idle(i) => if !hide_logos { idle_layer(i, w, f.title_a, f.title_scale, capsule_bg(ap).f(), f.bg_a) },
+            TitleLayer::Idle(i) => if !hide_logos { idle_layer(i, w, f.title_a, f.title_scale, ap) },
         }
 
         // 各段：只在胶囊里画（滚动的数字不越出胶囊）
@@ -1516,13 +1527,13 @@ mod tests {
         }
     }
 
-    /// 空闲「AI 图标」档的底色块仍在（用户只改了在跑胶囊）；在跑胶囊落定后没有底色。
+    /// 用户 2026-10-22：在跑胶囊无底色；随后「空闲时状态栏背景也去掉」⇒ 空闲 AI 图标档也没有底色块。
     #[test]
-    fn the_running_pill_has_no_background() {
+    fn neither_the_running_pill_nor_the_idle_logos_have_a_background() {
         let mut a = Anim::new();
         a.idle_bg = true;
         let l = layout(&inp([run(Some(178.0), 1), off(), off(), off()]), Appearance::Dark, CW, 0.0).unwrap();
-        assert!(close(a.frame(0.0).bg_a, 1.0), "空闲 AI 图标档有底色");
+        assert!(a.frame(0.0).bg_a < 1e-6, "空闲 AI 图标档没有底色");
         a.retarget(Some(&l), 80.0, 0.0);
         let mut now = 0.0;
         while a.step(now) { now += 0.016; }

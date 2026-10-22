@@ -27,7 +27,7 @@ export const RING_TOP = 19.5;
 export const RING_C = 2 * Math.PI * RING_R;
 export const LOGO = 20;
 /** 托盘里 logo 的边长（Rust `tray_idle::LOGO`）。飞行用的图按它画，落进环心时缩到 `LOGO`。 */
-export const PILL_LOGO = 14;
+export const PILL_LOGO = 18;
 // ★ 用户 2026-10-21「响应要加快」：飞行 420 → 280、其余几家 120 → 60 ms 后淡入、文字 200 → 110 ms 出现。
 export const FLY_MS = 280;
 export const FLY_STAGGER = 25;

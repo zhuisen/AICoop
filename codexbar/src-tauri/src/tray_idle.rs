@@ -19,16 +19,20 @@ use crate::tray_pill::{Fade, Spring};
 
 /// 六家 logo 的槽位（顺序同画板 `NM`）：Codex · Claude · Gemini · Grok · Kimi · DeepSeek。
 pub const KEYS: [&str; 6] = ["codex", "claude", "agy", "grok", "kimi", "deepseek"];
-pub const LOGO: f64 = 14.0;
+/// ★ 用户 2026-10-22「空闲时状态栏背景也去掉，然后 AI SVG 放大」：14 → 18（与在跑胶囊的 logo 同大），底色块去掉。
+pub const LOGO: f64 = 18.0;
 /// ★ 用户 2026-10-22「空闲时多个 AI svg 可以堆叠靠在一起，这样就不会那么大了」：相邻 logo 互相压 3 pt（头像组式），
 ///   步进 14 + 5 = 19 → 14 − 3 = 11；3 家宽 63 → 47 pt。第一版压 5 pt + 底色圆半径 8.5，离线样张里右边两只被盖掉一半、Claude 只剩一角，退到 3 / 8。左边的压在右边的上面（右上角的红点不被盖住），
 ///   每只 logo 后垫一块底色圆把下面那只切开（`tray_pill.rs::idle_layer`）。原来的间距 5 见画板几何。
-pub const OVERLAP: f64 = 3.0;
+///   logo 放大到 18 后压 4 pt（同比例），步进 14；3 家宽 1 + 18 + 2×14 + 3 = 50 pt。没有底色块之后改成**镂空**：
+///   画左边那只之前先把它身后一圈（`BACKING_R`）擦成透明，任何菜单栏底色下都切得开。
+pub const OVERLAP: f64 = 4.0;
 pub const STEP: f64 = LOGO - OVERLAP;
-/// 垫在每只 logo 后面的底色圆的半径（比 logo 半宽多 1，切出一圈缝）。
+/// 每只 logo 身后擦掉的圆的半径（比 logo 半宽多 1，切出一圈透明缝）。
 pub const BACKING_R: f64 = LOGO / 2.0 + 1.0;
-pub const PAD_L: f64 = 4.0;
-pub const PAD_R: f64 = 7.0;
+/// 没有底色块，内边距只留红点外伸（右上 +2 pt）与 1 pt 余量。
+pub const PAD_L: f64 = 1.0;
+pub const PAD_R: f64 = 3.0;
 /// 灰色剪影的不透明度（画板 `ghostOp: .3`）。
 pub const GHOST_ALPHA: f64 = 0.3;
 /// 光晕：平台色 50%，直径 22 pt（P11_Spec §4「鼠标靠近」）。
@@ -36,7 +40,6 @@ pub const GLOW_D: f64 = 22.0;
 /// 红点 #FF8A73，直径 4.5 pt、描边 1 pt #2C333F、右上角各外伸 2 pt（画板 9px / 2px / -4px，2×）。
 pub const DOT_D: f64 = 4.5;
 pub const DOT_RGB: (u8, u8, u8) = (0xFF, 0x8A, 0x73);
-pub const DOT_RING: (u8, u8, u8) = (0x2C, 0x33, 0x3F);
 /// 光晕色（画板 `GL`）。
 pub const GLOW_RGB: [(u8, u8, u8); 6] = [(45, 212, 191), (224, 120, 79), (77, 159, 255), (139, 124, 246), (236, 106, 174), (107, 124, 255)];
 
@@ -385,12 +388,19 @@ mod tests {
         }
     }
 
+    /// 悬停面板飞 logo 按前端 `PILL_LOGO` 画图；它与这里的 `LOGO` 不一致 ⇒ 起飞那一帧 logo 跳大小。
+    #[test]
+    fn the_frontend_flies_logos_at_the_tray_size() {
+        let ts = include_str!("../../src/idleGridLayout.ts");
+        assert!(ts.contains(&format!("export const PILL_LOGO = {};", LOGO as i64)), "idleGridLayout.ts PILL_LOGO ≠ tray_idle::LOGO");
+    }
+
     #[test]
     fn width_matches_the_board_geometry() {
         assert_eq!(width_for(0), 0.0);
-        // 堆叠（2026-10-22）：3 家 4 + 14 + 2·11 + 7 = 47 pt（不堆叠时 63，画板 2× 126）
-        assert_eq!(width_for(3), 47.0);
-        assert_eq!(x_for(2), 4.0 + 2.0 * 11.0);
+        // 堆叠 + 放大 + 去底色（2026-10-22）：3 家 1 + 18 + 2·14 + 3 = 50 pt（14 pt 带底色时 47、不堆叠时 63）
+        assert_eq!(width_for(3), 50.0);
+        assert_eq!(x_for(2), 1.0 + 2.0 * 14.0);
         assert!(x_for(1) < x_for(0) + LOGO, "相邻两只确实压在一起");
         assert!(BACKING_R > LOGO / 2.0 && BACKING_R < LOGO / 2.0 + OVERLAP, "底色圆切得开、又不会把整只吃掉");
     }

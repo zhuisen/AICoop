@@ -65,6 +65,8 @@ interface Settings {
   idleIcons: boolean;
   idleSlots: 2 | 3;
   idleRankBy: "requests" | "tokens";
+  /** 「排序依据」默认改成 Token 数那次的一次性迁移已做过（见 `load`）。 */
+  idleRankMigrated?: boolean;
   idleDays: 7 | 14 | 30;
   /** 固定到菜单栏（最多 2 家，平台 key）。 */
   idlePinned: string[];
@@ -92,7 +94,7 @@ const DEFAULTS: Settings = {
                              // 「打开页面/弹出托盘就刷新」照旧 —— 见 useTraffic 的 autoRefreshEnabled()
   idleIcons: true,           // P11 §7 默认「AI 图标」；文字标题四档仍在（选它时 `trayStyle` 生效）
   idleSlots: 3,
-  idleRankBy: "requests",
+  idleRankBy: "tokens",      // 用户 2026-10-22「空闲时展示的 AI 按最近 14 天 token 量最多的排序」（原默认请求数）
   idleDays: 14,
   idlePinned: [],
   idleGlow: true,
@@ -110,7 +112,13 @@ const IDLE_NAME: Record<string, string> = { codex: "Codex", claude: "Claude", ag
 const KEY = "codexbar_settings";
 
 function load(): Settings {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { return DEFAULTS; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(KEY) || "{}") as Partial<Settings>;
+    // 设置是整份写盘的：改过任何一项的人，旧默认「请求数」也被存了下来，光改 DEFAULTS 他们看不到。迁移一次；
+    // 之后再在设置页选「请求数」会连同 `idleRankMigrated: true` 一起存下，不会再被改回去。
+    if (!raw.idleRankMigrated) { raw.idleRankBy = "tokens"; raw.idleRankMigrated = true; }
+    return { ...DEFAULTS, ...raw };
+  } catch { return DEFAULTS; }
 }
 function save(s: Settings) { localStorage.setItem(KEY, JSON.stringify(s)); }
 

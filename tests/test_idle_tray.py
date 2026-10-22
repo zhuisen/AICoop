@@ -176,5 +176,27 @@ class Rerank(unittest.TestCase):
         self.assertFalse(_node("m.shouldRerank(%s, %d, true, true)" % (json.dumps(day), nxt)), "★ 鼠标在托盘上不换")
 
 
+class RanksByTokensByDefault(unittest.TestCase):
+    """用户 2026-10-22「空闲时展示的 AI 不是按最近 14 天使用 token 量最多的排序吗？不是的话要这样按照」。
+    设置整份写盘 ⇒ 老用户存着旧默认「请求数」，必须迁移一次；迁移后再选「请求数」要保留。"""
+
+    def setUp(self):
+        import re
+        src = (ROOT / "codexbar/src/pages/SettingsPage.tsx").read_text(encoding="utf-8")
+        self.src = re.sub(r"//[^\n]*", "", re.sub(r"/\*[\s\S]*?\*/", "", src))
+
+    def test_default_is_tokens_over_14_days(self):
+        d = self.src[self.src.index("const DEFAULTS"):]
+        d = d[:d.index("};")]
+        self.assertRegex(d, r'idleRankBy:\s*"tokens",')
+        self.assertRegex(d, r"idleDays:\s*14,")
+
+    def test_stored_old_default_is_migrated_once(self):
+        load = self.src[self.src.index("function load()"):]
+        load = load[:load.index("function save(")]
+        self.assertRegex(load, r'if \(!raw\.idleRankMigrated\) \{ raw\.idleRankBy = "tokens"; raw\.idleRankMigrated = true; \}')
+        self.assertLess(load.index("idleRankMigrated"), load.index("...raw"), "迁移要在合并进结果之前")
+
+
 if __name__ == "__main__":
     unittest.main()
