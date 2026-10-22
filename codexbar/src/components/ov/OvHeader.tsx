@@ -23,13 +23,6 @@ export interface OvTab {
 
 const LOGO: Record<OvTabKey, LogoPlatform> = { codex: "codex", claude: "claude", gemini: "agy", grok: "grok" };
 
-const LockIc = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0, color: "var(--ovPh)" }}>
-    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
-    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.8" />
-  </svg>
-);
-
 export function OvTabs({ tabs, cur, onPick, isDark, layout }: {
   tabs: OvTab[]; cur: OvTabKey; onPick: (k: OvTabKey) => void; isDark: boolean; layout: OvLayout;
 }) {
@@ -47,7 +40,6 @@ export function OvTabs({ tabs, cur, onPick, isDark, layout }: {
             {layout.tabNames && <span style={{ fontSize: 13, fontWeight: 600 }}>{tb.name}</span>}
             <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12,
                            color: on ? "var(--tx)" : "var(--tx3)" }}>{tb.count}</span>
-            {tb.key === "grok" && <LockIc />}
             {tb.alert && (
               <i data-ov-tab-alert="" style={{ position: "absolute", top: 3, right: 3, width: 6, height: 6, borderRadius: 3,
                                                background: "#FF4D2E", boxShadow: "0 0 0 2px var(--ovDotRing)" }} />

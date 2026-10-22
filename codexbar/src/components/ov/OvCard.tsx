@@ -44,13 +44,6 @@ const Check = () => (
   </svg>
 );
 
-const Lock = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
-    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
-    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-  </svg>
-);
-
 export const IcBolt = ({ size = 12 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
     <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" fill="currentColor" />
@@ -153,7 +146,8 @@ export function OvTag({ tag, title }: { tag: OvTagSpec; title?: string }) {
     );
   }
   const s = TAG_STYLE[tag.kind] ?? TAG_STYLE.off;
-  const icon = (k: string) => (k === "inuse" ? <Check /> : k === "readonly" ? <Lock /> : null);
+  // 「只读」不带锁：用户 2026-10-22 把锁读成「被锁住 / 没接通」，其实只是「单号、不换号」
+  const icon = (k: string) => (k === "inuse" ? <Check /> : null);
   const cjk = /^[\u3400-\u9fff]+$/.test(tag.text);
   const width = cjk ? tag.text.length * 11 + 14 + (icon(tag.kind) ? 13 : 0) : undefined;
   const flip = prev ? (prev.n % 2 ? "a" : "b") : "";
