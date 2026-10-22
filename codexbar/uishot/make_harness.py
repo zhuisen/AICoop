@@ -1488,7 +1488,7 @@ function relayEntry() {
       // ★ Claude 额度（`read_statusline_quota`，契约 PLAN §2.2 `--read`）。
       //   `?claudeq=ok`（默认，状态栏转写，带重置时刻）· `plan`（Claude.app，无重置时刻）·
       //   `stale`（2 小时前的读数）· `low`（5h 剩 6%）· `none`（读不到）· `err`（命令失败）·
-      //   `idle`（5h 已过重置点、之后的读数没再报它 ⇒ 100% 未启动）。
+      //   `idle`（5h 已过重置点、之后的读数没再报它 ⇒ 100% 未启动）· `weektight`（5h 剩 99、周剩 67）。
       // ★ 悬停面板的三条命令（`tps_hover.rs` / lib.rs）：记下参数，测试核「高度报了多少、托盘 logo 藏 / 放回」。
       // ★ 刘海卡片（`harness-notch.html`，交接包 4e）的四条命令：几何 / 谁在跑 / 卡片高度上报 / 版面。
       //   不打桩 ⇒ 落到 default 返回 null ⇒ 刘海尺寸、光晕全是默认空值，卡片照样渲染、零报错 —— 假绿。
@@ -1543,7 +1543,8 @@ function relayEntry() {
         var cap = cq === 'stale' ? _NOW - 7200 : _NOW - 120;
         var w5 = cq === 'idle' ? { used_pct: 56, resets_at: _NOW - 1800, captured_at: _NOW - 6000, expired: true }
           : { used_pct: cq === 'low' ? 94 : 37, resets_at: cq === 'plan' ? null : _NOW + 7500, captured_at: cap, expired: false };
-        var w7 = { used_pct: 22, resets_at: cq === 'plan' ? null : _NOW + 4 * 86400 + 3600, captured_at: cap, expired: false };
+        var w7 = { used_pct: cq === 'weektight' ? 33 : 22, resets_at: cq === 'plan' ? null : _NOW + 4 * 86400 + 3600, captured_at: cap, expired: false };
+        if (cq === 'weektight') w5.used_pct = 1;   // 5h 剩 99、周剩 67：logo 水位该跟 5h（用户 2026-10-22）
         var cl = cq === 'none' ? { source: 'none', captured_at: null, five_hour: null, seven_day: null, error: null }
           : { source: cq === 'plan' ? 'plan-usage-history' : 'statusline', captured_at: cap, five_hour: w5, seven_day: w7, error: null };
         return Promise.resolve(JSON.stringify({ claude: cl, agy: { source: 'none', captured_at: null, plan_tier: null, buckets: {}, error: null } }));

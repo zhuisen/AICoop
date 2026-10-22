@@ -140,10 +140,13 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const gNow = g ? grokRemPct(g) : null;
     const gRem = g ? gNow ?? grokLastGoodRemPct(g) : null;
     const gPeriodEnd = g ? (gNow === null ? g.last_good?.period_end : g.quota?.period_end) : null;
+    // ★ logo 水位 = 5h 剩余（用户 2026-10-22「logo 水位都改成 5h」，取代 P11 §2「各窗口取最紧」）：与悬停格子的大数字
+    //   同一个数。原来 Claude 5h 99% / 周 67% 时 logo 画 67%，用户读成「刷到 100% 了 svg 还是旧的」。
+    //   没有 5h 窗口的写 null（整只灰），不拿周窗口顶替；grok 只有周窗口 ⇒ 用周（同 `main`）。红点、插队跟着这个数走。
     const rem: Record<string, (number | null)[]> = {
-      codex: live ? live.windows.map((w) => w.pct) : [],
-      claude: [c5, claudeRem(claude?.week, now)],
-      agy: agyWinRows(agyQuota).map((r) => r.remaining),
+      codex: live ? [w5?.pct ?? null] : [],
+      claude: [c5],
+      agy: agyWinRows(agyQuota).length ? [a5?.remaining ?? null] : [],
       grok: g ? [gRem] : [],
     };
     // 面板大数字 = 5h 剩余；grok 只有周窗口 ⇒ 用周。右上角：5h 倒计时（grok 是周）；按量计费（Kimi / DeepSeek）不写

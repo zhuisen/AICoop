@@ -144,6 +144,19 @@ class MenubarFeedsTheTray(unittest.TestCase):
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
+@unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
+class LogoFillIsTheFiveHourWindow(unittest.TestCase):
+    """★ 用户 2026-10-22「logo 水位都改成 5h」：Claude 5h 剩 99、周剩 67 ⇒ 托盘画 99，不画最紧的 67。"""
+    def test_claude_logo_follows_5h_not_the_tighter_week(self):
+        r = _open("harness-menubar.html?w=352&claudeq=weektight", {"idlePinned": ["claude"]}, ())
+        if r is None:
+            self.skipTest("harness 3304 没起 —— skip 不是绿")
+        got = last(r[0], "set_idle_tray")
+        cl = [x for x in got["slots"] if x["key"] == "claude"]
+        self.assertEqual(len(cl), 1, f"夹具里 Claude 没上托盘 —— 判不了：{got['slots']}")
+        self.assertEqual(cl[0]["remaining"], 99, "★ logo 水位应是 5h 剩余 99，不是周 67")
+
+
 class SettingsRows(unittest.TestCase):
     def test_text_style_row_only_in_text_mode_and_the_change_is_broadcast(self):
         def to_text(pg):
