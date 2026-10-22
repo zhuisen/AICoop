@@ -121,7 +121,7 @@ class MenubarFeedsTheTray(unittest.TestCase):
         frozen = list(reversed(live))
         seed_js = ("(() => { const d = new Date(); const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')"
                    " + '-' + String(d.getDate()).padStart(2, '0');"
-                   " localStorage.setItem('codexbar_idle_frozen', JSON.stringify({ day: k, keep: %s, sig: '[3,\"requests\",14,[]]' })); })()"
+                   " localStorage.setItem('codexbar_idle_frozen', JSON.stringify({ day: k, keep: %s, sig: '[3,\"tokens\",14,[]]' })); })()"
                    % json.dumps(frozen))
         got = last(_open_with("harness-menubar.html?w=352", {}, seed_js)[0], "set_idle_tray")
         self.assertEqual([x["key"] for x in got["slots"][:2]], frozen, "★★ 今天已冻结的顺序优先于实时排名")
@@ -212,7 +212,8 @@ class GridGeometry(unittest.TestCase):
         self.assertEqual([x["fromTray"] for x in f], [True, True, False], "★ 托盘以外的那家不飞，原位淡入")
         self.assertEqual(f[0]["pill"], {"x": 319, "y": 5, "s": 1}, "从托盘里那个 logo 的位置起飞")
         cx = 40 + 1 + 8 + 100.25 / 2
-        self.assertAlmostEqual(f[0]["cell"]["x"] + 7, cx, places=6, msg="★★ 落在第一格的环心（含面板描边 1）")
+        half = int(re.search(r"export const PILL_LOGO = (\d+);", (ROOT / "codexbar/src/idleGridLayout.ts").read_text()).group(1)) / 2
+        self.assertAlmostEqual(f[0]["cell"]["x"] + half, cx, places=6, msg="★★ 落在第一格的环心（含面板描边 1）")
         self.assertEqual([f[0]["delay"], f[1]["delay"]], [25, 0], "按托盘顺序错开 25 ms（Codex 在托盘第 1 位先走）")
         self.assertEqual([f[0]["delayBack"], f[1]["delayBack"]], [0, 25], "飞回倒序：最右的先走")
 

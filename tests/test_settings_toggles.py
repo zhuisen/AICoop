@@ -71,7 +71,9 @@ class TheThreeRowsExistWithTheirDefaults(unittest.TestCase):
         self.assertIn('const KEY = "codexbar_settings";', self.s)
         iface = block(self.s, "interface Settings {", "}")
         self.assertRegex(iface, r"\bnotchHud:\s*boolean;")
-        self.assertIn('{ ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") }', self.s,
+        load = block(self.s, "function load(): Settings {", "\nfunction save(")
+        self.assertIn('JSON.parse(localStorage.getItem(KEY) || "{}")', load)
+        self.assertIn("return { ...DEFAULTS, ...raw };", load,
                       "存过的值盖默认值 ⇒ 旧设置里没有 tpsTray 时按默认开，有 notchHud 时沿用")
         row = block(self.s, 'label="刘海屏版本"', "</OneLineRow>")
         self.assertIn('invoke<NotchStatus>("set_notch_hud", { on: next })', row)

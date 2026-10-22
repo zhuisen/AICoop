@@ -379,12 +379,15 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
                   minHeight: 0, height: "100%", overflowY: "auto",
                   // 滚动条压住右侧滑块/开关不好点,给一点右内边距
                   paddingRight: 4 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 34, flexShrink: 0, maxWidth: 860 }}>
+      {/* 用户 2026-10-22「设置界面的内容需要识别 AICoop 尺寸大小，位置都要居中显示」：最大宽 860 不变，窗口更宽时整列居中 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 34, flexShrink: 0, maxWidth: 860,
+                    width: "100%", alignSelf: "center" }}>
         <h1 style={{ margin: 0, fontSize: titleSize(W), fontWeight: 700 }}>设置</h1>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: t.muted, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap" }}>改动即时生效</span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 860, paddingBottom: 20 }}>
+      <div data-settings-col style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 860, paddingBottom: 20,
+                                      width: "100%", alignSelf: "center" }}>
 
       <SGroup t={t} id="general" title="通用">
         <OneLineRow t={t} label="开机自启" desc="登录 macOS 后常驻菜单栏" title="登录 macOS 时自动启动，后台常驻菜单栏。">

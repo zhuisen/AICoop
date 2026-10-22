@@ -557,8 +557,14 @@ class ActivityGlow(unittest.TestCase):
         watch = rs[rs.index("fn watch_activity("):rs.index("fn run_live_soon(")]
         self.assertIn("notify::recommended_watcher(", watch, "活动检测要靠文件系统推送")
         self.assertIn("RecursiveMode::Recursive", watch)
+        # ★ 2026-10-22 例外：FSEvents 只在**关闭**写过的文件时报（实测），一直开着写的 agy WAL / Codex rollout 收不到 ⇒
+        #   只对这两家的**平目录**补 mtime 轮询（agy ~500 个 -wal 1.3 ms；Codex 最近两个日期目录）。Claude 的 8000 个文件仍只靠推送。
+        poll = rs[rs.index("fn poll_open_writers("):rs.index("impl Roots {", rs.index("fn recent_day_dirs("))]
+        self.assertNotIn("self.claude", poll, "Claude 的会话文件不许轮询（每 2s 50 ms 那次）")
+        self.assertNotIn("self.grok", poll)
         for f in (ACT, RS):
-            self.assertNotIn("read_dir", _code(f), "不许回到逐个目录扫文件")
+            code = _code(f).replace(poll, "") if f == ACT else _code(f)
+            self.assertNotIn("read_dir", code, "不许回到逐个目录扫文件（只许 `poll_open_writers` 那两家）")
             self.assertNotIn("last_proxy_ts", _code(f))
         cls = rs[rs.index("fn classify("):rs.index("fn is_write(")]
         self.assertRegex(cls, r'n\.starts_with\("rollout-"\) && n\.ends_with\("\.jsonl"\)', "Codex 看 rollout 写入")
