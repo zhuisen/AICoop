@@ -9,7 +9,7 @@ import { parseClaudeQuota, type ClaudeQuota, type ClaudeWin } from "../mbLogic";
 import { useAgyPool } from "./useAgyPool";
 import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
 import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
-         type IdlePanelData, type PanelIn } from "../idleTray";
+         weeklyWarns, type IdlePanelData, type IdleWarn, type PanelIn } from "../idleTray";
 
 /** Claude 额度转写只在 Claude Code 刷新状态栏时才变：与总览 `useClaudeQuota` 同一个间隔（60 s）。
  *  ★ 原来 5 分钟：刚停手就悬停，面板比总览旧最多 5 分钟（2026-10-21 复查 B1）。另在托盘弹出 / 光标靠近托盘时读。 */
@@ -171,6 +171,24 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     });
   }, [inUse, claude, agyQuota, agyStale, grok, traffic, prefs, cfg.idleDays, cfg.idleHoverReset, tick]);
 
+  // 周额度（只给面板底部的告警用；logo 水位已是 5h）。读不到写 null ⇒ 不报
+  const warns = useMemo<IdleWarn[]>(() => {
+    const now = Date.now();
+    const live = inUse && inUse.status !== "dead" ? inUse : null;
+    const cw = live?.windows.find((w) => w.mins === 10080);
+    const aw = agyWinRows(agyQuota).find((r) => r.label === "周");
+    const g = grok?.accounts[0];
+    const gNow = g ? grokRemPct(g) : null;
+    const gEnd = g ? (gNow === null ? g.last_good?.period_end : g.quota?.period_end) : null;
+    const on = new Set(platforms.map((p) => p.key));
+    return weeklyWarns([
+      { key: "codex", week: cw?.pct ?? null, reset: cw?.reset ?? "" },
+      { key: "claude", week: claudeRem(claude?.week, now), reset: claude?.week?.resetsAt ? fmtEta(claude.week.resetsAt) : "" },
+      { key: "agy", week: aw?.remaining ?? null, reset: aw?.reset_at ? agyResetText(aw).text : "" },
+      { key: "grok", week: g ? gNow ?? grokLastGoodRemPct(g) : null, reset: gEnd ? fmtEta(gEnd) : "" },
+    ].filter((w) => on.has(w.key)));
+  }, [inUse, claude, agyQuota, grok, platforms, tick]);
+
   const panel = useRef<IdlePanelData | null>(null);
   useEffect(() => {
     const un = listen(IDLE_PANEL_WANT, () => { if (panel.current) void emit(IDLE_PANEL_EVENT, panel.current).catch(() => {}); });
@@ -199,6 +217,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
       cells: panelCells(platforms, bar, { scope, max: cfg.idleHoverMax,
                                           showUnconnected: cfg.idleHoverUnconnected, rankBy: cfg.idleRankBy }),
       max: cfg.idleHoverMax,
+      warns,
     };
     // 同一份就不再发：Rust 每收一次都会重画一张 NSImage。`cells` = 面板有几格（0 格时 Rust 不弹空面板）
     const tray = JSON.stringify({ enabled: cfg.idleIcons, slots: trayPayload(slots), cells: next.cells.length });
@@ -210,7 +229,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
       panel.current = next;
       void emit(IDLE_PANEL_EVENT, next).catch(() => {});
     }
-  }, [platforms, cfg, running, traffic]);
+  }, [platforms, cfg, running, traffic, warns]);
 
   // 「上次 AI 活动」= 用量快照里最近一次使用（小时桶末尾，只会偏晚 ⇒ 只会少打招呼）。重启后 Rust 靠它接上
   const lastActive = useMemo(() => {

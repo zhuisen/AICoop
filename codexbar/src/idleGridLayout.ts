@@ -122,3 +122,11 @@ export function planIdleFlights(layout: IdleLayout, keys: string[], g: GridLayou
 
 /** 落进环心时的缩放。 */
 export const CELL_SCALE = LOGO / PILL_LOGO;
+
+/** 面板底部周额度告警堆叠（用户 2026-10-22）：一条高 30，展开后条间距 6；收着时只露第一条，后面每层往下露 4。 */
+export const WARN_H = 30;
+export const WARN_GAP = 6;
+export function warnBlockH(n: number, open: boolean): number {
+  if (n <= 0) return 0;
+  return open ? n * WARN_H + (n - 1) * WARN_GAP : WARN_H + Math.min(n - 1, 2) * 4;
+}

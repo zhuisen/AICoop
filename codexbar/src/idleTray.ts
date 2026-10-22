@@ -179,7 +179,20 @@ export interface PanelCell {
  *  放在这个零 import 的模块里：悬停面板只要这两个名字，不该为此把设置页整套模块拉进它的包。 */
 export const IDLE_PANEL_EVENT = "idle-panel";
 export const IDLE_PANEL_WANT = "idle-panel-want";
-export interface IdlePanelData { cells: PanelCell[]; max: 4 | 8 }
+export interface IdlePanelData { cells: PanelCell[]; max: 4 | 8; warns?: IdleWarn[] }
+
+/** 面板最底部的周额度告警一条（用户 2026-10-22「空闲时周额度低于 10% 就弹出显示，放在最底部」）。 */
+export interface IdleWarn { key: string; rem: number; reset: string }
+
+/**
+ * logo 水位改成 5h 之后，周额度见底在托盘上看不出来 ⇒ 面板底部补一条堆叠告警。
+ * 只收**读到了**且按显示的整数 < 10% 的（与红点同口径，`isLow`）；读不到的不报（不是「快用完」）。剩得最少的在最上面。
+ */
+export function weeklyWarns(ws: readonly { key: string; week: number | null; reset: string }[]): IdleWarn[] {
+  return ws.filter((w) => w.week !== null && Number.isFinite(w.week) && isLow(w.week))
+    .map((w) => ({ key: w.key, rem: Math.max(0, Math.round(w.week as number)), reset: w.reset }))
+    .sort((a, b) => a.rem - b.rem || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
 
 /**
  * 面板显示哪几家、什么顺序（P11 §6「显示几家」，P9 S1「悬停显示哪些」）：

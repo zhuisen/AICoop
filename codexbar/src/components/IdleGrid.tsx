@@ -49,12 +49,28 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
 
   const cells = data?.cells ?? [];
   const g = G.gridLayout(cells.length);
+  // 底部周额度告警堆叠（用户 2026-10-22）：收着露第一条，光标在上面就展开（窗口跟着长高）
+  const warns = cells.length ? data?.warns ?? [] : [];
+  const [warnOpen, setWarnOpen] = useState(false);
+  const warnTop = g.h - G.PAD + G.WARN_GAP;
+  const warnH = G.warnBlockH(warns.length, warnOpen);
+  const panelH = warns.length ? warnTop + warnH + G.PAD : g.h;
   const hov = hovKey === null ? -1 : cells.findIndex((c) => c.key === hovKey);
 
   // 高度上报：Rust 按它摆窗口（与在跑面板同一条命令）。只有这一轮是空闲面板时才报 —— 两个面板共用一个窗口高度
   useEffect(() => {
-    if (active && (mode === "open" || mode === "closed")) invoke("tpshover_resize", { h: g.h }).catch(noop);
-  }, [g.h, mode, active]);
+    if (active && (mode === "open" || mode === "closed")) invoke("tpshover_resize", { h: panelH }).catch(noop);
+  }, [panelH, mode, active]);
+
+  // ★ 面板不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 展开靠 Rust 推的光标坐标（同在跑面板展开会话）
+  useEffect(() => {
+    const un = listen<[number, number] | null>("tpshover-cursor", (e) => {
+      const p = e.payload;
+      setWarnOpen(!!p && !!document.elementFromPoint(p[0], p[1])?.closest("[data-idle-warn]"));
+    });
+    return () => { void un.then((f) => f()); };
+  }, []);
+  useEffect(() => { if (mode !== "open") setWarnOpen(false); }, [mode]);
 
   const isOpen = mode === "open" && cells.length > 0;
   const px = layout?.panel.x ?? 40, py = layout?.panel.y ?? 30;
@@ -119,8 +135,8 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
 
   return (
     <>
-      <div className="ig-shell" data-idle-panel data-idle-h={g.h}
-           style={{ left: px, top: py, width: G.PANEL_W, height: g.h, opacity: isOpen ? 1 : 0,
+      <div className="ig-shell" data-idle-panel data-idle-h={panelH}
+           style={{ left: px, top: py, width: G.PANEL_W, height: panelH, opacity: isOpen ? 1 : 0,
                     transform: `scale(${isOpen || reduce ? 1 : 0.97})`, pointerEvents: isOpen ? "auto" : "none",
                     transition: shellTr }}
            onMouseLeave={() => setHovKey(null)}>
@@ -169,6 +185,29 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
             </div>
           );
         })}
+        {warns.length > 0 && (
+          <div className="ig-warns" data-level="strong" data-idle-warn={warns.length} data-open={warnOpen ? 1 : 0}
+               onMouseEnter={() => setWarnOpen(true)} onMouseLeave={() => setWarnOpen(false)}
+               style={{ left: G.PAD, top: warnTop, width: G.PANEL_W - 2 * G.PAD - 2, height: warnH,
+                        opacity: isOpen ? 1 : 0, transition: reduce ? "opacity 150ms" : `opacity 200ms ease-out ${isOpen ? 160 : 0}ms, height 300ms ${SPRING}` }}>
+            {warns.map((w, i) => (
+              <div key={w.key} className="ig-warn" data-idle-warn-item={w.key}
+                   style={{ zIndex: warns.length - i, opacity: warnOpen || i < 3 ? 1 : 0,
+                            transform: warnOpen ? `translate3d(0, ${i * (G.WARN_H + G.WARN_GAP)}px, 0)`
+                              : `translate3d(0, ${Math.min(i, 2) * 4}px, 0) scale(${1 - Math.min(i, 2) * 0.05})`,
+                            transition: reduce ? "none" : `transform 300ms ${SPRING} ${i * 35}ms, opacity 160ms` }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0, color: "var(--ig-warn-tx)" }}>
+                  <path d="M12 3.5 2.5 20h19L12 3.5z" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+                  <path d="M12 10v4.5M12 17.3v.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                </svg>
+                <PlatformLogo platform={w.key as LogoPlatform} isDark={isDark} size={14} />
+                <span className="ig-warn-tx">{G.NAME[w.key] ?? w.key} 周额度剩 <b style={{ color: "var(--ig-warn-tx)" }}>{w.rem}%</b></span>
+                {!warnOpen && i === 0 && warns.length > 1 && <span className="ig-warn-more">+{warns.length - 1}</span>}
+                {w.reset && <span className="ig-warn-dt">↻ {w.reset}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {fly.map((f) => (
         <img key={f.key} className="hv-fly" data-idle-fly={f.key} alt="" draggable={false}

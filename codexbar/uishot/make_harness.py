@@ -1488,7 +1488,7 @@ function relayEntry() {
       // ★ Claude 额度（`read_statusline_quota`，契约 PLAN §2.2 `--read`）。
       //   `?claudeq=ok`（默认，状态栏转写，带重置时刻）· `plan`（Claude.app，无重置时刻）·
       //   `stale`（2 小时前的读数）· `low`（5h 剩 6%）· `none`（读不到）· `err`（命令失败）·
-      //   `idle`（5h 已过重置点、之后的读数没再报它 ⇒ 100% 未启动）· `weektight`（5h 剩 99、周剩 67）。
+      //   `idle`（5h 已过重置点、之后的读数没再报它 ⇒ 100% 未启动）· `weektight`（5h 剩 99、周剩 67）· `weeklow`（周剩 5）。
       // ★ 悬停面板的三条命令（`tps_hover.rs` / lib.rs）：记下参数，测试核「高度报了多少、托盘 logo 藏 / 放回」。
       // ★ 刘海卡片（`harness-notch.html`，交接包 4e）的四条命令：几何 / 谁在跑 / 卡片高度上报 / 版面。
       //   不打桩 ⇒ 落到 default 返回 null ⇒ 刘海尺寸、光晕全是默认空值，卡片照样渲染、零报错 —— 假绿。
@@ -1545,6 +1545,7 @@ function relayEntry() {
           : { used_pct: cq === 'low' ? 94 : 37, resets_at: cq === 'plan' ? null : _NOW + 7500, captured_at: cap, expired: false };
         var w7 = { used_pct: cq === 'weektight' ? 33 : 22, resets_at: cq === 'plan' ? null : _NOW + 4 * 86400 + 3600, captured_at: cap, expired: false };
         if (cq === 'weektight') w5.used_pct = 1;   // 5h 剩 99、周剩 67：logo 水位该跟 5h（用户 2026-10-22）
+        if (cq === 'weeklow') w7.used_pct = 95;    // 周剩 5：空闲面板底部要出周额度告警（用户 2026-10-22）
         var cl = cq === 'none' ? { source: 'none', captured_at: null, five_hour: null, seven_day: null, error: null }
           : { source: cq === 'plan' ? 'plan-usage-history' : 'statusline', captured_at: cap, five_hour: w5, seven_day: w7, error: null };
         return Promise.resolve(JSON.stringify({ claude: cl, agy: { source: 'none', captured_at: null, plan_tier: null, buckets: {}, error: null } }));
@@ -1687,7 +1688,10 @@ function relayEntry() {
     var all = [C('codex', 67, '↻ 2h14m', true), C('claude', 40, '↻ 1h05m', true), C('agy', String(mode) === 'ok' ? 86 : 6, '↻ 3h40m', true),
                C('grok', 86, '↻ 5d21h', false), C('kimi', null, '', false), C('deepseek', null, '', false)];
     var m = String(mode || '4');
-    return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4 };
+    // `hvwarns=<n>`：面板底部周额度告警（用户 2026-10-22，周剩 < 10%）。0 = 没有
+    var W = [{ key: 'claude', rem: 4, reset: '2d 6h' }, { key: 'codex', rem: 7, reset: '4d 1h' }, { key: 'agy', rem: 9, reset: '1d 20h' }];
+    var nw = Math.max(0, Math.min(3, Number(p.get('hvwarns') || 0)));
+    return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4, warns: W.slice(0, nw) };
   }
   function HV_IDLE_LAYOUT() {
     var keys = ['codex', 'claude', 'agy'], pw = 4 + 3 * 14 + 2 * 5 + 7, px = 40 + 435 / 2 - pw / 2, py = 3;
@@ -1740,6 +1744,17 @@ function relayEntry() {
           }, 16);
         }, 1000);
         if (p.get('hvcursorleave') === '1') setTimeout(function () { fire('tpshover-cursor', null); }, 2000);
+      }
+      // `hvwarncursor=1`：1 s 时把光标（Rust 坐标通道）放到底部告警堆叠上；`hvwarncursor=leave` 再在 2 s 时移开
+      if (p.get('hvwarncursor')) {
+        setTimeout(function () {
+          var el = document.querySelector('[data-idle-warn]');
+          clicks.push('hvwarncursor →命中 ' + (el ? 1 : 0));
+          if (!el) return;
+          var r = el.getBoundingClientRect();
+          fire('tpshover-cursor', [r.left + r.width / 2, r.top + 10]);
+        }, 1000);
+        if (p.get('hvwarncursor') === 'leave') setTimeout(function () { fire('tpshover-cursor', null); }, 2000);
       }
       if (p.get('hvclick') === 'link') setTimeout(function () {
         var a = document.querySelector('[data-hover-link]');
