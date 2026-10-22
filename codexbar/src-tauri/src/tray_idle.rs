@@ -20,7 +20,13 @@ use crate::tray_pill::{Fade, Spring};
 /// 六家 logo 的槽位（顺序同画板 `NM`）：Codex · Claude · Gemini · Grok · Kimi · DeepSeek。
 pub const KEYS: [&str; 6] = ["codex", "claude", "agy", "grok", "kimi", "deepseek"];
 pub const LOGO: f64 = 14.0;
-pub const GAP: f64 = 5.0;
+/// ★ 用户 2026-10-22「空闲时多个 AI svg 可以堆叠靠在一起，这样就不会那么大了」：相邻 logo 互相压 3 pt（头像组式），
+///   步进 14 + 5 = 19 → 14 − 3 = 11；3 家宽 63 → 47 pt。第一版压 5 pt + 底色圆半径 8.5，离线样张里右边两只被盖掉一半、Claude 只剩一角，退到 3 / 8。左边的压在右边的上面（右上角的红点不被盖住），
+///   每只 logo 后垫一块底色圆把下面那只切开（`tray_pill.rs::idle_layer`）。原来的间距 5 见画板几何。
+pub const OVERLAP: f64 = 3.0;
+pub const STEP: f64 = LOGO - OVERLAP;
+/// 垫在每只 logo 后面的底色圆的半径（比 logo 半宽多 1，切出一圈缝）。
+pub const BACKING_R: f64 = LOGO / 2.0 + 1.0;
 pub const PAD_L: f64 = 4.0;
 pub const PAD_R: f64 = 7.0;
 /// 灰色剪影的不透明度（画板 `ghostOp: .3`）。
@@ -75,13 +81,13 @@ pub fn parse_slots(v: &serde_json::Value) -> Vec<IdleIn> {
     out
 }
 
-/// 胶囊宽：左 4 + n·14 + (n−1)·5 + 右 7；一家都没有 ⇒ 0（调用方退回模板图标）。
+/// 胶囊宽：左 4 + 14 + (n−1)·9 + 右 7（堆叠）；一家都没有 ⇒ 0（调用方退回模板图标）。
 pub fn width_for(n: usize) -> f64 {
-    if n == 0 { 0.0 } else { PAD_L + n as f64 * LOGO + (n - 1) as f64 * GAP + PAD_R }
+    if n == 0 { 0.0 } else { PAD_L + LOGO + (n - 1) as f64 * STEP + PAD_R }
 }
 
 /// 第 i 个 logo 的左沿（胶囊内坐标）。
-pub fn x_for(i: usize) -> f64 { PAD_L + i as f64 * (LOGO + GAP) }
+pub fn x_for(i: usize) -> f64 { PAD_L + i as f64 * STEP }
 
 /// 剩余回升超过这么多 = 「额度重置」（播从下往上涨满 + 白光），而不是普通的读数抖动。
 pub const RESET_JUMP: f64 = 20.0;
@@ -382,8 +388,11 @@ mod tests {
     #[test]
     fn width_matches_the_board_geometry() {
         assert_eq!(width_for(0), 0.0);
-        assert_eq!(width_for(3), 4.0 + 3.0 * 14.0 + 2.0 * 5.0 + 7.0);   // 63 pt（画板 2× 126）
-        assert_eq!(x_for(2), 4.0 + 2.0 * 19.0);
+        // 堆叠（2026-10-22）：3 家 4 + 14 + 2·11 + 7 = 47 pt（不堆叠时 63，画板 2× 126）
+        assert_eq!(width_for(3), 47.0);
+        assert_eq!(x_for(2), 4.0 + 2.0 * 11.0);
+        assert!(x_for(1) < x_for(0) + LOGO, "相邻两只确实压在一起");
+        assert!(BACKING_R > LOGO / 2.0 && BACKING_R < LOGO / 2.0 + OVERLAP, "底色圆切得开、又不会把整只吃掉");
     }
 
     #[test]

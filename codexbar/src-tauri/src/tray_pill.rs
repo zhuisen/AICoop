@@ -1165,15 +1165,18 @@ pub mod draw {
     }
 
     /// 空闲托盘那一层（P11）：logo 右对齐画在 `right` 以左；整层随过渡淡出 / 缩小（同文字标题）。
-    unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64) {
-        use crate::tray_idle::{DOT_D, DOT_RGB, DOT_RING, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
+    unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64, backing: (f64, f64, f64), bg_a: f64) {
+        use crate::tray_idle::{BACKING_R, DOT_D, DOT_RGB, DOT_RING, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
         if a <= 0.001 || f.width <= 0.0 { return; }
         let r = res();
         let x0 = right - f.width;
         let rgb = |c: (u8, u8, u8)| (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
         save();
         scale_about(right - f.width / 2.0, H / 2.0, k);
-        for l in &f.logos {
+        // 堆叠（2026-10-22）：从右往左画，左边的压在上面；每只先垫一块底色圆把下面那只切开
+        let mut order: Vec<&crate::tray_idle::IdleDraw> = f.logos.iter().collect();
+        order.sort_by(|p, q| q.x.partial_cmp(&p.x).unwrap_or(std::cmp::Ordering::Equal));
+        for l in order {
             let la = a * l.alpha;
             if la <= 0.001 { continue; }
             let x = x0 + l.x;
@@ -1191,6 +1194,12 @@ pub mod draw {
                     let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
                         toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
                 }
+            }
+            if bg_a > 0.001 {
+                let c = NSRect::new(NSPoint::new(x + IL / 2.0 - BACKING_R, y + IL / 2.0 - BACKING_R), NSSize::new(2.0 * BACKING_R, 2.0 * BACKING_R));
+                let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: c];
+                let _: () = msg_send![color(backing, la * bg_a), setFill];
+                let _: () = msg_send![p, fill];
             }
             let lr = NSRect::new(NSPoint::new(x, y), NSSize::new(IL, IL));
             // 灰色剪影（整只），再盖上「还剩的那部分」原色
@@ -1261,7 +1270,7 @@ pub mod draw {
         match t {
             TitleLayer::Text(t) => title(t, ap, w, f.title_a, f.title_scale),
             // 悬停面板飞 logo 期间托盘不画自己的 logo（同在跑胶囊那条）
-            TitleLayer::Idle(i) => if !hide_logos { idle_layer(i, w, f.title_a, f.title_scale) },
+            TitleLayer::Idle(i) => if !hide_logos { idle_layer(i, w, f.title_a, f.title_scale, capsule_bg(ap).f(), f.bg_a) },
         }
 
         // 各段：只在胶囊里画（滚动的数字不越出胶囊）
@@ -1783,7 +1792,7 @@ mod tests {
     fn render_idle_samples() {
         use crate::tray_idle::{IdleAnim, IdleIn};
         let home = std::env::var("HOME").unwrap();
-        let dir = std::path::PathBuf::from(home).join("Downloads/aicoop_screenshots_20261021_phase1/tray_idle");
+        let dir = std::path::PathBuf::from(home).join("Downloads/codexbar_screenshots_20261022_pill_nobg/tray_idle");
         std::fs::create_dir_all(&dir).unwrap();
         let s = |logo, rem: Option<f64>, red| IdleIn { logo, remaining: rem, red };
         let cases: Vec<(&str, Vec<IdleIn>, bool, f64)> = vec![
