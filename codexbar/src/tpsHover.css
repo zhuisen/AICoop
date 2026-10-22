@@ -95,20 +95,18 @@ html, body, #root { margin: 0; width: 100%; height: 100%; background: transparen
 .ig-hl { position: absolute; left: 0; top: 0; border-radius: 10.5px; box-shadow: 0 0 0 1px var(--ig-hl-ring);
   background: var(--ig-hl-bg); pointer-events: none; z-index: 3; }
 .ig-cell { position: absolute; border-radius: 10.5px; cursor: pointer; }
-/* 底部周额度告警堆叠（用户 2026-10-22）：收着第 i 条叠在第一条下面往下露 4 px、每层缩 5%；展开后依次排开 */
-.ig-warns { position: absolute; }
-.ig-warn { position: absolute; left: 0; right: 0; top: 0; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 9px;
-  display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ig-tx); transform-origin: top center;
-  background: var(--ig-warn-bg); box-shadow: inset 0 0 0 1px var(--ig-warn-line); white-space: nowrap; }
-.ig-warn > * { transition: opacity 160ms; }
-/* 收着时底下几层只露边：内容隐藏（底色带透明度，不藏的话第二条的字会透上来） */
-.ig-warns[data-open="0"] .ig-warn:not(:first-child) > * { opacity: 0; }
-.ig-warn-tx { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.ig-warn-tx b { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-weight: 700; }
-.ig-warn-more { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--ig-tx2); padding: 1px 6px;
-  border-radius: 8px; box-shadow: inset 0 0 0 1px var(--ig-warn-line); }
-.ig-warn-dt { margin-left: auto; padding-left: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
-  font-variant-numeric: tabular-nums; color: var(--ig-tx2); }
+/* 周额度 < 10% 的小红牌（A1）：占住白点的位置（左上），在菜单栏的那家白点挪进牌子 */
+.ig-wk { position: absolute; left: 5px; top: 4.5px; display: inline-flex; align-items: center; gap: 3px; height: 15px; padding: 0 4px;
+  border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--ig-warn-tx); background: var(--ig-warn-bg); box-shadow: inset 0 0 0 1px var(--ig-warn-line); white-space: nowrap; }
+.ig-wk > i { width: 5px; height: 5px; border-radius: 3px; background: var(--ig-dot); }
+/* B1：悬停格子时右上角的 ×（隐藏到重置） */
+.ig-x { position: absolute; right: 5px; top: 4px; width: 17px; height: 17px; border-radius: 5px; display: grid; place-items: center;
+  font-size: 13px; line-height: 1; color: var(--ig-tx2); background: var(--ig-hl-bg); box-shadow: inset 0 0 0 1px var(--ig-border);
+  cursor: pointer; transition: opacity 120ms; }
+.ig-x:hover { color: var(--ig-tx); }
+.ig-note { position: absolute; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ig-tx2); white-space: nowrap; }
+.ig-undo { color: #2dd4bf; cursor: pointer; }
 .ig-dot { position: absolute; left: 7px; top: 7px; width: 6px; height: 6px; border-radius: 3px; background: var(--ig-dot); }
 .ig-reset { position: absolute; right: 7.5px; top: 5px; font-family: 'JetBrains Mono', 'PingFang SC', monospace;
   font-size: 10.5px; color: var(--ig-tx2); font-variant-numeric: tabular-nums; }

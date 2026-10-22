@@ -32,7 +32,7 @@ TRAP = """(seed) => {
     set(v) { const orig = v.invoke.bind(v);
       v.invoke = async (c, a, o) => {
         if (c === 'set_idle_tray' || c === 'set_idle_prefs' || c === 'tpshover_dismiss' || c === 'tpshover_resize'
-            || (c === 'plugin:event|emit' && a && /^(idle-tray-settings|idle-panel|open-main-page)$/.test(a.event)))
+            || (c === 'plugin:event|emit' && a && /^(idle-tray-settings|idle-panel|open-main-page|idle-snooze)$/.test(a.event)))
           window.__calls.push({ c, a: JSON.parse(JSON.stringify(c === 'plugin:event|emit' ? { event: a.event, payload: a.payload ?? null } : a)) });
         return orig(c, a, o); };
       inner = v; } });

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import PlatformLogo, { logoSrc, type LogoPlatform } from "./PlatformLogo";
-import { IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "../idleTray";
+import { IDLE_PANEL_EVENT, IDLE_PANEL_WANT, IDLE_SNOOZE_EVENT, type IdlePanelData } from "../idleTray";
 import * as G from "../idleGridLayout";
 
 /**
@@ -49,12 +49,12 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
 
   const cells = data?.cells ?? [];
   const g = G.gridLayout(cells.length);
-  // 底部周额度告警堆叠（用户 2026-10-22）：收着露第一条，光标在上面就展开（窗口跟着长高）
-  const warns = cells.length ? data?.warns ?? [] : [];
-  const [warnOpen, setWarnOpen] = useState(false);
-  const warnTop = g.h - G.PAD + G.WARN_GAP;
-  const warnH = G.warnBlockH(warns.length, warnOpen);
-  const panelH = warns.length ? warnTop + warnH + G.PAD : g.h;
+  // 周额度 < 10%：那一家格子左上角的小红牌「周 N%」（用户 2026-10-22 选 A1，取代底部长条）
+  const weekOf = new Map((data?.warns ?? []).map((w) => [w.key, w.rem]));
+  // 藏起来的几家（B1）：面板底部一行一家，带「撤销」
+  const snoozed = cells.length ? data?.snoozed ?? [] : [];
+  const noteTop = g.h - G.PAD + 2;
+  const panelH = snoozed.length ? noteTop + snoozed.length * G.NOTE_H + G.PAD - 2 : g.h;
   const hov = hovKey === null ? -1 : cells.findIndex((c) => c.key === hovKey);
 
   // 高度上报：Rust 按它摆窗口（与在跑面板同一条命令）。只有这一轮是空闲面板时才报 —— 两个面板共用一个窗口高度
@@ -62,15 +62,16 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
     if (active && (mode === "open" || mode === "closed")) invoke("tpshover_resize", { h: panelH }).catch(noop);
   }, [panelH, mode, active]);
 
-  // ★ 面板不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 展开靠 Rust 推的光标坐标（同在跑面板展开会话）
+  // ★ 面板不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 悬停格子（高亮 + 出 ×）靠 Rust 推的光标坐标（同在跑面板展开会话）
   useEffect(() => {
     const un = listen<[number, number] | null>("tpshover-cursor", (e) => {
       const p = e.payload;
-      setWarnOpen(!!p && !!document.elementFromPoint(p[0], p[1])?.closest("[data-idle-warn]"));
+      const el = p ? document.elementFromPoint(p[0], p[1])?.closest("[data-idle-cell]") : null;
+      setHovKey(el?.getAttribute("data-idle-cell") ?? null);
     });
     return () => { void un.then((f) => f()); };
   }, []);
-  useEffect(() => { if (mode !== "open") setWarnOpen(false); }, [mode]);
+  const snooze = (key: string, undo = false) => { void emit(IDLE_SNOOZE_EVENT, { key, undo }).catch(noop); };
 
   const isOpen = mode === "open" && cells.length > 0;
   const px = layout?.panel.x ?? 40, py = layout?.panel.y ?? 30;
@@ -160,8 +161,19 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
                           opacity: isOpen ? 1 : 0,
                           transform: isOpen || reduce ? "none" : "translate3d(0, 5px, 0) scale(.96)",
                           transition: reduce ? "opacity 150ms" : `opacity 250ms ease-out ${cdl}ms, transform 500ms ${POP} ${cdl}ms` }}>
-              {c.inBar && <i className="ig-dot" title="在菜单栏" style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }} />}
-              {c.reset && <span className="ig-reset" data-idle-reset style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }}>{c.reset}</span>}
+              {/* 周额度见底 ⇒ 小红牌占住白点的位置；在菜单栏的那家白点挪进牌子里 */}
+              {weekOf.has(c.key)
+                ? <span className="ig-wk" data-idle-week={weekOf.get(c.key)} style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }}>
+                    {c.inBar && <i />}周{weekOf.get(c.key)}%</span>
+                : c.inBar && <i className="ig-dot" title="在菜单栏" style={{ opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }} />}
+              {c.reset && <span className="ig-reset" data-idle-reset
+                                style={{ opacity: isOpen && hov !== k ? 1 : 0, transition: txt(TEXT_IN_MS) }}>
+                {/* 有小红牌时一格放不下「↻ 」前缀（实测牌子右沿压到倒计时 1 px）⇒ 只写时长 */}
+                {weekOf.has(c.key) ? c.reset.replace(/^↻\s*/, "") : c.reset}</span>}
+              {/* B1：悬停时右上角倒计时换成 ×，点了藏到重置（CSS 显隐，不条件渲染） */}
+              <span className="ig-x" data-idle-hide={c.key} title={`隐藏 ${G.NAME[c.key] ?? c.key}，${c.reset ? c.reset.replace("↻ ", "") + " 后" : "重置后"}自动回来`}
+                    onClick={(e) => { e.stopPropagation(); snooze(c.key); }}
+                    style={{ opacity: isOpen && hov === k ? 1 : 0, pointerEvents: isOpen && hov === k ? "auto" : "none" }}>×</span>
               <svg className="ig-ring" width={G.RING} height={G.RING} viewBox={`0 0 ${G.RING} ${G.RING}`}
                    style={{ left: (g.cw - G.RING) / 2, top: G.RING_TOP }} aria-hidden="true">
                 <circle cx={G.RING / 2} cy={G.RING / 2} r={G.RING_R} fill="none" stroke="var(--ig-track)" strokeWidth={G.RING_SW} />
@@ -185,29 +197,14 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
             </div>
           );
         })}
-        {warns.length > 0 && (
-          <div className="ig-warns" data-level="strong" data-idle-warn={warns.length} data-open={warnOpen ? 1 : 0}
-               onMouseEnter={() => setWarnOpen(true)} onMouseLeave={() => setWarnOpen(false)}
-               style={{ left: G.PAD, top: warnTop, width: G.PANEL_W - 2 * G.PAD - 2, height: warnH,
-                        opacity: isOpen ? 1 : 0, transition: reduce ? "opacity 150ms" : `opacity 200ms ease-out ${isOpen ? 160 : 0}ms, height 300ms ${SPRING}` }}>
-            {warns.map((w, i) => (
-              <div key={w.key} className="ig-warn" data-idle-warn-item={w.key}
-                   style={{ zIndex: warns.length - i, opacity: warnOpen || i < 3 ? 1 : 0,
-                            transform: warnOpen ? `translate3d(0, ${i * (G.WARN_H + G.WARN_GAP)}px, 0)`
-                              : `translate3d(0, ${Math.min(i, 2) * 4}px, 0) scale(${1 - Math.min(i, 2) * 0.05})`,
-                            transition: reduce ? "none" : `transform 300ms ${SPRING} ${i * 35}ms, opacity 160ms` }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0, color: "var(--ig-warn-tx)" }}>
-                  <path d="M12 3.5 2.5 20h19L12 3.5z" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
-                  <path d="M12 10v4.5M12 17.3v.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-                </svg>
-                <PlatformLogo platform={w.key as LogoPlatform} isDark={isDark} size={14} />
-                <span className="ig-warn-tx">{G.NAME[w.key] ?? w.key} 周额度剩 <b style={{ color: "var(--ig-warn-tx)" }}>{w.rem}%</b></span>
-                {!warnOpen && i === 0 && warns.length > 1 && <span className="ig-warn-more">+{warns.length - 1}</span>}
-                {w.reset && <span className="ig-warn-dt">↻ {w.reset}</span>}
-              </div>
-            ))}
+        {snoozed.map((z, i) => (
+          <div key={z.key} className="ig-note" data-idle-snoozed={z.key}
+               style={{ left: G.PAD + 4, right: G.PAD + 4, top: noteTop + i * G.NOTE_H, height: G.NOTE_H,
+                        opacity: isOpen ? 1 : 0, transition: txt(TEXT_IN_MS) }}>
+            已隐藏 {G.NAME[z.key] ?? z.key}，{z.reset && z.reset !== "—" ? `↻${z.reset} 后` : "重置后"}自动回来 ·
+            <span className="ig-undo" data-idle-undo={z.key} onClick={() => snooze(z.key, true)}>撤销</span>
           </div>
-        )}
+        ))}
       </div>
       {fly.map((f) => (
         <img key={f.key} className="hv-fly" data-idle-fly={f.key} alt="" draggable={false}

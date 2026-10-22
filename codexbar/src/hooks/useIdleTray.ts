@@ -9,7 +9,8 @@ import { parseClaudeQuota, type ClaudeQuota, type ClaudeWin } from "../mbLogic";
 import { useAgyPool } from "./useAgyPool";
 import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
 import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
-         weeklyWarns, type IdlePanelData, type IdleWarn, type PanelIn } from "../idleTray";
+         weeklyWarns, IDLE_SNOOZE_EVENT, SNOOZE_KEY, liveSnoozes, snoozeUntil,
+         type IdlePanelData, type IdleWarn, type PanelIn, type Snoozed } from "../idleTray";
 
 /** Claude 额度转写只在 Claude Code 刷新状态栏时才变：与总览 `useClaudeQuota` 同一个间隔（60 s）。
  *  ★ 原来 5 分钟：刚停手就悬停，面板比总览旧最多 5 分钟（2026-10-21 复查 B1）。另在托盘弹出 / 光标靠近托盘时读。 */
@@ -35,6 +36,10 @@ function loadFrozen(): Frozen | null {
 }
 function saveFrozen(f: Frozen): void {
   try { localStorage.setItem(FROZEN_KEY, JSON.stringify(f)); } catch (_e: unknown) { /* 存不下就只活在本进程 */ }
+}
+function loadSnooze(): Record<string, number> {
+  try { return liveSnoozes(JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "null") as Record<string, unknown> | null, Date.now()); }
+  catch (_e: unknown) { return {}; }
 }
 function loadHello(): number | null {
   const v = Number(localStorage.getItem(HELLO_KEY));
@@ -66,10 +71,26 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
   const near = useRef(false);
   const frozen = useRef<Frozen | null>(loadFrozen());
   const agyPool = useAgyPool(false);
+  // 「隐藏到重置」（B1）：key → 藏到的时刻（epoch ms）；各家大数字那个窗口的重置时刻由 `platforms` 顺手记下
+  const [snz, setSnz] = useState<Record<string, number>>(loadSnooze);
+  const mainReset = useRef<Record<string, number | null>>({});
 
   useEffect(() => {
     const subs = [
       listen(IDLE_TRAY_EVENT, () => setCfg(getSettings())),
+      // 悬停面板点了格子的 ×（或底部「撤销」）。藏到这一家大数字那个窗口重置；读不到重置时刻 ⇒ 5h（grok 是周窗口 ⇒ 24h）
+      listen<{ key?: unknown; undo?: unknown }>(IDLE_SNOOZE_EVENT, (e) => {
+        const key = typeof e.payload?.key === "string" ? e.payload.key : null;
+        if (!key) return;
+        setSnz((prev) => {
+          const now = Date.now();
+          const next = liveSnoozes(prev, now);
+          if (e.payload?.undo) delete next[key];
+          else next[key] = snoozeUntil(mainReset.current[key], now, key === "grok" ? 24 : 5);
+          try { localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); } catch (_e: unknown) { /* 存不下就只活在本进程 */ }
+          return next;
+        });
+      }),
       listen<boolean>("idle-near", (e) => {
         near.current = !!e.payload;
         if (near.current) window.dispatchEvent(new Event(NEAR_READ));
@@ -164,6 +185,8 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     // 这一次没读到、拿的是上一次的读数（agy `last_good` / grok 上一次成功）⇒ 面板上降一级灰
     // agy 的 5h 行是沿用的旧读数（`seen_at`：这次没返回这个桶）⇒ 同样降一级灰（同刘海 / AgyCard，复查 B7）
     const stale: Record<string, boolean> = { agy: agyStale || a5?.seen_at != null, grok: gNow === null && gRem !== null };
+    mainReset.current = { codex: null, claude: claude?.fiveH && !claude.fiveH.idle ? claude.fiveH.resetsAt : null,
+                          agy: a5?.reset_at ?? null, grok: gPeriodEnd ?? null };
     return TRAY_KEYS.filter((k) => !!traffic?.platforms[k] || !prefs.by[k]?.off).map((k) => {
       const [m, r] = main[k] ?? [null, ""];
       return { key: k, remaining: rem[k] ?? [], ...usageOf(traffic?.platforms[k], cfg.idleDays, now),
@@ -171,20 +194,26 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     });
   }, [inUse, claude, agyQuota, agyStale, grok, traffic, prefs, cfg.idleDays, cfg.idleHoverReset, tick]);
 
-  // 周额度（只给面板底部的告警用；logo 水位已是 5h）。读不到写 null ⇒ 不报
+  // 藏着的（B1）不进托盘、不进面板、不插队；到点自己回来（`tick` 每分钟重算）
+  const live = useMemo(() => liveSnoozes(snz, Date.now()), [snz, tick]);
+  const shown = useMemo(() => platforms.filter((p) => !(p.key in live)), [platforms, live]);
+  const snoozed = useMemo<Snoozed[]>(() => Object.entries(live).sort((a, b) => a[1] - b[1])
+    .map(([key, until]) => ({ key, reset: fmtEta(until / 1000) })), [live]);
+
+  // 周额度（格子左上角的「周 N%」小红牌；logo 水位已是 5h）。读不到写 null ⇒ 不报
   const warns = useMemo<IdleWarn[]>(() => {
     const now = Date.now();
     const live = inUse && inUse.status !== "dead" ? inUse : null;
     const cw = live?.windows.find((w) => w.mins === 10080);
     const aw = agyWinRows(agyQuota).find((r) => r.label === "周");
-    const on = new Set(platforms.map((p) => p.key));
+    const on = new Set(shown.map((p) => p.key));
     return weeklyWarns([
       { key: "codex", week: cw?.pct ?? null, reset: cw?.reset ?? "" },
       { key: "claude", week: claudeRem(claude?.week, now), reset: claude?.week?.resetsAt ? fmtEta(claude.week.resetsAt) : "" },
       { key: "agy", week: aw?.remaining ?? null, reset: aw?.reset_at ? agyResetText(aw).text : "" },
       // ★ grok 只有周窗口：格子的大数字就是周 ⇒ 不再在底部重复一条（用户 2026-10-22 截图：0% 的格子 + 一条「周额度剩 0%」）
     ].filter((w) => on.has(w.key)));
-  }, [inUse, claude, agyQuota, platforms, tick]);
+  }, [inUse, claude, agyQuota, shown, tick]);
 
   const panel = useRef<IdlePanelData | null>(null);
   useEffect(() => {
@@ -202,7 +231,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const f = frozen.current;
     const userChanged = !f || f.sig !== sig;
     const keep = userChanged || shouldRerank(f.day, now, !running, near.current) ? undefined : f.keep;
-    const slots = pickIdleSlots(platforms, { slots: cfg.idleSlots, rankBy: cfg.idleRankBy, pinned: cfg.idlePinned, now, keep });
+    const slots = pickIdleSlots(shown, { slots: cfg.idleSlots, rankBy: cfg.idleRankBy, pinned: cfg.idlePinned, now, keep });
     const resident = slots.filter((s) => s.kind === "resident").map((s) => s.key);
     // 冻结的常驻只增不换：今天新用了一家、补进了空着的常驻位 ⇒ 记进去（日期不变），之后它也不在白天被挤走
     if (!keep) { frozen.current = { day: dayKey(now), keep: resident, sig }; saveFrozen(frozen.current); }
@@ -211,10 +240,11 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const bar = cfg.idleIcons ? slots : [];
     const scope = !cfg.idleIcons && cfg.idleHoverScope === "bar" ? "used" : cfg.idleHoverScope;
     const next: IdlePanelData = {
-      cells: panelCells(platforms, bar, { scope, max: cfg.idleHoverMax,
+      cells: panelCells(shown, bar, { scope, max: cfg.idleHoverMax,
                                           showUnconnected: cfg.idleHoverUnconnected, rankBy: cfg.idleRankBy }),
       max: cfg.idleHoverMax,
       warns,
+      snoozed,
     };
     // 同一份就不再发：Rust 每收一次都会重画一张 NSImage。`cells` = 面板有几格（0 格时 Rust 不弹空面板）
     const tray = JSON.stringify({ enabled: cfg.idleIcons, slots: trayPayload(slots), cells: next.cells.length });
@@ -226,7 +256,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
       panel.current = next;
       void emit(IDLE_PANEL_EVENT, next).catch(() => {});
     }
-  }, [platforms, cfg, running, traffic, warns]);
+  }, [shown, cfg, running, traffic, warns, snoozed]);
 
   // 「上次 AI 活动」= 用量快照里最近一次使用（小时桶末尾，只会偏晚 ⇒ 只会少打招呼）。重启后 Rust 靠它接上
   const lastActive = useMemo(() => {

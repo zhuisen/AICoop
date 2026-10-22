@@ -179,7 +179,29 @@ export interface PanelCell {
  *  放在这个零 import 的模块里：悬停面板只要这两个名字，不该为此把设置页整套模块拉进它的包。 */
 export const IDLE_PANEL_EVENT = "idle-panel";
 export const IDLE_PANEL_WANT = "idle-panel-want";
-export interface IdlePanelData { cells: PanelCell[]; max: 4 | 8; warns?: IdleWarn[] }
+export interface IdlePanelData { cells: PanelCell[]; max: 4 | 8; warns?: IdleWarn[]; snoozed?: Snoozed[] }
+
+/**
+ * 「隐藏到重置」（用户 2026-10-22 选 B1：「我知道它没额度了，也知道什么时候更新，但它一直在占位」）。
+ * 悬停面板格子右上角 × ⇒ 悬停面板发 `IDLE_SNOOZE_EVENT {key}` ⇒ 菜单栏 webview 记进 localStorage（`SNOOZE_KEY`），
+ * 到点之前这一家不进托盘、不进面板、不插队；面板底部留一行可撤销（`{key, undo: true}`）。
+ */
+export const SNOOZE_KEY = "codexbar_idle_snooze";
+export const IDLE_SNOOZE_EVENT = "idle-snooze";
+export interface Snoozed { key: string; reset: string }
+
+/** 藏到哪一刻（epoch ms）：这一家大数字那个窗口的重置时刻；读不到 / 已过 ⇒ 现在 + `fallbackH` 小时。 */
+export function snoozeUntil(resetSec: number | null | undefined, now: number, fallbackH: number): number {
+  const r = typeof resetSec === "number" && Number.isFinite(resetSec) ? resetSec * 1000 : 0;
+  return r > now ? r : now + fallbackH * 3600 * 1000;
+}
+
+/** 还在藏着的（过期的扔掉；坏值扔掉）。 */
+export function liveSnoozes(m: Record<string, unknown> | null | undefined, now: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(m ?? {})) if (typeof v === "number" && v > now) out[k] = v;
+  return out;
+}
 
 /** 面板最底部的周额度告警一条（用户 2026-10-22「空闲时周额度低于 10% 就弹出显示，放在最底部」）。 */
 export interface IdleWarn { key: string; rem: number; reset: string }

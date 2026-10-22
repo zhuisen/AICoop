@@ -1688,10 +1688,14 @@ function relayEntry() {
     var all = [C('codex', 67, '↻ 2h14m', true), C('claude', 40, '↻ 1h05m', true), C('agy', String(mode) === 'ok' ? 86 : 6, '↻ 3h40m', true),
                C('grok', 86, '↻ 5d21h', false), C('kimi', null, '', false), C('deepseek', null, '', false)];
     var m = String(mode || '4');
-    // `hvwarns=<n>`：面板底部周额度告警（用户 2026-10-22，周剩 < 10%）。0 = 没有
+    // `hvwarns=<n>`：周额度 < 10% 的几家（格子左上角小红牌「周 N%」，用户 2026-10-22 A1）。0 = 没有
     var W = [{ key: 'claude', rem: 4, reset: '2d 6h' }, { key: 'codex', rem: 7, reset: '4d 1h' }, { key: 'agy', rem: 9, reset: '1d 20h' }];
     var nw = Math.max(0, Math.min(3, Number(p.get('hvwarns') || 0)));
-    return { cells: m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4), max: m === '8' ? 8 : 4, warns: W.slice(0, nw) };
+    // `hvsnoozed=1`：grok 已被 × 藏起来（B1），面板底部一行「已隐藏 · 撤销」，格子里没有它
+    var sz = p.get('hvsnoozed') === '1';
+    var cells = m === '1' ? all.slice(0, 1) : m === '8' ? all : all.slice(0, 4);
+    if (sz) cells = cells.filter(function (c) { return c.key !== 'grok'; });
+    return { cells: cells, max: m === '8' ? 8 : 4, warns: W.slice(0, nw), snoozed: sz ? [{ key: 'grok', reset: '3h58m' }] : [] };
   }
   function HV_IDLE_LAYOUT() {
     var keys = ['codex', 'claude', 'agy'], pw = 4 + 3 * 14 + 2 * 5 + 7, px = 40 + 435 / 2 - pw / 2, py = 3;
@@ -1745,16 +1749,15 @@ function relayEntry() {
         }, 1000);
         if (p.get('hvcursorleave') === '1') setTimeout(function () { fire('tpshover-cursor', null); }, 2000);
       }
-      // `hvwarncursor=1`：1 s 时把光标（Rust 坐标通道）放到底部告警堆叠上；`hvwarncursor=leave` 再在 2 s 时移开
-      if (p.get('hvwarncursor')) {
+      // `hvcellcursor=<key>`：1 s 时把光标（Rust 坐标通道）放到空闲面板那一格上 ⇒ 高亮 + 右上角出 ×（B1）
+      if (p.get('hvcellcursor')) {
         setTimeout(function () {
-          var el = document.querySelector('[data-idle-warn]');
-          clicks.push('hvwarncursor →命中 ' + (el ? 1 : 0));
+          var el = document.querySelector('[data-idle-cell="' + p.get('hvcellcursor') + '"]');
+          clicks.push('hvcellcursor →命中 ' + (el ? 1 : 0));
           if (!el) return;
           var r = el.getBoundingClientRect();
-          fire('tpshover-cursor', [r.left + r.width / 2, r.top + 10]);
+          fire('tpshover-cursor', [r.left + r.width / 2, r.top + r.height / 2]);
         }, 1000);
-        if (p.get('hvwarncursor') === 'leave') setTimeout(function () { fire('tpshover-cursor', null); }, 2000);
       }
       if (p.get('hvclick') === 'link') setTimeout(function () {
         var a = document.querySelector('[data-hover-link]');
