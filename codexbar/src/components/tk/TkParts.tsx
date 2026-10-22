@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Theme } from "../../theme";
 import type { RangeState, RangePreset } from "../../traffic";
 import { PILLS, matchPreset, md, rangeLabel, resolveRange } from "../../traffic";
@@ -144,14 +144,34 @@ export function RangeSeg({ t, st, today, L, onChange, onToast }: {
 export interface Chip { key: string; name: string; color: string }
 
 /** 平台胶囊（稿：高 26 · 内边距 10 · 间距 4；选中只换底色和描边）。 */
-export function PlatChips({ t, chips, sel, onPick, withAll, L, aria }: {
+export function PlatChips({ t, chips, sel, onPick, withAll, L, aria, fit }: {
   t: Theme; chips: Chip[]; sel: string | null; onPick: (k: string | null) => void;
   withAll: boolean; L: Density; aria: string;
+  /** 占满行里剩下的宽；带名字放不下 ⇒ 只留图标（选中的那个和「全部」仍带名字），不在半个胶囊处截断。 */
+  fit?: boolean;
 }) {
   const p = tkPal(t);
+  const box = useRef<HTMLDivElement>(null);
+  const fullW = useRef(0);
+  const [tight, setTight] = useState(false);
+  const sig = chips.map((c) => c.key + c.name).join("|");
+  useEffect(() => { fullW.current = 0; setTight(false); }, [sig]);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!fit || !el) return;
+    // 带名字时量一次全宽；之后只拿「这一格给了多宽」比它 —— 容器是 flex:1，宽度与内容无关，不会来回抖
+    const check = () => {
+      if (!tight) { fullW.current = el.scrollWidth; if (el.scrollWidth > el.clientWidth + 1) setTight(true); }
+      else if (fullW.current && el.clientWidth >= fullW.current) setTight(false);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fit, tight, sig, sel]);
   const btn = (key: string | null, name: string, color: string | null) => {
     const on = sel === key;
-    const showName = key === null || L < 2 || (!withAll && on);
+    const showName = key === null || (L < 2 && !tight) || (on && (tight || !withAll));
     const bg = on ? (color ? `${color}24` : p.selAll) : "transparent";
     const bd = on ? (color ? `${color}99` : p.selAllBorder) : p.idleBorder;
     return (
@@ -171,8 +191,9 @@ export function PlatChips({ t, chips, sel, onPick, withAll, L, aria }: {
   };
   return (
     // 平台多到一行放不下时在行内横滚（不撑破页面），不显示滚动条。
-    <div role="group" aria-label={aria} style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0,
-                                                 overflowX: "auto", scrollbarWidth: "none" }}>
+    <div ref={box} role="group" aria-label={aria} data-chips-tight={tight ? "1" : "0"}
+         style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflowX: "auto", scrollbarWidth: "none",
+                  ...(fit ? { flex: "1 1 0" } : {}) }}>
       {withAll && btn(null, "全部", null)}
       {chips.map((c) => btn(c.key, c.name, c.color))}
     </div>

@@ -72,9 +72,11 @@ export function segWidth(label: string, L: Density): number {
 /** 两列平台行：先排满左列再排右列；区块高 168，行高 = 168 ÷ 每列行数（最小 32）。 */
 export function twoCol(n: number): { perCol: number; rowH: number; h: number } {
   const perCol = Math.max(1, Math.ceil(n / 2));
-  const rowH = Math.max(32, Math.floor(168 / perCol));
-  return { perCol, rowH, h: Math.max(168, rowH * perCol) };
+  // ★ 用户 2026-10-22「要拉很高才能展示所有内容，中间版块可以压缩」：行高固定 36，区块高跟着家数走
+  //   （原来照稿 §5 把区块撑满 168：4 家时每行 84，一半是空白）。
+  return { perCol, rowH: TWO_COL_ROW_H, h: TWO_COL_ROW_H * perCol };
 }
+export const TWO_COL_ROW_H = 36;
 
 /**
  * 横轴标哪几个点：间距 ≥ 64 px，不够就隔点标。

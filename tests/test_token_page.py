@@ -60,9 +60,9 @@ class Formatting(unittest.TestCase):
         self.assertEqual(got, [[52, 42, 49, 52, 68], [44, 34, 41, 44, 44]])
 
     def test_two_column_row_heights(self):
-        """稿 §5：≤ 6 家 56 · 7–8 家 42 · 9–10 家 33，11 家起区块才变高。"""
-        got = _node("[3,6,8,10,12].map(n => m.twoCol(n))")
-        self.assertEqual([(g["rowH"], g["h"]) for g in got], [(84, 168), (56, 168), (42, 168), (33, 168), (32, 192)])
+        """行高固定 36、区块高 = 36 × 每列家数（用户 2026-10-22「中间版块可以压缩」，取代稿 §5 撑满 168）。"""
+        got = _node("[3,4,6,8,12].map(n => m.twoCol(n))")
+        self.assertEqual([(g["rowH"], g["h"]) for g in got], [(36, 72), (36, 72), (36, 108), (36, 144), (36, 216)])
 
     def test_axis_labels_are_anchored_from_the_end(self):
         """全局 ui-design：抽稀从末尾锚定，最后一个点（今天）恒有标签；间距 ≥ 64 px。"""
@@ -197,7 +197,7 @@ class Rendered(unittest.TestCase):
         pg = self.open("traffic")
         r = pg.evaluate(PROBE)
         pg.close()
-        self.assertEqual(r["title"], "Token 消耗")
+        self.assertEqual(r["title"], "消耗", "用户 2026-10-22：标题改「消耗」，平台胶囊并进标题行")
         self.assertEqual(r["kpis"], ["总 Token", "请求数", "日均", "等效费用", "日均费用", "最大占比", "缓存命中"])
         self.assertEqual(r["chips"][0], ["all", "true"], "「全部」固定第一且默认选中")
         self.assertGreaterEqual(r["rows"], 2)

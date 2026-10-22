@@ -62,7 +62,7 @@ export function useDirAnim(key: string): string | undefined {
 /**
  * Token 消耗 · 总览（AICoop R2_Token / W1000 / W860，1:1）。数据源是各 CLI 自己写在本机的 transcript，零额度消耗。
  *
- * 结构：顶栏 → 平台胶囊 → 7 个指标 → 按平台堆叠面积图 → 两列平台行 → 平台卡片。
+ * 结构：顶栏（含平台胶囊）→ 7 个指标 → 按平台堆叠面积图 → 两列平台行 → 平台卡片。
  * ★ 一屏规则（README §3.4 / 用户 2026-10-14）：顶栏与胶囊钉住，其余在页面自己的滚动容器里滚（偏离 R2-1）。
  * 偏离清单在 `scratch/aicoop_20261021/PLAN.md`（R2-*）。
  */
@@ -186,24 +186,21 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
          style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 12,
                   padding: `0 ${L < 2 ? 6 : 0}px 0`, whiteSpace: "nowrap" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, height: 34, flexShrink: 0 }}>
-        <h1 style={{ margin: 0, fontSize: titleSize(W), fontWeight: 700 }}>Token 消耗</h1>
+        <h1 style={{ margin: 0, fontSize: titleSize(W), fontWeight: 700, flexShrink: 0 }}>消耗</h1>
         {/* 数据来源的披露常驻在这里（刷新按钮在首扫完成前不出现，评审）。 */}
         <span data-src title="汇总各 CLI 写在本机的 transcript · 不消耗额度"
               style={{ fontSize: 12, color: p.label, fontFamily: MONO, cursor: "help" }}>ⓘ</span>
         {/* 缓存口径不是 full 时，数字会静默换成另一套口径 ⇒ 挂牌（偏离 R2-4）。 */}
         <CacheChip mode={cacheMode} />
-        <PriceStack t={t} items={priceWarns} />
-        <span style={{ flex: 1 }} />
-        <RefreshAgo t={t} generatedAt={data?.generated_at ?? null} L={L} busy={busy} onRefresh={onRefresh} />
-        <RangeSeg t={t} st={st} today={today} L={L} onChange={setSt} onToast={showToast} />
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, height: 26, flexShrink: 0, minWidth: 0 }}>
+        {/* ★ 平台胶囊并进标题行（用户 2026-10-22「全部 Claude Codex… 放在消耗的右侧」），省掉第二行 */}
         <PlatChips t={t} chips={list.map((r) => ({ key: r.key, name: r.name, color: r.color }))} sel={soloOk}
-                   onPick={setSolo} withAll L={L} aria="按平台筛选" />
-        <span style={{ flex: 1 }} />
+                   onPick={setSolo} withAll L={L} aria="按平台筛选" fit />
+        <PriceStack t={t} items={priceWarns} />
         <span data-range-label style={{ fontSize: 12, color: p.label, fontFamily: MONO, flexShrink: 0 }}>
           {rangeText(st, today, labels, gran && gran !== "day" ? granLabel(gran) : null)}
         </span>
+        <RefreshAgo t={t} generatedAt={data?.generated_at ?? null} L={L} busy={busy} onRefresh={onRefresh} />
+        <RangeSeg t={t} st={st} today={today} L={L} onChange={setSt} onToast={showToast} />
       </div>
       {toast && <Toast msg={toast} t={t} />}
       {err && <div style={{ fontSize: 11, color: p.down, flexShrink: 0 }}>✗ {err}</div>}
