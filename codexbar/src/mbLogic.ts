@@ -288,3 +288,11 @@ export function critSpring(resp = 0.36, T = 0.55, n = 30): string {
   }
   return `linear(${pts.join(", ")})`;
 }
+
+/** 弹窗关掉多久之内重开算「误关」、保持原样（用户 2026-10-22：「重新打开就是默认位置，1 分钟内重新打开依旧保持上一次」）。 */
+export const REOPEN_KEEP_MS = 60_000;
+
+/** 这次弹出要不要回到默认（账号页 · Codex 档）。`hiddenAt` = 上次收起的时刻；没收起过（启动后第一次）⇒ 不动，用存下的。 */
+export function reopenResets(hiddenAt: number | null, now: number): boolean {
+  return hiddenAt != null && now - hiddenAt >= REOPEN_KEEP_MS;
+}

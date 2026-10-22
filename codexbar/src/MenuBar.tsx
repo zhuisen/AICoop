@@ -36,7 +36,7 @@ import { presentIntegration } from "./components/IntegrationBanner";
 import { todayView, fmtTok, colorOf } from "./traffic";
 import {
   SUB_WARN_DAYS, blockTitle, daysUntil, isLow, lowNotice, mergeNotices, nameColWidth, poolDry, poolDryNotice,
-  sortByAvailability, subNotice, tightestOf, type Notice, type SortKey,
+  reopenResets, sortByAvailability, subNotice, tightestOf, type Notice, type SortKey,
 } from "./mbLogic";
 import "./App.css";
 import "./menubar.css";
@@ -238,6 +238,22 @@ export default function MenuBar() {
     setMenuOpen(false);
     try { localStorage.setItem(TAB_KEY, v); } catch { /* ignore */ }
   }, []);
+
+  // ★ 用户 2026-10-22：重新打开回到默认（账号页 · Codex 档）；1 分钟内重开（多半是误关）保持上一次的样子。
+  //   改写了交接稿 §3「记忆上次停留页」。收起的时刻取失焦（弹窗失焦即收起，见 lib.rs `toggle_menubar`）。
+  const hiddenAt = useRef<number | null>(null);
+  useEffect(() => {
+    const a = getCurrentWindow().onFocusChanged(({ payload: focused }) => { if (!focused) hiddenAt.current = Date.now(); });
+    const b = listen("menubar-shown", () => {
+      const reset = reopenResets(hiddenAt.current, Date.now());
+      hiddenAt.current = null;
+      if (!reset) return;
+      setTab("acc");
+      setPlat("codex");
+      setNoticeOpen(false);
+    });
+    return () => { [a, b].forEach((u) => { void u.then((f) => f()); }); };
+  }, [setTab, setPlat]);
 
   /** Reveal the main window and dismiss the popover. */
   const openMain = useCallback(async (navigateTo?: string, payload?: unknown) => {
