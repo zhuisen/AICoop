@@ -116,6 +116,52 @@ impl Roots {
         Roots { codex: c(self.codex), claude: c(self.claude), agy: c(self.agy), grok: c(self.grok) }
     }
     fn all(&self) -> [&Path; 4] { [&self.codex, &self.claude, &self.agy, &self.grok] }
+    /// ★★ FSEvents 只在**关掉**一个写过的文件时报「内容变了」（2026-10-22 实测：一直开着写的文件 7 s 零事件，
+    ///   关的那一刻才报；agy 会话库的 `-wal` 30 s 涨了 10 MB，探针零事件）。agy 的库整个会话一直开着 ⇒
+    ///   只有 agy 在跑时实时循环永远不醒、托盘一直空闲（用户 2026-10-22「gemini 有请求了，状态栏还是空闲」）；
+    ///   有 Claude 同时在写时被它叫醒，才「碰巧」看得到。Codex 的 rollout 也是一直开着写的（**未实测**，同样补上）。
+    ///   所以这两家每 tick 补一次 mtime：agy 约 500 个 `-wal`，实测一次 1.3 ms；Codex 只看最近两个日期目录。
+    ///   返回 (下标, 最新 mtime 秒)。
+    fn poll_open_writers(&self) -> Vec<(usize, u64)> {
+        let mut out = Vec::new();
+        if let Some(t) = newest_mtime(&self.agy, |n| n.ends_with(".db-wal")) { out.push((2, t)); }
+        let codex = recent_day_dirs(&self.codex, 2).iter()
+            .filter_map(|d| newest_mtime(d, |n| n.starts_with("rollout-") && n.ends_with(".jsonl"))).max();
+        if let Some(t) = codex { out.push((0, t)); }
+        out
+    }
+}
+
+/// 目录下（不递归）名字满足 `keep` 的文件里最新的 mtime（秒）。目录不在 / 读不了 ⇒ None。
+fn newest_mtime(dir: &Path, keep: impl Fn(&str) -> bool) -> Option<u64> {
+    std::fs::read_dir(dir).ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_str().is_some_and(&keep))
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()))
+        .max()
+}
+
+/// Codex 的 `sessions/YYYY/MM/DD`：按名字倒序取最近 `n` 个日期目录（跨月 / 跨年也对：先取最近两个年、月）。
+fn recent_day_dirs(root: &Path, n: usize) -> Vec<PathBuf> {
+    let sub = |d: &Path| -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|it| it.filter_map(|e| e.ok()).map(|e| e.path())
+            .filter(|p| p.is_dir()).collect()).unwrap_or_default();
+        v.sort_by(|a, b| b.cmp(a));
+        v
+    };
+    let mut days = Vec::new();
+    for y in sub(root).into_iter().take(2) {
+        for m in sub(&y).into_iter().take(2) {
+            days.extend(sub(&m));
+        }
+    }
+    days.sort_by(|a, b| b.cmp(a));
+    days.truncate(n);
+    days
+}
+
+impl Roots {
     /// 一条写入事件属于哪家（`LAST_WRITE` 的下标）；不是「在生成」的信号返回 None。
     fn classify(&self, p: &Path) -> Option<usize> {
         let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -227,6 +273,8 @@ fn watch_activity(app: &AppHandle) {
         let mut was_live = true;
         let mut last_run = Instant::now();
         while WATCHER.load(Ordering::SeqCst) == me && CONSUMERS.load(Ordering::SeqCst) != 0 {
+            // 一直开着写的文件 FSEvents 不报（见 `poll_open_writers`），这一 tick 自己看一眼 mtime
+            for (i, t) in roots.poll_open_writers() { LAST_WRITE[i].fetch_max(t, Ordering::Relaxed); }
             let fs = publish(&app);
             let (run, live) = loop_step(fs.any(), LIVE_ANY.load(Ordering::SeqCst), was_live);
             was_live = live;
@@ -374,6 +422,34 @@ mod tests {
         assert!(cb.contains("wake();"), "FSEvents 回调不叫醒实时循环 ⇒ 又回到等满 2 s");
         let lp = src.split("let mut last_run").nth(1).unwrap().split("// 被接管时").next().unwrap();
         assert!(lp.contains("wait_wake(ACTIVITY_TICK)"), "循环还在死睡 ACTIVITY_TICK");
+    }
+
+    /// 用户 2026-10-22「gemini 有请求了，状态栏还是空闲」：agy 的 `-wal` 一直开着写，FSEvents 不报。
+    /// 轮询必须看到 agy 的 `-wal` 与 Codex 最近日期目录里的 rollout，且循环每 tick 都调它。
+    #[test]
+    fn open_file_writers_are_polled_by_mtime() {
+        let d = std::env::temp_dir().join(format!("codexbar-poll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let agy = d.join("conv");
+        let codex = d.join("sessions");
+        std::fs::create_dir_all(&agy).unwrap();
+        for day in ["2026/09/30", "2026/10/01", "2025/12/31"] { std::fs::create_dir_all(codex.join(day)).unwrap(); }
+        std::fs::write(agy.join("a.db"), b"").unwrap();
+        std::fs::write(agy.join("a.db-shm"), b"").unwrap();
+        let r = Roots { codex: codex.clone(), claude: d.join("c"), agy: agy.clone(), grok: d.join("g") };
+        assert!(r.poll_open_writers().is_empty(), "没有 -wal、没有 rollout ⇒ 什么都不报（.db / .db-shm 不算）");
+        std::fs::write(agy.join("a.db-wal"), b"x").unwrap();
+        std::fs::write(codex.join("2026/09/30/rollout-1.jsonl"), b"x").unwrap();
+        let got: Vec<usize> = r.poll_open_writers().into_iter().map(|(i, _)| i).collect();
+        assert_eq!(got, vec![2, 0]);
+        let now = now_secs();
+        assert!(r.poll_open_writers().iter().all(|&(_, t)| now.saturating_sub(t) < 5), "报的是 mtime（刚写 ⇒ 现在）");
+        assert_eq!(recent_day_dirs(&codex, 2), vec![codex.join("2026/10/01"), codex.join("2026/09/30")], "跨月取最近两天");
+        let _ = std::fs::remove_dir_all(&d);
+        let src = include_str!("activity.rs");
+        let lp = src.split("let mut last_run").nth(1).unwrap().split("// 被接管时").next().unwrap();
+        assert!(lp.contains("roots.poll_open_writers()") && lp.find("poll_open_writers").unwrap() < lp.find("publish(&app)").unwrap(),
+                "循环没在 publish 之前轮询 ⇒ 只有 agy 在跑时托盘不醒");
     }
 
     use super::*;
