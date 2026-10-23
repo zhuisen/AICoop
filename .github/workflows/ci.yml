@@ -58,6 +58,14 @@ jobs:
           nohup python3 -m http.server 3304 --bind 127.0.0.1 --directory codexbar/uishot/app > "$RUNNER_TEMP/harness.log" 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3304/harness.html > /dev/null && exit 0; sleep 1; done
           cat "$RUNNER_TEMP/harness.log"; exit 1
+      # ★ macOS runner 默认开着「减弱动态效果」（2026-10-23 探针实测 reduce=true，本机 false），
+      #   动效 / 计时类 UI 断言因此全红 9 条。关掉，让 runner 与开发机同一环境；探针在下一步核它真关掉了。
+      - name: turn off Reduce Motion (match the dev machine)
+        run: |
+          defaults write com.apple.universalaccess reduceMotion -bool false || true
+          defaults write com.apple.Accessibility ReduceMotionEnabled -bool false || true
+          killall cfprefsd || true
+          python3 -m pytest tests/test_ci_browser_probe.py -q -rs
       - run: python3 -m pytest tests/ -q -rs
 
   build:

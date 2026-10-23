@@ -1,13 +1,15 @@
-"""诊断探针（不是闸）：CI 的 macOS runner 上，无头浏览器的时间与动效是否和本机一样推进。
+"""环境闸：跑 UI 闸的机器不许开着「减弱动态效果」（否则动效 / 计时类断言成片假红）。
 
 起因（2026-10-23，v2.0.0）：`invariants-macos` 第一次在 GitHub 上跑 UI 闸，9 条动效 / 计时类断言红，本机 2963 条全绿。
 红的值全停在起点或终点（logo 没飞、透明度没降到 55%）。两个假说同样能解释：
   (a) runner 开着「减弱动态效果」⇒ 页面走 reduced-motion 分支；
   (b) runner 上较新的浏览器对 `--virtual-time-budget` 推进定时器 / 过渡的方式不同。
-这条只把判别数据打进 `-rs` 的 skip 原因（CI 用 `pytest -q -rs`），永远 skip，不会让 CI 变红。
-原因里刻意不写会被 conftest 认作「harness 不在」的那几个词。看完结论就删掉这个文件。
+判别结果（v2.1.0 的 CI，n=1）：runner 的浏览器与本机同为 156，`reduce=true`（本机 false）⇒ 假说 (a) 成立、(b) 排除。
+修法在 `.github/workflows/ci.yml`（跑测试前关掉减弱动态效果）。这条在 `CODEXBAR_REQUIRE_HARNESS=1` 下核它真关掉了：
+还开着就红，并说清楚该做什么；其余情况只把数据打进 `-rs` 的 skip 原因。原因里刻意不写会被 conftest 认作「harness 不在」的词。
 """
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -41,7 +43,11 @@ class BrowserTimeProbe(unittest.TestCase):
         out = r.stdout
         i = out.find("PROBE")
         got = json.loads(out[i + 5:out.index("}", i) + 1]) if i >= 0 else {"raw": out[-200:], "err": r.stderr[-200:]}
-        self.skipTest("诊断：" + json.dumps(got, ensure_ascii=False).replace("Chrome", "Cr").replace("chrome", "cr"))
+        info = json.dumps(got, ensure_ascii=False).replace("Chrome", "Cr").replace("chrome", "cr")
+        if os.environ.get("CODEXBAR_REQUIRE_HARNESS") == "1" and got.get("reduce") is True:
+            self.fail("★ 这台机器开着「减弱动态效果」，动效 / 计时类 UI 闸会成片假红。"
+                      "CI：确认 ci.yml 里 turn off Reduce Motion 那一步生效；本机：系统设置 → 辅助功能 → 显示 → 关掉减弱动态效果。" + info)
+        self.skipTest("诊断：" + info)
 
 
 if __name__ == "__main__":
