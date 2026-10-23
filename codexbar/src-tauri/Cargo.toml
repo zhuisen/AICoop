@@ -1,6 +1,6 @@
 [package]
 name = "codexbar"
-version = "2.0.0"
+version = "2.1.0"
 description = "Codex account rotator — Clash-Verge-style menu bar + dashboard"
 authors = ["doushutangmu"]
 edition = "2021"

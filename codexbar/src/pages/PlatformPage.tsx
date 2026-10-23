@@ -304,6 +304,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
   const { L, W } = useWinDensity();
   const [mode, setMode] = useState<"models" | "total">("models");
   const [iso, setIso] = useState<Set<string>>(new Set());
+  // 缓存命中四格默认折叠（用户 2026-10-23）。折叠用 CSS 可见性、不用条件渲染（同中转站「用量」块，ui.md §5c）。
+  const [cacheOpen, setCacheOpen] = useState(false);
   /** 「总量」档里被隔离的 token 类（点图例摘掉缓存读，剩下两类按自己的量级铺满）。 */
   const [isoCls, setIsoCls] = useState<Set<string>>(new Set());
   const [hm, setHm] = useState<string | null>(null);
@@ -482,13 +484,15 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
         {cache && countsCacheRead(cacheMode) && (
           <section data-cache-grid style={{ borderRadius: 12, background: p.panel, border: `1px solid ${p.border}`,
                                             padding: "12px 16px 14px", display: "flex", flexDirection: "column", gap: 10, flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, height: 22 }}>
+            <div role="button" data-act="cache-toggle" aria-expanded={cacheOpen} onClick={() => setCacheOpen((o) => !o)}
+                 style={{ display: "flex", alignItems: "center", gap: 8, height: 22, cursor: "pointer" }}>
               <span title="缓存命中 = 缓存读 ÷（缓存读 + 输入）；输入含缓存写" style={{ display: "inline-flex", alignItems: "center", gap: 6,
                             fontSize: 14, fontWeight: 600 }}>缓存命中<InfoI color={p.label} /></span>
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 12, color: p.label, fontFamily: MONO }}>{rangeText(st, today, labels, null)}</span>
+              <span style={{ fontSize: 12, color: p.label }}>{cacheOpen ? "收起 ▴" : "展开 ▾"}</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
+            <div data-cache-body style={{ display: cacheOpen ? "grid" : "none", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
               <div style={gridCell} title={`按 token 加权${mix ? ` · 本期构成 ${mix}` : ""}`} data-cache-cell="hit">
                 <span style={{ fontSize: 12, color: p.label }}>命中率</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 10, height: 30 }}>

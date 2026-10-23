@@ -746,6 +746,14 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## v2.1.0 — 2026-10-23
+
+### 新增
+- **平台详情页的「缓存命中」可折叠，默认折叠**（用户 2026-10-23）。点标题行展开 / 收起，右侧写「展开 ▾ / 收起 ▴」。四格仍在页面里，只是不显示。闸 `tests/test_token_page.py::test_cache_grid_is_folded_by_default_and_toggles`（把默认改成展开会红，已验）。
+
+### 待查
+- v2.0.0 的 `ci` 里 `invariants-macos` 红 9 条，全是动效 / 计时类 UI 断言（本机 2963 条全绿，安装包不受影响）。这是 UI 闸第一次在 GitHub 上跑。本版加了诊断探针 `tests/test_ci_browser_probe.py`（只打数据、永远 skip），用来区分「runner 开着减弱动态效果」和「浏览器版本对虚拟时间的推进不同」。本机基线：`reduce=false`、定时器推进、rAF 与过渡在虚拟时间下不推进。
+
 ## v2.0.0 — 2026-10-23
 
 **大改版：桌面应用改名 AICoop，界面照 AICoop 交接包整套重做。** 仓库同日从 `codex-account-rotator` 改名 `AICoop`。

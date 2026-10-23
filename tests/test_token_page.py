@@ -306,6 +306,29 @@ class Rendered(unittest.TestCase):
                 self.assertIn(["codex", "true"], r["chips"])
                 self.assertFalse(r["overflow"])
 
+    def test_cache_grid_is_folded_by_default_and_toggles(self):
+        """用户 2026-10-23：具体 AI 消耗页的「缓存命中」做成折叠 / 展开，默认折叠。"""
+        pg = self.open("platform:claude", 1200, 800)
+        vis = """() => { const b = document.querySelector('[data-cache-body]'); const t = document.querySelector('[data-act="cache-toggle"]');
+          if (!b || !t) return null; const r = b.getBoundingClientRect();
+          return {shown: getComputedStyle(b).display !== 'none' && r.height > 0, cells: b.querySelectorAll('[data-cache-cell]').length,
+                  exp: t.getAttribute('aria-expanded'), label: t.textContent}; }"""
+        a = pg.evaluate(vis)
+        pg.evaluate("() => document.querySelector('[data-act=\"cache-toggle\"]').click()")
+        pg.wait_for_timeout(150)
+        b = pg.evaluate(vis)
+        pg.evaluate("() => document.querySelector('[data-act=\"cache-toggle\"]').click()")
+        pg.wait_for_timeout(150)
+        c = pg.evaluate(vis)
+        pg.close()
+        self.assertIsNotNone(a, "★ 缓存命中块没渲染出来 —— 下面的断言会空转")
+        self.assertEqual(a["cells"], 4, "已知阳性：折叠时四格仍在 DOM 里")
+        self.assertEqual((a["shown"], a["exp"]), (False, "false"), "★ 默认要折叠")
+        self.assertIn("展开", a["label"])
+        self.assertEqual((b["shown"], b["exp"]), (True, "true"), "★ 点标题行要展开")
+        self.assertIn("收起", b["label"])
+        self.assertEqual((c["shown"], c["exp"]), (False, "false"), "再点一次收起")
+
 
 if __name__ == "__main__":
     unittest.main()
