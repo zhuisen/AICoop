@@ -17,6 +17,7 @@ paths:
 
 ## 4. 验证口径（比"编译过"高的闸）
 
+- ★ **测多少按档位，不是每批全套**（用户 2026-10-23 定）：日常 = 改动相关 + 上次失败的 + 安全集（~3s）；发版前全套测过且代码没再改就跳过；push 后 CI 全套不跳。正本在项目 `CLAUDE.md` §4。
 - **先跑不变量守卫**：`python3 -m pytest tests/ -q`（2026-10-23 改：与 CI 同一条命令；`unittest discover` 收不到 pytest 风格的类、也不跑 `conftest.py` 的哨兵。下面括号里的 519 条 / 47 个文件是 2026-09 的数，2026-10-22 已是 2712 条、约 28 分钟），原文：（**519 条 / 47 个文件**，覆盖锁序、已退役 SwiftBar 入口、额度窗口与 `limit_id` 身份、「不许编造满额」、agy 模型名归一、增量解析、缓存签名、主题对比度、菜单栏宽度、图例分区…）。
   ★ **「一律不 import」这条已细化**：绝不读真实 `auth/`/`state.json`、绝不刷 token、绝不发计费请求 —— 这三条不变。但**按路径 import 是允许的**，前提两条同时成立：① 目标模块顶层只有常量（`proxy.py` / `codex-rotate` 已核，服务器启动在 `__main__` 下）；② **每一条写盘路径都打桩**（`test_quota_never_fabricated.py` 把 `_mutate_state` 换成对夹具 dict 的操作 —— 真实现会写真的 `state.json`）。行为测试比纯文本断言强得多，但这两个前提缺一不可。
 - **验健康用只读 `codex-rotate health`，绝不用 `refresh`**——`refresh` 轮换 refresh_token，本身有破坏性。本地 JWT `exp` 查不出服务端 revoke（见 B21）。

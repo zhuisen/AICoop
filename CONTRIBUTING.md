@@ -6,7 +6,7 @@
 你有自己的需求时，在你的 fork 里做**派生版本**，跟着底座同步。
 
 ```text
-本仓库 main（底座）    账号池轮换、额度、凭证、用量扫描、主界面、菜单栏、跨平台
+本仓库 main（底座）    账号池轮换、额度、凭证、用量扫描、主界面、菜单栏（仅 macOS）
         │  定期同步：git fetch upstream && git rebase upstream/main
         ▼
 你的 fork（派生版本）  底座 + 你自己的功能，由你自己构建和发布
@@ -16,7 +16,7 @@
 
 - 修复底座里的错误（附复现步骤，能写测试就写测试）。
 - 对所有使用者都有用的底层改进。例如：把一段判定抽成可复用的函数、减少轮询、加一个通用的扩展点。
-- 跨平台问题（macOS 和 Windows 都要能编译、能运行）。
+- macOS 上的编译与运行问题。Windows 版已于 2026-10-19 取消，底座不再收 Windows 改动。
 
 ## 什么留在派生版本
 
@@ -31,7 +31,7 @@
 第一次：
 
 ```bash
-git remote add upstream https://github.com/zhuisen/codex-account-rotator.git
+git remote add upstream https://github.com/zhuisen/AICoop.git
 ```
 
 每次底座更新后：
@@ -50,7 +50,7 @@ git fetch upstream && git rebase upstream/main
 ## 给底座提 PR
 
 - 一个 PR 只做一件事。底层改进和功能不要混在一个 PR 里。
-- 跑通 `python3 -m unittest discover -s tests -p 'test_*.py'` 和 `cd codexbar && npx tsc -b`（`--noEmit` 在本仓不检查任何文件，不算数）。
+- 跑通 `python3 -m pytest tests/ -q`（与 CI 同一条）和 `cd codexbar && npx tsc -b`（`--noEmit` 在本仓不检查任何文件，不算数）。
 - 改了界面就附截图。
 - 凭证与额度相关的改动先读 `.claude/rules/credentials.md`。其中有几条规则如果违反，会让账号被服务端吊销。
 

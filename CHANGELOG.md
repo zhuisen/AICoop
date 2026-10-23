@@ -1,4 +1,4 @@
-# codex-rotate · CHANGELOG & BUG LOG
+# AICoop · CHANGELOG & BUG LOG
 
 构建于 2026-06-09 ~ 06-10。展示层版本号见 `codexbar/src-tauri/tauri.conf.json` 的 `version`(SwiftBar 已退役)。
 
@@ -745,6 +745,49 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 两份夹具（**稠密夹具下新旧实现结果完全一样，那些闸恒绿**）。
 
 ---------
+
+## v2.0.0 — 2026-10-23
+
+**大改版：桌面应用改名 AICoop，界面照 AICoop 交接包整套重做。** 仓库同日从 `codex-account-rotator` 改名 `AICoop`。
+大版本号升 2 的理由（用户 2026-10-23 选定）：产品改名、6 个页面全部重做、托盘与刘海换了交互形态。CLI（`codex-rotate` / `agy-rotate` / `cxp` / `cxd`）与数据格式不变，升级不用重新接入账号。
+v1.12.0-beta.1（B90：托盘 t/s 胶囊、悬停面板、请求页、刘海卡片、Claude 实测速度 OTel）只发过草稿，本版是它第一次正式发布。
+⚠️ 升级后如果用的是安装包（`.dmg`），要在「设置 → 账号池接入」再点一次「接入」（B77：运行时是复制过去的那份）。
+
+### 新增
+- **改名 AICoop**：应用名、可执行文件名、托盘与 Release 都叫 AICoop。bundle id 仍是 `com.doushutangmu.codexbar`，所以设置、开机自启与 TCC 授权都沿用；旧的开机自启项自动改指新路径。
+- **左侧图标导航**（固定 64 宽）：总览 · Token 消耗 · 代理轮换 · 中转站 · 请求 · 设置。macOS 标题栏去掉，红黄绿、打码眼睛与版本号进导航栏。
+- **托盘**：在跑时显示 t/s 胶囊（多个 AI 同跑时角标显示个数）；悬停弹出每个在跑 AI 的明细面板；空闲时显示叠放的 AI logo，水位跟 5h 窗口，悬停是额度格子（周额度 <10% 标红牌，× 可隐藏到重置）；双击打开总览。
+- **刘海光晕**（设置里开关）：空闲额度格子 + 在跑光晕。
+- **请求页**：每条模型响应一行（token、首字、生成耗时、t/s、账号），四家同一窗口口径；右侧当天总计。
+- **总览重做**：toast 堆叠（带撤销）、删除延迟提交可撤销、计费控件锁、置顶可跨 Plus/Pro 档、卡片状态行一律短格式（整句在悬停提示）、列数两门槛（最小窗口 3 列，第 4 列起每张 ≥320px）。
+- **Token 消耗页重做**（原「AI 用量信息」）：共享 KPI 模型、插值取层；缓存口径胶囊与价格待核提示并进悬浮堆叠。
+- **代理轮换页与中转站页重做**。
+- **窗口**：从标题区空白处拖动、松手贴边、右下角弧形抓手按预设尺寸吸附。
+- **长上下文档位计价**：Codex >272K、Gemini 3.1 Pro >200K、Haiku 5.5 >100K。Grok 费用改用它自报的 `costUsdTicks`。
+- **Grok 解锁**：总览卡不再标「只读」和锁；周用量 <1% 时 xAI 省略用量字段，现在显示「剩 ≥99% · 推断」而不是「读不到」；点刷新有原因提示。
+- `codexbar/scripts/app_shot.sh`：截真 AICoop 窗口（开发验证用）。
+
+### 改进
+- 「今日 token」跟缓存口径设置走（托盘、悬停面板、菜单栏一致）。
+- quotad 22:00–08:00 全池扫描放慢到 30 分钟；keepalive 恢复为每小时（只在 22:00–08:00 干活）。launchd 服务共 7 个。
+- 重置卡到期提醒从 3 天改为 2 天。
+- 菜单栏关闭超过 1 分钟后重开回默认 Tab 与平台。
+- UI 测试改读仓库里的固定脱敏夹具（日期平移到今天），CI 起 harness 跑全套。
+
+### 修复
+- 冷却中的号读到 5h 有余量即解冻；用卡后的 GET 回声不写回。
+- agy / Codex 正在写的文件 FSEvents 不报 ⇒ 改为 mtime 轮询，在跑检测不漏。
+- t/s 跨午夜取实测、无实测回落同模型中位数；agy 思考 token 计入 t/s；agy 批量响应按估值。
+- Codex 首个 turn_context 之前的行回填模型（unknown 归零）；agy 按生成结束时刻分日。
+- 全方面评审（Opus + gpt-6.1-sol + gemini-4-argon）A–F 六阶段的发现全部修完，见 B91。
+
+### B91 · AICoop 改版（交接包 1:1 复刻 + 全方面评审修复）— 2026-10-21 ~ 10-23 ✅ 已发 v2.0.0
+
+> 下面整段从 `memory.md` 现况板逐字搬来（发版时清板），含当时的 commit 与待定项。
+
+⏳ **AICoop 改版（1:1 复刻 `~/Downloads/AICoop_handoff` + 后端，含 Claude 号池）阶段 0–7 全部已本地提交、已部署，未 push、未发版**：3 总览 `22120d7` · 3b Claude 隔离 `305d683`/`b24187f` · 4 Token 页 `1f12bb3` · 5 轮换+中转站 `dbb85fd` · 6 请求+设置 `1bbc2eb` · 7 动效 `cc33e02`。每阶段 codex gpt-6.1-sol + agy gemini-4-argon-high 评审，汇总在 `~/Downloads/aicoop_review_20261021/phase*/SUMMARY.md`；偏离与待定逐条在 `scratch/aicoop_20261021/PLAN.md`（27–44）。**用户 10-22 早上起来试用，发现 bug 再修；发版前先问用户。** 待用户定：B6（Claude 窗口读不到按满还是 —）· 3b tier-1 E1–E4 · P8 用量块 (a)/(b) · P9 无后端的几项（跟随系统、刷新间隔…）· P99 不装 animate-ui 依赖 · P11 右键菜单。session-affinity 用户 10-22 定「不做」。仍待用户：OTel 服务切换（先 bootout 手写的 `com.doushutangmu.claude-otel`，同占 4318）· samchen 的 issue · 草稿 release 是否公开。**10-22 中午批**（`a7d2188`…`c944cfa`，已部署 +23、launchd 已重装含新 `keepalive`）：悬停展开改 Rust 光标 · agy/Codex 开着写的文件 FSEvents 不报 ⇒ mtime 轮询 · 空闲托盘 18pt 无底色镂空 + 默认按 Token 排 · 卡 ≤2 天 · 价格待核弱警告 · quotad 22–08 30min · keepalive 每小时（只 22–08 干活）· 去 grok 锁 · 菜单栏 1 分钟外重开回默认 · 设置居中。**10-22 下午批**（`9f093fe`…`749a9de`）：#7 置顶跨 Plus/Pro 档（未置顶仍 Plus 优先）· t/s 统一同窗口口径（CUR_V 5，用户选 a：估值行照显数字，均速只取实测，跨 AI 不出合计）· 请求页右侧「今天总计」· 悬停面板飞回 logo 12→18 跳变修掉（真机未看）。**10-22 傍晚批**（`d933b61`…`b89e71e`，已部署）：请求页右上角跟筛选走 · 消耗页标题改「消耗」+ 胶囊并进标题行 + 两列行 36px · 空闲托盘第 3 家按排名。**10-22 晚批**（`518e14b`…`4d0842a`，已部署 +33）：空闲 logo 水位改 5h · 刷新时间绿色「N mins」· macOS 去标题栏（红黄绿 / 眼睛 / 版本进侧栏）· 消耗两页弱提示并进悬浮堆叠。**+37**（`211f388` `593dd43`）：空闲面板底部周额度 <10% 告警堆叠（红）· 悬浮堆叠两档色（弱黄 / 强红，带透明度）。真机未看：光标展开、窗口长高。**+41**（`c7a9ed8`）：周额度警告改进格子左上角小红牌（A1）· 悬停格子 × 隐藏到重置 + 撤销（B1）。✅ 全方面评审（Opus + gpt-6.1-sol high + gemini-4-argon-high，三方都投了）已出 `~/Downloads/aicoop_full_review_20261022/SUMMARY.md`。⏳ **用户 10-22 晚：除「失效通知带邮箱」外全修，分 6 阶段、每阶段两方评审**（计划 `~/Downloads/aicoop_fix_20261022/PLAN.md`）。已提交：前 5 条 `e78a3b2` · 空闲面板宽 `18bb8f0` · 拖窗/抓手 `c2cf625`。**阶段 A–F 全部改完、每阶段两方评审并补修，已本地提交 `13fc45f`（未 push、未发版），已部署 +45、proxy/quotad 已 kickstart，全套 2901 过**。小结 `~/Downloads/aicoop_fix_20261022/stage{A..F}/SUMMARY.md`。同批另修（用户 10-23 实报）：冷却后读到 5h 有余量即解冻（`proxy.recovered`）· 用卡后 GET 回声不写 · 托盘 t/s 跨午夜取实测、无实测回落同模型中位。UI 闸改读固定夹具 + CI 起 harness 跑全套 `532f152`（CI 那条**未在 GitHub 上跑过**，push 后看结果）。待你定：agy 置顶 vs `live_wanted` 谁优先。真机未验：退订竞态、用卡后几秒内是否回满。⏸ 其它页弱提示（总览续航说明、中转站陈旧行、设置数据源状态…）待用户逐项定。⏳ **10-23 傍晚批（token 审查「都修」+ 进程名 AICoop + grok 解锁，已提交 `eecd76e` `9778ddd`，未 push）**：长上下文档（Codex >272K / Gemini 3.1 Pro >200k / Haiku 5.5 >100K；Claude 其余 1M 平价不建模）· Grok 费用改用自报 `costUsdTicks`（1e-10 USD）· `[1m]` 归一 · Codex 首个 turn_context 前的行回填模型（unknown 37.4M 归零）· agy 按生成结束分日 · requests 0 token 行不计 · Claude span 输出取较大值 · 「今日 token」跟缓存口径（`applyLiveCacheMode` + 底栏先取快照）· 可执行文件 `mainBinaryName: AICoop`（bundle id 不动；开机自启已自动改指）· grok 去掉「只读」和锁（总览卡与 Claude 同状态）· grok-quota 带 `last_sent_at` / `last_fail` 诊断 · mutate.py 禁 pyc。PARSER_V 15、CUR_V 6。grok 读不到的真因（10-23 晚）：周重置后用量 <1% ⇒ xAI 省略 `creditUsagePercent` ⇒ 一直 bad_payload；已改成推断 0（用户选「剩 ≥99% · 推断」），真接口已验回可用。同批：grok 刷新出原因 toast · 总览卡名字行不截断（套餐缩省略号）· 菜单栏套餐不溢出。⏳ 用量 ≥1% 时字段是否回来（证伪「接口删字段」）待看。 **10-23 晚**（`1e94852`，已部署，未 push）：卡片状态行一律短格式（整句进悬停）· 列数两门槛：前 3 列 ≥245（860 排 3 列）、第 4 列起每张 ≥320（1000/1200 仍 3 列、1440 才 4 列；320 是我取的值，用户可调）。
+
+**发版时仍开着的**（已留在 `memory.md`）：B6（Claude 窗口读不到按满还是 —）· 3b tier-1 E1–E4 · P8 用量块 (a)/(b) · P9 无后端的几项 · P11 右键菜单 · OTel 服务切换（先 bootout 手写的 `com.doushutangmu.claude-otel`）· agy 置顶 vs `live_wanted` 谁优先 · grok 用量 ≥1% 时字段是否回来 · 真机未验：光标展开、窗口长高、退订竞态、用卡后几秒内是否回满。
 
 ## v1.12.0-beta.1 — 2026-10-19（beta：仅 git tag 与 GitHub prerelease，清单版本 1.12.0）
 

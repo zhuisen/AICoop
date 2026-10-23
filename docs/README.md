@@ -3,8 +3,8 @@
 | 文档 | 讲什么 | 什么时候看 |
 |---|---|---|
 | [INSTALL.md](INSTALL.md) | 安装（两半可以只装一半；凭证不搬运） | 装机、换机 |
-| [WINDOWS.md](WINDOWS.md) | Windows 支持状态与已知差异 | 在 Windows 上跑 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 四个进程怎么分工、数据往哪流 | 想改代码、想知道某个数从哪来 |
+| [WINDOWS.md](WINDOWS.md) | Windows 版存档（2026-10-19 已取消） | 想知道 Windows 代码为什么还在 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 各进程怎么分工、数据往哪流 | 想改代码、想知道某个数从哪来 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 症状 → 判据 → 处置，全部带实测证据 | 出问题了 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 版本史 **+ BUG 日志（`B<n>` 编号）** | 查「这个坑修过没」 |
 

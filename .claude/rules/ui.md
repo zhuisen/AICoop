@@ -5,7 +5,7 @@ paths:
   - "**/src-tauri/src/lib.rs"
 ---
 
-# CodexBar 设计语言（path-scoped · 本项目特有的那半）
+# AICoop 设计语言（path-scoped · 本项目特有的那半；应用 2026-10-23 前叫 CodexBar）
 
 > 2026-09-10 从项目 `CLAUDE.md` §5 搬来，**逐字未改**。
 > **通用**的那套（"仪表级数据 UI"）在 `~/.claude/rules/ui-design.md`，全局生效；
@@ -100,7 +100,7 @@ paths:
 - ★★ **主窗口的显示/隐藏一律走 `set_main_visible`,不要直接 `win.hide()` / `win.show()`**。程序坞图标 = 「用户开了开关」**AND**「主窗正显示着」两个条件合成,唯一改 activation policy 的地方是 `apply_activation_policy()`。任何绕过它的 hide/show 都会让图标和窗口状态脱节 —— 用户 2026-08-09 报的正是这个:关掉主界面后**图标还占着程序坞的位置、点它又不出窗口**。
   - 那是**两个 bug 叠加**,修一个不够:① 关窗只 `hide()` 不降级策略 → 图标留着;② **没有 `RunEvent::Reopen` 处理** —— macOS 点程序坞图标发的就是这个事件,不接等于死图标。
   - 前端原来有 4 处直接 `win.hide()/show()`,漏改任何一处就复发。改完 `grep -rn "win\.hide()\|win\.show()" src/` 必须为空。
-  - 实测口径:`osascript -e 'tell application "System Events" to get name of every process whose background only is false'` 里数 CodexBar —— 主窗开着=1、⌘W 之后=0。
+  - 实测口径:`osascript -e 'tell application "System Events" to get name of every process whose background only is false'` 里数 AICoop（2026-10-23 前进程名是 CodexBar / codexbar）—— 主窗开着=1、⌘W 之后=0。
   - **代价**:图标只在主界面开着时存在,所以**不能再从程序坞唤起 app**(要走菜单栏)。这是"不占位置"的直接交换,用户 2026-08-09 选的。想换回"常驻但可点"只需让 `apply_activation_policy` 忽略 `main_visible`。
 - ★★ **单实例闸门用 `flock`，不用 `tauri-plugin-single-instance`**（2026-08-11 换掉，别换回去）。用户报「死机重启后开两个 CodexBar」，根因是**两条启动路径在开机时并发**：① autostart 插件建的 LaunchAgent（`RunAtLoad` + 直接 exec **裸二进制**）；② macOS 脏关机后由 LaunchServices 恢复。平时手点复现不出来——实测 app 已在跑时 `open -a` 会正确去重、只发 `Reopen`；但**那个去重要求第一个进程已在 LaunchServices 注册完毕**，开机时裸二进制还没注册完恢复那条 `open` 就发出去了。
   - ✗ **那个插件的闸门自己就有竞态**，而竞态恰恰是本 bug 的触发条件：它是 `connect 失败 → socket_cleanup() 删文件 → spawn 异步任务里再 bind`，两个进程同时起时 B 的 connect 早于 A 的 bind，**B 的 cleanup 把 A 刚建的 socket 删掉**，两边各自 bind 各自存活。用它压测"通过"只是没撞进那个窗口。

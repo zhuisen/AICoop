@@ -928,7 +928,7 @@ function DiscoverPanel({ t, snap }: { t: Theme; snap: TrafficData | null }) {
   );
 }
 
-const REPO = "zhuisen/codex-account-rotator";
+const REPO = "zhuisen/AICoop";
 const REPO_URL = `https://github.com/${REPO}`;
 
 

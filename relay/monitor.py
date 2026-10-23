@@ -44,7 +44,7 @@ from . import store
 
 # ★ 任何非默认 UA 都能过闸（已实测三种）。带上版本便于对端排障。
 # ★ 不写死版本号 —— 本仓刚把三处前端版本串改成运行期取值,这里别又埋一处。
-USER_AGENT = "CodexBar (+https://github.com/zhuisen/codex-account-rotator)"
+USER_AGENT = "AICoop (+https://github.com/zhuisen/AICoop)"
 TIMEOUT = 25
 
 # 探测顺序:把最常见的放前面。命中即记，之后直接走记下的那条。

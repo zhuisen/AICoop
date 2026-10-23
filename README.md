@@ -1,47 +1,54 @@
-# codex-rotate
+# AICoop
 
-把 **多个个人 ChatGPT Plus/Pro 账号** 做成一个池子,为 **Codex CLI** 透明轮换使用——一个人、自己买的号、全程本机、loopback-only、同一家庭 IP。
+一个 macOS 菜单栏应用，管两件事：
 
-> 日常:**直接敲 `codex`**(装完 [§2](docs/INSTALL.md#2-入口-symlink) 的 PATH wrapper 之后),你的 Codex 会话就会在多个号之间**逐请求透明轮换**:撞限自动换号、token 自动刷新、长会话消耗摊到所有号 ≈ **把额度上限扩成 N 倍**。菜单栏实时看每号余量。
-> 需要单号直连时用 **`cxd`** —— 那是唯一绕过代理的入口(比如跑 `/usage` 看重置卡)。
+1. **账号池 + 轮换代理**：把**多个个人 ChatGPT Plus/Pro 账号**做成一个池子，给 **Codex CLI** 逐请求透明轮换。一个人、自己买的号、全程本机、loopback-only、同一家庭 IP。Antigravity(agy) 也有自己的号池；Grok 单号只读额度。
+2. **AI 用量看板**：汇总本机 8 家 AI CLI 已落盘的 token、费用和每条请求的速度。不联网、不碰凭证。
 
-> ✅ **下载安装包就能接入轮换**(v1.8.0 起)。安装包里**带着**轮换运行时,但**不会自动装** ——
-> 它要改你的 `~/.codex` 与 `~/.local/bin`,那得你点头。打开 **CodexBar → 设置 →
-> 「账号池接入(Connector)」**,逐项勾选即可:全程用户级、**不需要管理员密码**、随时可撤销,
-> 且只在托管标记之间写 `~/.codex/config.toml`,标记之外你自己的内容一个字节都不动。
+> **v2.0.0（2026-10-23）是一次大改版**：应用从 CodexBar 改名 AICoop，6 个页面、托盘、菜单栏和刘海全部重做，新增「请求」页和实时 t/s 托盘。CLI 与数据格式不变。详情见 [CHANGELOG](CHANGELOG.md#v200--2026-10-23)。仓库同日从 `codex-account-rotator` 改名 `AICoop`，旧地址 GitHub 会自动跳转。
+
+> 日常：**直接敲 `codex`**（装完 [§2](docs/INSTALL.md#2-入口-symlink) 的 PATH wrapper 之后），你的 Codex 会话就会在多个号之间**逐请求透明轮换**：撞限自动换号、token 自动刷新、长会话消耗摊到所有号 ≈ **把额度上限扩成 N 倍**。菜单栏实时看每号余量。
+> 需要单号直连时用 **`cxd`** —— 那是唯一绕过代理的入口（比如跑 `/usage` 看重置卡）。
+
+> ✅ **下载安装包就能接入轮换**。安装包里**带着**轮换运行时，但**不会自动装** ——
+> 它要改你的 `~/.codex` 与 `~/.local/bin`，那得你点头。打开 **AICoop → 设置 →
+> 「账号池接入（Connector）」**，逐项勾选即可：全程用户级、**不需要管理员密码**、随时可撤销，
+> 且只在托管标记之间写 `~/.codex/config.toml`，标记之外你自己的内容一个字节都不动。
 > 没接入时总览页会提示并给一个「去接入 →」直达设置页。
 > ⚠️ **App 每次更新后要再点一次「接入」** —— 运行时是接入时复制过去的那份，App 更新不会替换它
-> （v1.10.0 起总览会标红「运行时与 App 同版本 ✗」；更早的版本见 [排障](docs/TROUBLESHOOTING.md#已接入但还是觉得没轮换) 第 4 条）。
+> （总览会标红「运行时与 App 同版本 ✗」；见 [排障](docs/TROUBLESHOOTING.md#已接入但还是觉得没轮换) 第 4 条）。
 > ★ 它**绝不会调用** `codex login` / `codex logout` —— 那两条会在服务端吊销当前账号。
-> 想手动装、或想完全控制每一步,仍照 [`docs/INSTALL.md`](docs/INSTALL.md) §2~§4 走。
+> 想手动装、或想完全控制每一步，仍照 [`docs/INSTALL.md`](docs/INSTALL.md) §2~§4 走。
 
 > 📦 **安装** → [**docs/INSTALL.md**](docs/INSTALL.md)（两半可以只装一半；凭证不搬运，新机 `codex login` 重新生成）。
-> 📚 **全部文档** → [**docs/README.md**](docs/README.md)（架构 · 排障 · 安装 · Windows）。
-> 🪟 **Windows 版已于 2026-10-19 取消**：不再出安装包，CI 只构建 macOS。旧版本的说明留在 [docs/WINDOWS.md](docs/WINDOWS.md)，不再维护。
+> 📚 **全部文档** → [**docs/README.md**](docs/README.md)（架构 · 排障 · 安装）。
+> 🖥️ **只支持 macOS。** Windows 版已于 2026-10-19 取消：不再出安装包，CI 只构建 macOS。旧说明留在 [docs/WINDOWS.md](docs/WINDOWS.md)，不再维护。
 
 ## 界面
 
-| 账号总览（打码模式） | AI 用量 · 近 14 天 |
-|---|---|
-| ![账号总览](docs/screenshots/01-accounts.png) | ![用量近14天](docs/screenshots/02-usage-14d.png) |
-| 顶部**续航条**：代理正在用哪个号、下一个是谁、全池还能撑多久；每号 5h/周双窗口余量、订阅到期、重置卡（**点卡片页脚的「重置卡 ×N」→ 弹窗列出每一张、默认选最近到期的，确认后直接用卡**，命令行等价 `codex-rotate use-credit <号> [--card <id>]`；用掉不可逆，所以必须弹窗确认）；`>` 打码开关把邮箱与 account_id 遮成定宽占位，布局不跳 | 堆叠面积图按平台，KPI 条给总量/日均/等效费用/环比 |
+左侧图标导航 6 页：**总览 · Token 消耗 · 代理轮换 · 中转站 · 请求 · 设置**。另有托盘、托盘悬停面板、菜单栏弹窗和刘海光晕。
 
-| AI 用量 · 今日 | 平台详情 · 分模型 |
+| 总览 | Token 消耗 · 近 30 天 |
 |---|---|
-| ![用量今日](docs/screenshots/03-usage-today.png) | ![平台详情](docs/screenshots/04-platform.png) |
-| 今日档**一格一小时**，坐标轴只覆盖已过去的小时 | 分模型 token/占比/轮数/折算费用 + 该平台的实际牌价与缓存折扣 |
+| ![总览](docs/screenshots/01-overview.png) | ![Token 消耗](docs/screenshots/02-token.png) |
+| 顶部 Hero：代理正在用的号、还能连续用多久、今天的切换。下面每号一张卡：5h / 周双窗口余量、订阅到期、重置卡。悬停时卡片底栏原位换成操作；删除先进 toast，3 秒内可撤销 | KPI 条（总量 / 请求数 / 日均 / 等效费用 / 缓存命中）+ 按平台堆叠的面积图 + 平台卡 |
 
-| 菜单栏 · 账号 | 菜单栏 · 今日 |
+| 平台详情 · 分模型 | 请求 |
 |---|---|
-| ![菜单栏账号](docs/screenshots/05-menubar-acc.png) | ![菜单栏今日](docs/screenshots/06-menubar-today.png) |
-| **在用**（代理最近真正用的号）、**下一个**（真挑号器的结果）、号间差值；点行尾「切换」不用开主窗口 | 今日总量 + 小时堆叠图 + 各平台明细，底栏直达流量总览 |
+| ![平台详情](docs/screenshots/03-platform.png) | ![请求](docs/screenshots/04-requests.png) |
+| 分模型 token / 占比 / 轮数 / 折算费用，带牌价与缓存折扣；长上下文按高档计价 | 每条模型响应一行：输入 / 输出 token、首字、生成耗时、t/s、账号。四家同一口径；估值标「估」 |
 
-| 代理轮换 · 泳道时间轴 | 代理轮换 · 时段明细 |
+| 代理轮换 | 中转站 |
 |---|---|
-| ![代理轮换](docs/screenshots/07-rotation.png) | ![时段明细](docs/screenshots/08-rotation-tip.png) |
-| 一眼看出**什么时间哪个号在岗**；色块深浅 = token 密度，琥珀点 = 断流，蓝环 = 429 冷却 | 悬浮任一色块：该时段 token / 请求数 / **模型构成** / 为什么切进来 |
+| ![代理轮换](docs/screenshots/05-rotation.png) | ![中转站](docs/screenshots/06-relay.png) |
+| 泳道时间轴：什么时间哪个号在岗、为什么切过去、token 归属到号 | 第三方中转站的余额、用量与路由（代理的第二个上游） |
 
-> 截图用的是**真实数据形状**配**脱敏账号夹具**（邮箱/姓名/account_id 全部替换），并额外开了打码模式。
+| 菜单栏弹窗 | 托盘悬停面板 |
+|---|---|
+| ![菜单栏](docs/screenshots/07-menubar.png) | ![托盘悬停](docs/screenshots/08-tray-hover.png) |
+| 每号油表、在用 / 下一个、今日用量 | 有 AI 在跑时托盘显示 t/s 胶囊；悬停看每个在跑会话的模型、token 与速度 |
+
+> 截图来自仓库里的固定脱敏夹具（`codexbar/uishot/fixture/`，邮箱 / 姓名 / account_id 全部替换），用同一份构建产物在 headless Chrome 里渲染。
 
 ---
 
@@ -58,7 +65,7 @@
 
 ```bash
 brew install python3 node && curl https://sh.rustup.rs -sSf | sh   # 前置(python3 必须 OpenSSL 构建)
-git clone https://github.com/zhuisen/codex-account-rotator.git && cd codex-account-rotator
+git clone https://github.com/zhuisen/AICoop.git && cd AICoop
 bash codexbar/scripts/setup-signing.sh && bash codexbar/scripts/deploy.sh
 ```
 
@@ -68,8 +75,8 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 
 ★ **Claude 实测速度**（v1.12.0 起，仅 macOS，默认关）：在「设置 → Claude 实测速度」打开。开了之后，Claude Code 把每次请求的耗时与 token 发到本机 `127.0.0.1:4318`，不含对话内容。不开时，Claude 的速度是估值。说明见 [docs/INSTALL.md「Claude 实测速度」](docs/INSTALL.md#claude-实测速度otel仅-macos)。
 
-除了 token 用量,总览页还显示**订阅额度**(与账号池的 Codex 余量并列,同款圆环+细条,标「只读」不参与切号):
-**Grok** 周额度(xAI 账单接口)· **Antigravity** 4 个桶(Gemini / Claude+GPT × 5h / 周,按账号读云端额度摘要,**零消耗**;
+除了 token 用量,总览页还显示**订阅额度**(与账号池的 Codex 余量并列,同款圆环+细条,不参与切号):
+**Grok** 周额度(xAI 账单接口;本周用量不到 1% 时 xAI 不回用量字段,显示「剩 ≥99% · 推断」)· **Antigravity** 4 个桶(Gemini / Claude+GPT × 5h / 周,按账号读云端额度摘要,**零消耗**;
 摘要缺 Gemini 组时 5h 改读模型列表,周沿用最后一次读数并标龄,超过一天显示「旧读数已过期」)。没装那家 CLI 的机器上**零像素**,不会留一张写着"你没装"的空卡。
 
 ⚠️ **agy 的 token 用量只覆盖 print 模式**(`agy -p`,即 `omc ask` / `omc team` 走的那条)。它自己**不落用量**,数据是 `bin/agy` wrapper 从 `--output-format json` 抄下来的;**交互式会话的 token 拿不到**,页面上有覆盖率徽章标注。装这一家需要一步额外配置，见 [docs/INSTALL.md §5](docs/INSTALL.md#5-构建桌面应用)。
@@ -80,7 +87,7 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 
 ---
 
-## 总览：谁在用、下一个是谁、还能撑多久（v1.9.0 起，v1.10.0 更新）
+## 总览：谁在用、下一个是谁、还能撑多久
 
 - **选号规则**：默认**容量最高优先**（「Plus 优先、Pro 保底」不变）。卡片上点 📌 **置顶**的号插队先用，
   可以置顶多个，按点亮先后排队；不置顶就是纯按容量。**拖拽 ⠿ 只改卡片摆放与 ⌘N，不影响轮换。**
@@ -93,9 +100,12 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
   副行「本周 ≈ N 小时」。单位是**连续使用时间**（请求间隔 >5 分钟算闲置不计）：一个 Plus 号 5h 连续几分钟就见底，
   按钟点算的「续航 99 小时」对干活没有意义（2026-10-15 改）。依据是历史 5h 用完次数与 5h↔周换算比，样本不足显示 `—`，绝不写 0。
   Gemini 档仍是旧口径。
-- **卡片动作条**：点卡片从底部浮出（卡片高度不变），**5 秒后自动收回**，底边一条细线倒计时；
-  macOS 式半透明磨砂。点删除（垃圾桶）后整条换成「删除 X？· 确认删除 · 取消」，不可逆的确认旁边不挨着别的按钮。
+- **卡片**（v2.0.0 起）：定高 148，悬停或键盘聚焦时底栏原位换成操作，卡片尺寸不变、不盖数据。
+  操作结果进右下角 toast 堆叠；删除先藏起来，toast 里 3 秒内可「撤销」，过了才真删。
+  第二行状态一律短格式（如 `02:46 · 11.4M`、`24h 未用`），整句在悬停提示里。
+  列数：最小窗口 860 排 3 列（每张约 245px）；第 4 列起每张要有 320px 才加，所以 1440 宽才 4 列。
   角标 **下一个** = 真挑号器的结果，**直连** = `auth.json` 里那个号（只有不走代理的 `\codex` 才用它）。
+- **置顶跨档**：置顶的号可以越过「Plus 优先、Pro 保底」先用；没置顶的仍 Plus 优先。
 - **菜单栏跟着代理走**：托盘标题与弹窗里高亮的那一行，都是**代理此刻在用的号**，不是上次 CLI 切换的号。
 - **定时探针**（2026-10-15 起在总览工具栏，Codex 与 Gemini 各一个「定时 开/关」胶囊）：点开选时间，实际在所选时刻起 **3 分钟内随机**触发（选 06:00 ⇒ 06:00–06:03）；Codex 探 Plus 号、Gemini 探参与轮换的号。⚠️ **会花钱，默认关闭**；电脑睡着错过的由 app 醒来后补跑，同一天只跑一次。
 - **Gemini 档位**：Google AI Ultra 的号在卡片 / Hero / 菜单栏名字旁标 **ULTRA**（Pro 是大多数，不标）。
@@ -163,7 +173,7 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 |---|---|
 | ① token 失效要重登 | 代理挑到 token 过期的**非活跃**号时当场 OAuth 续期(双重锁) → 有流量的号**不用手动重登**。定时保活(keepalive)2026-08-29 取消、2026-10-22 恢复:每小时拉起,只在 22:00–08:00 刷非活跃号里 48h 内到期的 token,长期不被挑中的号也能续上。急用时手动 `codex-rotate refresh <label>`(非活跃号安全);真死了才 `codex-rotate login` |
 | ② 会话内切号要重启 | 代理逐请求透明轮换;Codex 每请求发完整上下文 → **中途换号无感、不重启**。同一段对话靠 body 里的 `prompt_cache_key` 粘住同一个号(codex 不发 `previous_response_id`,见 CHANGELOG B26) |
-| ③ 额度不实时 | **事件驱动**:quotad 监测 codex 活动(4 路本地信号)→ 数秒内读**官方 usage API**(零消耗)刷当前号;实测发起调用后 **+8s** 见数、运行中每 20s 续刷。另有 300s 全池扫描兜底 + 代理逐请求记账 |
+| ③ 额度不实时 | **事件驱动**:quotad 监测 codex 活动(4 路本地信号)→ 数秒内读**官方 usage API**(零消耗)刷当前号;实测发起调用后 **+8s** 见数、运行中每 20s 续刷。另有全池扫描兜底(白天 300s,夜间 1800s)+ 代理逐请求记账 |
 | ④ 撞限要手动换 | 代理撞 429 → 标冷却 → 下个请求自动换号 |
 
 ## 架构:两层协作
@@ -180,8 +190,8 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
     rotateproxy)     │   → 注入 token+account_id → 429 冷却 → 逐请求记账 │
                     └────────────────────────────────────────────────┘
                     ┌─ 展示层 ───────────────────────────────────────┐
-                    │  CodexBar(Tauri app):菜单栏弹窗 + 主窗口仪表盘  │
-                    │  每号油表 + 推荐切号 + 开机自启(SwiftBar 已退役) │
+                    │  AICoop(Tauri app):6 页主窗 + 菜单栏 + 托盘    │
+                    │  t/s 胶囊 + 悬停面板 + 刘海光晕 + 开机自启      │
                     └────────────────────────────────────────────────┘
 ```
 
@@ -194,8 +204,11 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 |---|---|
 | `codex-rotate` | **CLI**:账号池管理(add/list/switch/refresh/keepalive/quota/sync/…) |
 | `cx` | 交互式轮换辅助(`cx next` 撞墙切号+重开),单号模式用 |
-| `codexbar/` | **CodexBar 桌面应用**(Tauri 2 + React):菜单栏弹窗 + 主窗口仪表盘 + 开机自启;`bash codexbar/scripts/deploy.sh` 构建部署到 `/Applications` |
-| `swiftbar/codex-status.10s.py` | ~~SwiftBar 菜单栏插件~~(**已退役**,由 CodexBar 取代;脚本保留仅供参考) |
+| `codexbar/` | **AICoop 桌面应用**(Tauri 2 + React;目录名沿用旧名):6 页主窗 + 菜单栏弹窗 + 托盘 t/s 胶囊与悬停面板 + 刘海光晕 + 开机自启;`bash codexbar/scripts/deploy.sh` 构建部署到 `/Applications/AICoop.app` |
+| `codexbar/scripts/app_shot.sh` | 截**真** AICoop 主窗口(按窗口 id,只截这一个窗口)。终端需要「屏幕录制」权限;会先把 AICoop 切到前台 |
+| `traffic/requests.py` | **逐请求账本**:四家每条模型响应一行(token、首字、生成耗时、t/s、账号)。`--json` 给请求页,`--live` 给托盘胶囊与悬停面板。与 scan.py 同一条安全线:stdlib、不联网、不碰凭证、不读正文 |
+| `traffic/otel_receiver.py` | 「Claude 实测速度」的本机 OTel 接收端(只听 127.0.0.1:4318,字段白名单),launchd 服务 `otel` |
+| `swiftbar/codex-status.10s.py` | ~~SwiftBar 菜单栏插件~~(**已退役**,由 AICoop 取代;脚本保留仅供参考) |
 | `proxy/proxy.py` | **轮换代理本体**(stdlib,复用 `state.json` + `auth/`) |
 | `proxy/cxp` | **日常入口**:`codex --profile rotateproxy`,经代理透明轮换 |
 | `proxy/auth-token` | codex `auth.command` 占位 token(代理会覆盖) |
@@ -211,14 +224,14 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 | `.traffic-cache.json`(gitignored) | `traffic/scan.py` 的**逐文件增量缓存**(~14MB,按 `(mtime,size)` 命中)。冷 ~23s → 热 ~0.8s 靠它。额外存 `off`+锚点哈希，Claude 据此**只解析追加的部分**。删了只是重扫一次,不丢数据 |
 | `.traffic-latest.json`(gitignored) | 最近一次扫描的**成品快照**(~91KB)。两个 webview 都先读它再后台重扫,所以进页面/点托盘不再等 1~3 秒。由 `run_traffic` 原子写入(`.tmp<pid>` → `rename`) |
 | `traffic/sources.local.json`(gitignored) | 本机停用哪些平台:`{"disabled": ["grok"]}`。等价 CLI:`--exclude grok` / `--only kimi` |
-| `traffic/scan.py` | **多 AI 流量总览扫描器**(`[--days N] [--json] [--no-cache]`)。读 Claude / Codex / Grok / Kimi / Antigravity 五家 + OpenClaw / Reasonix / DeepSeek Harness 三个宿主源(按模型名回流各家)（平台注册表在文件里，**加一家 = 写个解析器 + 加一行**，前端自动跟上）,**纯本地只读、不联网、不消耗任何额度**,与账号池无关。CodexBar「AI用量信息」页的数据源 |
+| `traffic/scan.py` | **多 AI 流量总览扫描器**(`[--days N] [--json] [--no-cache]`)。读 Claude / Codex / Grok / Kimi / Antigravity 五家 + OpenClaw / Reasonix / DeepSeek Harness 三个宿主源(按模型名回流各家)（平台注册表在文件里，**加一家 = 写个解析器 + 加一行**，前端自动跟上）,**纯本地只读、不联网、不消耗任何额度**,与账号池无关。AICoop「Token 消耗」页的数据源 |
 | `traffic/rotation.py` | **代理轮换泳道的数据引擎**。把 `proxy.log` 的在岗时间线与 codex rollout 的 token 记账按 `response_id` 精确 join。纯模块、不联网、不碰凭证；带文件级缓存与成品快照（`.rotation-cache.json` / `.rotation-latest.json`，均 gitignored） |
 | `traffic/agy_rotation.py` | 代理轮换 **Gemini 版块**的数据（与 `rotation.py` 同形 + `platform: "agy"`）。读 `~/.gemini/antigravity-cli/log/cli-*.log` 与 `agy.log`；纯模块、只读、不联网、不碰凭证 |
 | `traffic/discover.py` | **数据源体检**(`--json`):找本机还有哪些 AI 把用量落了盘,并现场验算它的 token 口径。纯本地只读、不联网、不碰凭证,SQLite 一律 `mode=ro`,**只出报告不自动启用**(接一家的实质是写解析器) |
 | `claude/claude_tokens.py` | ⚠️ 只统计 Claude 的旧扫描器,能力已被 `traffic/scan.py` 完全覆盖(v0.7.0 起 app 不再调用)。保留仅作 CLI |
 | `scripts/install-launchd.sh` | **生成并加载 7 个 launchd 服务**(autosync/keepalive/quotad/proxy/otel + 两个定时计费探针 dawnprobe/agydawn,探针默认关)。keepalive 每小时拉起、只在 22:00–08:00 干活;otel 是「Claude 实测速度」的本机接收端(只听 127.0.0.1:4318)。refreshquota(07:00)2026-08-29 取消后未恢复 —— 与 quotad 的全池扫描重复。生成而非提交成文件:plist 内嵌绝对路径,提交的副本换台机器就是错的,且会静默漂移(旧的 `launchd/*.plist` 就漂到了写死 `/usr/bin/python3`)。★脚本会**解析并钉住 OpenSSL 版的 python3**,见「维护约定」 |
 | `scripts/install-windows.ps1` | Windows 版常驻服务(计划任务)。Windows 已取消,脚本留档、不再验证;2026-10-19 之后新增的服务(otel)只在 macOS |
-| `daemon/quota_daemon.py` | **quotad**:活动驱动 + rollout 尾随 + 300s 全池扫描刷额度。启动时整份加载 `codex-rotate`,所以改 `codex-rotate` 也要 kickstart 它 |
+| `daemon/quota_daemon.py` | **quotad**:活动驱动 + rollout 尾随 + 全池扫描刷额度(白天 300s 一次,22:00–08:00 放慢到 1800s)。启动时整份加载 `codex-rotate`,所以改 `codex-rotate` 也要 kickstart 它 |
 | `connector.py` | **账号池 Connector**(设置页「账号池接入」的后端):把只装了看板的机器接进轮换 —— 准备运行时、装入口与常驻服务、写托管区配置。**绝不调用 `codex login/logout`**。v1.10.0 起逐字节比对 `<store>/runtime/` 与 App 自带脚本,不一致就要求重新接入 |
 | `<store>/runtime/` | 装机版(`.dmg`)接入时复制过去的运行时(代理/CLI/服务入口都跑这份)。**App 更新不会替换它** —— 每次更新后在设置页再点一次「接入」 |
 | `dawn_sched.py` | 定时探针「到没到点」的唯一判据(`codex-rotate` 与 `agy-rotate` 的 `dawn-probe --tick` 共用):每 60s 被拉起一次,自己读开关/时间/当天记录,所选时刻起 3 分钟内随机 |
@@ -235,7 +248,7 @@ clone 到哪个目录都行 —— `deploy.sh` 会把仓库路径烧进二进制
 | `agy/pool.py` | agy 池的凭证与额度层（钥匙串读写、OAuth 刷新、`retrieveUserQuotaSummary` 按账号取**完整**额度含周窗口；摘要缺 Gemini 组时 5h 由 `fetchAvailableModels` 补）。OAuth client 从**本机 agy 二进制**现取，**绝不入库**（本仓公开） |
 | `auth/agy/`(gitignored) | agy 每号凭证 `<sub>.json`(0600) |
 | `.agy-pool.json`(gitignored) | agy 池（账号、额度、`live_seen`/`live_wanted`、`auto_off`/`rotate_off`、缓存的 OAuth client） |
-| `agy.log`(gitignored) | agy 侧**运行日志**：`switch`/`auto`/`quota`/`health`/`probe` 逐号留痕，**成败与用量都写**。CodexBar 日志页读它，`✗` 行染红 |
+| `agy.log`(gitignored) | agy 侧**运行日志**：`switch`/`auto`/`quota`/`health`/`probe` 逐号留痕，**成败与用量都写**。AICoop 日志页读它，`✗` 行染红 |
 | `grok-quota-sampler` | grok 周额度**水位采样器**（grok 进程活着时约 15s 一次，只 GET、**不刷 token**）。单实例锁 + 自我终结 |
 | `codexbar/src/platforms.ts` | ★ **账号池平台清单的单一数据源**（codex / gemini / grok）。主窗分档 Tab 与菜单栏 logo 芯片行共用。⚠️ 这**不是**「AI 用量」那张 8 家的表 —— 前者是"我有凭证能管的号"，后者是"本机哪些 CLI 落了盘" |
 | `auth/`(gitignored) | 每号凭证槽位 `<account_id>.json`(0600) |
@@ -308,7 +321,7 @@ agy-rotate dawn-probe --status                    # JSON:开关 / 时间 / 随�
 > 同理「额度读得到、四桶 100%」也可能只是**窗口从未启动**（重置时刻 = 快照 + 窗口长度）。
 > **读得到额度 / 凭证有效 / 能干活,是三件事。**
 
-菜单栏(CodexBar)装好后顶部显示**代理此刻在用的号**的额度余量(v1.9.0 起;代理还没服务过请求时退回上次 CLI 切换的号)。标题有**四种风格**可在「设置」页切换 —— 完整 `pro1 周 67% ↻5d21h` / 简 `pro1 67%` / 极简 `67%` / 今日 `67% 🔹 1.29B`(最后一档把账号池余量与今日全平台 token 并成一行);百分比那一段按余量阈值**染色并加粗**(≥50% 绿 · <50% 琥珀 · 耗尽红),额度未知时退成 `—` 且不上色。**左键右键都打开弹窗**(托盘没有原生菜单——macOS 无法让右键不弹它)。弹窗分**账号｜今日**两个 Tab,停留页会记住、重开直达:
+菜单栏(AICoop)装好后顶部显示**代理此刻在用的号**的额度余量(v1.9.0 起;代理还没服务过请求时退回上次 CLI 切换的号)。标题有**四种风格**可在「设置」页切换 —— 完整 `pro1 周 67% ↻5d21h` / 简 `pro1 67%` / 极简 `67%` / 今日 `67% 🔹 1.29B`(最后一档把账号池余量与今日全平台 token 并成一行);百分比那一段按余量阈值**染色并加粗**(≥50% 绿 · <50% 琥珀 · 耗尽红),额度未知时退成 `—` 且不上色。**左键右键都打开弹窗**(托盘没有原生菜单——macOS 无法让右键不弹它)。弹窗分**账号｜今日**两个 Tab,停留页会记住、重开直达:
 
 - **账号**:每号油表、号间差值、重置卡状态、失效号折叠;**「✓ 在用」**标代理最近真正用的号,**「下一个」**标真挑号器的下一个。**点任意账号会弹出主界面**;鼠标停在某一行上,行尾会淡入一个**「切换」按钮 —— 点它直接换号(改的是 `auth.json`,即直连用的号),不打开主界面**(已是直连号的不显示这个按钮)。底栏 `刷新全池[免费] | 检查 token | 探针[计费]`。
 - **今日**:今日总 token / 等效费用 / 较昨日涨跌 + 小时堆叠图 + 各平台明细(点一行直接跳主窗该平台详情)。数据来自**上次扫描的快照**(读盘 ~1ms),点摘要行的 `↻` 立刻重扫。底栏中键变成 `打开流量总览 ↗`。两个窗口共用同一份快照与同一条新鲜度规则,谁扫完都会广播给对方,所以**不会各扫一遍**。
@@ -317,7 +330,7 @@ agy-rotate dawn-probe --status                    # JSON:开关 / 时间 / 随�
 
 > **Dock 图标默认关**(纯菜单栏形态),可在「设置」页打开。开启后**只在主界面打开时**占一格,关掉主界面立刻让出位置(所以不能从程序坞唤起 app,要走菜单栏)。`Info.plist` 的 `LSUIElement` 保持 `true`(决定冷启动瞬间不闪图标),运行期用 `setActivationPolicy` 切,不需重启。
 
-主界面侧栏 4 页:**总览** / **AI用量信息** / 日志 / 设置。消耗页按平台汇总本机各 AI CLI 的落盘用量(v0.7.0 起,取代原来分开的「Token 消耗」与「Claude 消耗」两页)。★ **OpenClaw 是宿主不是平台**:它每条记录按**模型名**归到真正的平台(`gpt/o1/o3/o4`→Codex、`claude`→Claude、`deepseek`→DeepSeek、`mimo`→MiMo…,认不出才回落 provider 名),所以**页面上的平台数不固定**,取决于你在 OpenClaw 里用过哪些模型:堆叠面积图 + 今日/7/14/30/90d 五档,点任一平台进「详情」看分模型拆解与费率卡。数据源全是**本机 CLI 自己落的盘**、零额度消耗——`~/.claude/projects/**/*.jsonl` · `~/.codex/sessions/**/rollout-*.jsonl` · `~/.grok/**/updates.jsonl` · `~/.kimi-code/sessions/**/wire.jsonl`。费用一栏是**按牌价折算的等效 API 成本**(按 token 分类分别计价,缓存读按**各模型自己的折扣**:多数是输入价的 10%,Claude Fable 5.1 是 2.5%、Opus 5.5 是 5%;Claude 的 1 小时缓存写按输入价 2 倍、5 分钟缓存写 1.25 倍),订阅制下并非实付。页面底部的平台卡按**今日** token 从多到少排,上面的列表与图例仍按你设置的顺序。牌价表在 `codexbar/src/rates.ts`,四家(Claude / Codex / Gemini / Grok)于 2026-09-29 按官方定价页核过,并有一道测试守着「本机 CLI 能跑的模型都得在表里」。
+主界面左侧图标导航 6 页:**总览** / **Token 消耗** / **代理轮换** / **中转站** / **请求** / **设置**。Token 消耗页按平台汇总本机各 AI CLI 的落盘用量(v0.7.0 起,取代原来分开的「Token 消耗」与「Claude 消耗」两页)。★ **OpenClaw 是宿主不是平台**:它每条记录按**模型名**归到真正的平台(`gpt/o1/o3/o4`→Codex、`claude`→Claude、`deepseek`→DeepSeek、`mimo`→MiMo…,认不出才回落 provider 名),所以**页面上的平台数不固定**,取决于你在 OpenClaw 里用过哪些模型:堆叠面积图 + 今日/7/14/30/90d 五档,点任一平台进「详情」看分模型拆解与费率卡。数据源全是**本机 CLI 自己落的盘**、零额度消耗——`~/.claude/projects/**/*.jsonl` · `~/.codex/sessions/**/rollout-*.jsonl` · `~/.grok/**/updates.jsonl` · `~/.kimi-code/sessions/**/wire.jsonl`。费用一栏是**按牌价折算的等效 API 成本**(按 token 分类分别计价,缓存读按**各模型自己的折扣**:多数是输入价的 10%,Claude Fable 5.1 是 2.5%、Opus 5.5 是 5%;Claude 的 1 小时缓存写按输入价 2 倍、5 分钟缓存写 1.25 倍),订阅制下并非实付。页面底部的平台卡按**今日** token 从多到少排,上面的列表与图例仍按你设置的顺序。牌价表在 `codexbar/src/rates.ts`,四家(Claude / Codex / Gemini / Grok)于 2026-09-29 按官方定价页核过,并有一道测试守着「本机 CLI 能跑的模型都得在表里」。
 
 > **AI 平台管理**(「设置」页):每个平台可**改名 / 改色 / 停用 / ▲▼ 排序**,偏好存 localStorage 并经 Tauri 事件广播给菜单栏。**停用 = 整家从图表与汇总里移除,总 token 与总费用跟着扣**;排序只影响列表与图例,堆叠图仍按占比大的贴基线。⚠️ 它只管「怎么显示」,不管「有没有数据」—— 后者由 `traffic/scan.py` 的注册表决定,与 `traffic/sources.local.json` 的 `{"disabled":[…]}`(那层压根不解析)是两回事。
 
@@ -353,7 +366,7 @@ agy-rotate dawn-probe --status                    # JSON:开关 / 时间 / 随�
 
 ## 维护约定
 
-- ★ **绝不让 python 解释器由 PATH 或 shebang 决定**。Cloudflare 按 TLS ClientHello 指纹拦截,macOS 的 `/usr/bin/python3`(LibreSSL 2.8.3)对 `GET /backend-api/codex/usage` 恒返 **403**,OpenSSL 3.x 同请求恒 **200**(2026-08-01 受控实验,单一变量,各 3 次,同 token/header/IP)。launchd 默认 PATH 只有 `/usr/bin:/bin:...`,所以 `#!/usr/bin/env python3` 必踩。装服务一律走 `scripts/install-launchd.sh`;CodexBar 侧见 `python_bin()`。
+- ★ **绝不让 python 解释器由 PATH 或 shebang 决定**。Cloudflare 按 TLS ClientHello 指纹拦截,macOS 的 `/usr/bin/python3`(LibreSSL 2.8.3)对 `GET /backend-api/codex/usage` 恒返 **403**,OpenSSL 3.x 同请求恒 **200**(2026-08-01 受控实验,单一变量,各 3 次,同 token/header/IP)。launchd 默认 PATH 只有 `/usr/bin:/bin:...`,所以 `#!/usr/bin/env python3` 必踩。装服务一律走 `scripts/install-launchd.sh`;AICoop 侧见 `python_bin()`。
   - 排查提示:用 macOS 自带 `curl` 复现"也被挡"**不算独立证据**——它同样链 LibreSSL,是同一个失败模式。换 TLS 栈才是对照组。
 - 改 `launchd` 的日志路径要同步 `codexbar/src-tauri/src/lib.rs` 的 `read_logs`(路径是写死的字面量,`proxy` 那条是 `proxy/proxy.log` 不是 `proxy.log`)。
-- 改 `state.json` schema 或凭证逻辑要谨慎:proxy / codex-rotate / autosync / quotad 都读写它(CodexBar 只读)。
+- 改 `state.json` schema 或凭证逻辑要谨慎:proxy / codex-rotate / autosync / quotad 都读写它(AICoop 只读)。

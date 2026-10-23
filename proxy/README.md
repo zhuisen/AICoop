@@ -5,16 +5,16 @@
 
 ## 怎么用
 
-- **日常**:用 `cxp` 代替 `codex`(参数完全一样)。它复用你真实的 `~/.codex`(MCP/hooks/profiles/模型设置),只把 model provider 换成本地代理。
+- **日常**:直接敲 `codex`(装了 `scripts/codex-wrapper-with-logout-guard.sh` 那个 wrapper 后它走代理),或显式用 `cxp`(参数完全一样)。两者都复用你真实的 `~/.codex`(MCP/hooks/profiles/模型设置),只把 model provider 换成本地代理。
   ```
   cxp                      # 交互
   cxp exec "修个 bug"      # 非交互
   ```
-- **不想轮换**:照常用 `codex`(纯单号,走 ~/.codex/auth.json 的当前号),完全不受影响。
+- **不想轮换**:用 `cxd`(单号直连,走 ~/.codex/auth.json 的当前号)。它是唯一绕过代理的入口。
 
 ## 它做了什么(每个请求)
 
-1. 从 `codex-rotate` 池按 **5h 用量最少 + 跳过冷却中** 选一个号;
+1. 从 `codex-rotate` 池跳过冷却中的号,按 **置顶 > 套餐档(Plus 优先、Pro 保底) > 最紧窗口已用%** 选一个号(置顶跨档,见 `proxy.py::_sort_avail`);
 2. 该号 token 过期就**自动 OAuth 刷新**(`auth.openai.com/oauth/token`,轮换后的 refresh_token 存回槽位);
 3. 注入 `Authorization` + `chatgpt-account-id`,转发到 `chatgpt.com/backend-api/codex`;
 4. 撞 429 就把该号标 5h 冷却,下个请求自动换号。
@@ -23,15 +23,15 @@
 
 ## 服务 / 开关
 
-- 代理是 launchd 常驻:`com.doushutangmu.codex-rotate.proxy`(端口 8011,日志 `proxy.log`)。
+- 代理是 launchd 常驻:`com.doushutangmu.codex-rotate.proxy`(端口 8011,日志 `proxy/proxy.log`)。
 - 停:`launchctl bootout gui/$(id -u)/com.doushutangmu.codex-rotate.proxy`
 - 起:`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.doushutangmu.codex-rotate.proxy.plist`
-- 看状态:SwiftBar 菜单顶部「代理轮换 开/关」,或 `lsof -iTCP:8011 -sTCP:LISTEN`。
+- 看状态:AICoop 的「代理轮换」页,或 `lsof -iTCP:8011 -sTCP:LISTEN`。
 
-## 已知限制(Phase 2 再优化)
+## 已知限制
 
-- SwiftBar 的额度归因在代理模式下是近似的(代理逐请求换号,而面板按 codex-rotate 的「active」+ rollout 时间窗归因)。真正准确需代理侧逐请求记账(待做)。
-- 代理刷新槽位 token 与 keepalive(每天 04:30)理论上可能并发刷同一号;实际重叠概率极低。
+- 没走代理的直连请求(比如 `cxd`)不进轮换泳道,「代理轮换」页的 token 覆盖率因此不到 100%。
+- 代理与 keepalive(每小时拉起,只在 22:00–08:00 干活)都可能刷非活跃号的 token。两边都持 `.refresh.lock`,不会并发刷同一号。活跃号两边都不刷。
 
 ## 文件
 

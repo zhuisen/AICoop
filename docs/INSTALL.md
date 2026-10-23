@@ -37,8 +37,8 @@
 ## 1. clone
 
 ```bash
-git clone https://github.com/zhuisen/codex-account-rotator.git
-cd codex-account-rotator
+git clone https://github.com/zhuisen/AICoop.git
+cd AICoop
 ```
 
 clone 到**哪个目录都行**：`install-launchd.sh` 与 `quota_daemon.py` 自解析仓库根，
@@ -55,7 +55,7 @@ clone 到**哪个目录都行**：`install-launchd.sh` 与 `quota_daemon.py` 自
 
 装完桌面应用（[§5](#5-构建桌面应用)，或直接下载 Releases 里的安装包）之后：
 
-> **CodexBar → 设置 → 「账号池接入（Connector）」** → 勾选 → 点「接入」。
+> **AICoop → 设置 → 「账号池接入（Connector）」** → 勾选 → 点「接入」。
 
 它替你做的正是下面 §2~§4 那几步，逐项可选、每一步都能**先看将要写入的原文**，
 并且随时可以「撤销接入」。
@@ -132,7 +132,7 @@ base_url = "http://127.0.0.1:8011"
 wire_api = "responses"
 
 [model_providers.rotateproxy.auth]
-command = "/path/to/codex-account-rotator/proxy/auth-token"
+command = "/path/to/AICoop/proxy/auth-token"
 ```
 
 ### ★★ 还要建 profile overlay —— 漏了这一步会**静默**退回单号直连
@@ -169,38 +169,25 @@ TOML
 
 ## 4. launchd 服务与登录
 
-**macOS**：
-
 ```bash
-bash scripts/install-launchd.sh     # 生成 + 加载 6 个服务
-launchctl list | grep codex-rotate  # 应有 6 行
+bash scripts/install-launchd.sh     # 生成 + 加载 7 个服务
+launchctl list | grep codex-rotate  # 应有 7 行
 ```
 
-**Windows**（v1.0.4 起）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
-schtasks /Query /TN "com.doushutangmu.codex-rotate.proxy"
-```
-
-> ⚠️ **Windows 上有两处刻意的语义差异**（平台限制，不是 bug）：
-> ① `autosync` 从「文件变化即触发」降级为**每分钟轮询** —— Task Scheduler 没有文件监视触发器，
->    所以 `codex login` 后新号入池最慢延迟 1 分钟（macOS 上是秒级）。
-> ② 崩溃恢复靠 `RestartOnFailure`（**只认非零退出码**）+ 每 5 分钟补拉触发器，
->    不是 launchd 那种「退出就立刻重启」。
->
-> 卸载：`powershell -File scripts\install-windows.ps1 -Uninstall`
+> ⚠️ **Windows 版已于 2026-10-19 取消。** 不再出 Windows 安装包。CI 与 release 只构建 macOS。
+> `scripts/install-windows.ps1` 还在仓库里，但没有任何验证，别依赖它。存档说明见 [WINDOWS.md](WINDOWS.md)。
 
 | 服务 | 触发 | 作用 |
 |---|---|---|
 | `…proxy` | KeepAlive 常驻 | 轮换代理，听 `127.0.0.1:8011` |
 | `…autosync` | WatchPaths `~/.codex/auth.json` | `codex login` 新号秒级入池 |
-| `…quotad` | RunAtLoad + KeepAlive | 活动驱动读官方 usage API 刷额度（零消耗）+ 300s 全池扫描兜底 |
+| `…quotad` | RunAtLoad + KeepAlive | 活动驱动读官方 usage API 刷额度（零消耗）+ 全池扫描兜底：平时每 300s，本机 22:00–08:00 每 1800s |
+| `…keepalive` | 每小时拉起一次 | 只在本机 22:00–08:00 干活：给非活跃号里 48h 内到期的 access token 续期。活跃号永不刷。白天拉起就退出 |
 | `…dawnprobe` | 每 60s 醒一次，自己判到点 | 定时计费探针，让 Plus 的 5h 窗口走动。时间在总览 Codex 档工具栏「定时」胶囊里选（默认 06:00），实际在所选时刻起 3 分钟内随机。⚠️ **会自动花钱，默认关闭**（`dawn_probe.enabled` 缺省假），装了也不会自己跑；空转不写日志 |
 | `…agydawn` | 同上 | Gemini（agy）版：给参与轮换的号各跑一次 agy 探针（每号约 15k token），开关与时间在 Gemini 档的「定时」胶囊里。同样**默认关闭** |
 | `…otel` | RunAtLoad + KeepAlive | 收 Claude Code 的耗时与 token，听 `127.0.0.1:4318`。设置里开了「Claude 实测速度」才有数据，见 [§5「Claude 实测速度」](#claude-实测速度otel仅-macos) |
 
-两个平台注册的是**同一组服务**（名字、入口脚本、端口都一致；`otel` 只装 macOS），由 `tests/test_installers_agree.py` 守着 —— 只改一边会让某个平台**静默少一个常驻进程**，而症状是「额度不更新」这类看起来跟安装器无关的现象。
+`refreshquota` 已于 2026-08-29 取消，不再生成：quotad 的全池扫描已覆盖它。
 
 脚本自解析仓库根并**校验 python3 是 OpenSSL 构建**，找不到就报错退出，不会静默装成坏的。
 
@@ -235,10 +222,14 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 **自签是必须的**：macOS 会为每次重新构建的未签名 app 重新索要 TCC 授权；
 用一张固定的自签证书签名后，授权跨重建保留。证书只在本机钥匙串，不外传。
 
-装完顶栏出现 ⚡ 图标，`/Applications/CodexBar.app` 就位。
+装完菜单栏出现 AICoop 托盘图标，`/Applications/AICoop.app` 就位。
+可执行文件是 `Contents/MacOS/AICoop`。bundle id 仍是 `com.doushutangmu.codexbar`，旧版的授权与数据目录照常沿用。
 
 **没装账号池（跳过了 §2~§4）时，「总览」页和菜单栏「账号」Tab 是空的，属正常** ——
-「AI 用量信息」页照常工作，那才是对所有人都有效的部分。
+「Token 消耗」页与「请求」页照常工作，那才是对所有人都有效的部分。
+
+主窗左侧是固定 64px 的图标栏，不能折叠。共 6 页：总览 · Token 消耗 · 代理轮换 · 中转站 · 请求 · 设置。
+主窗没有 macOS 标题栏。红黄绿按钮、隐私眼睛与版本号都在左侧图标栏里。
 
 ### 数据源
 
@@ -266,7 +257,7 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 > 页面上有覆盖率徽章标注。启用需要：
 >
 > ```bash
-> echo 'export PATH="/path/to/codex-account-rotator/bin:$PATH"' >> ~/.zshrc
+> echo 'export PATH="/path/to/AICoop/bin:$PATH"' >> ~/.zshrc
 > ```
 >
 > ★ **必须排在 `~/.local/bin` 之前** —— agy 自带 24h 自动更新且直接改写 `~/.local/bin/agy`，
@@ -285,7 +276,7 @@ bash codexbar/scripts/deploy.sh          # 构建 + 部署 + 启动
 
 ### Claude 实测速度（OTel，仅 macOS）
 
-**它是什么。** Claude Code 自带 OpenTelemetry 监控功能。开了之后，每次请求结束，Claude Code 发一条记录到本机接收端。CodexBar 用这些记录显示 Claude 的首字时间与速度（t/s）。
+**它是什么。** Claude Code 自带 OpenTelemetry 监控功能。开了之后，每次请求结束，Claude Code 发一条记录到本机接收端。AICoop 用这些记录显示 Claude 的首字时间与速度（t/s）。
 
 **它发什么。** 只发耗时与 token，不发对话内容。开关把四个内容开关（`OTEL_LOG_USER_PROMPTS` 等）都写成 `0`。接收端另有字段白名单。白名单外的字段不写盘（包括邮箱与账号 id）。白名单：
 `request_id` · `gen_ai.response.id` · `session.id` · `model` · `ttft_ms` · `first_content_ms` · `duration_ms` · `input_tokens` · `output_tokens` · `cache_read_tokens` · `cache_creation_tokens` · `stop_reason` · `attempt` · `success` · `status_code` · `error_class` · `query_source` · `query_source_safe` · `speed` · `effort`，以及开始 / 结束时刻。
@@ -333,7 +324,7 @@ OTEL_LOG_TOOL_DETAILS=0                 OTEL_LOG_TOOL_CONTENT=0
 
 **怎么关。** 关掉设置里的开关，然后重开 Claude Code 会话。开关只删它自己写的键。值被你改过的键，开关不删。
 
-**端口 4318 被占用。** 4318 是 OTLP/HTTP 的标准端口。你自己的 OTel 收集器可能已经在用它。这时接收端起不来，并把原因写进 `.status.json`（`listening: false`）与日志页的 `otel` 行。设置页这一行也显示原因。
+**端口 4318 被占用。** 4318 是 OTLP/HTTP 的标准端口。你自己的 OTel 收集器可能已经在用它。这时接收端起不来，并把原因写进 `.status.json`（`listening: false`）与「代理轮换」页服务日志里的 `otel` 行。设置页这一行也显示原因。
 
 1. 查占用者：`lsof -nP -iTCP:4318 -sTCP:LISTEN`。
 2. 停掉那个程序，或不开这个功能。接收端每 30 秒重试一次。
@@ -341,7 +332,7 @@ OTEL_LOG_TOOL_DETAILS=0                 OTEL_LOG_TOOL_CONTENT=0
 **不开时会怎样。** 其它功能照常。数据少一些：
 
 - Claude 的速度从对话记录推算，是估值。
-- 「AI 用量信息」只算对话记录里的请求。只出现在 OTel 里的 Claude Code 后台调用不计入。
+- 「Token 消耗」只算对话记录里的请求。只出现在 OTel 里的 Claude Code 后台调用不计入。
 
 **Claude 额度（不归这个开关管）。** 额度按下面的顺序取：
 
@@ -363,12 +354,12 @@ input=$(cat); printf '%s' "$input" | python3 -I <运行时目录>/traffic/status
 
 ```bash
 # 服务
-for s in proxy autosync quotad dawnprobe agydawn otel; do
+for s in proxy autosync keepalive quotad dawnprobe agydawn otel; do
   launchctl bootout gui/$(id -u)/com.doushutangmu.codex-rotate.$s 2>/dev/null
   rm -f ~/Library/LaunchAgents/com.doushutangmu.codex-rotate.$s.plist
 done
 # 应用
-rm -rf /Applications/CodexBar.app
+rm -rf /Applications/AICoop.app /Applications/CodexBar.app   # 旧版叫 CodexBar
 # 入口
 rm -f ~/.local/bin/{codex,codex-rotate,cxp,cxd,agy-rotate}
 ```
@@ -399,7 +390,7 @@ which -a codex           # 第一行应是 ~/.local/bin/codex(wrapper),不是官
 | ⚠️ 池子为空 | 接线齐全，只差登录 | `codex-rotate login` |
 | ⚠️ 判定不了 | 配置读不到等 —— **这不等于没问题** | 按它说的查 |
 
-CodexBar 的「总览」页与菜单栏用的是**同一道闸**，接线不通时会直接在界面上变色。
+AICoop 的「总览」页与菜单栏用的是**同一道闸**，接线不通时会直接在界面上变色。
 
 > ★ **验健康用只读的 `health`，不要用 `refresh` 代替** —— `refresh` 会轮换 refresh_token，
 > 它是一次性的，本身具破坏性。

@@ -1,6 +1,6 @@
 # 架构
 
-四个常驻件 + 一个 CLI + 一个展示层。**账号池**和**用量统计**是两条互不相干的链路，
+几个常驻件（launchd 共 7 个服务，见 [INSTALL §4](INSTALL.md#4-launchd-服务与登录)）+ 两个账号池 CLI + 一个展示层。**账号池**和**用量统计**是两条互不相干的链路，
 共用一个界面——搞混这一点是读这个仓库最常见的误解。
 
 ```
@@ -12,13 +12,13 @@
                     │
   codex-rotate  ────┤  账号池 CLI：add/login/switch/health/quota/probe/dawn-probe
                     │
-  quota_daemon  ────┘  三条循环：活动驱动 · rollout tail · 300s 全池扫描
+  quota_daemon  ────┘  三条循环：活动驱动 · rollout tail · 全池扫描（300s；22–08 时 1800s）
        │
        ▼
    state.json ◀────── 五个进程同读写，锁序恒 state → cred
        │
        ▼
-   CodexBar (Tauri) ─── 只读展示；两个 webview（主窗 + 菜单栏）
+   AICoop (Tauri) ───── 只读展示；四个 webview（主窗 · 菜单栏 · 托盘悬停面板 · 刘海卡）
 
 
                     ┌──────────────── 用量统计链路（不碰凭证、不联网、零额度）
@@ -82,7 +82,7 @@ codex ──> cxp ──> --profile rotateproxy ──> proxy.py
    两条路的断流计数器因此也是分开的（`stream_aborts` vs `relay_stream_aborts`）。
 2. **`chatgpt-account-id` 永不出现在发给第三方的请求里。**
 3. **三个「钱」永不合并**：中转站的 `cost`（对方按上游牌价记的账）、`actual_cost`（真实扣款，
-   实测与前者差 3.85 倍）、以及「AI用量」页那个按 OpenAI 牌价折算的**等效**成本
+   实测与前者差 3.85 倍）、以及「Token 消耗」页那个按 OpenAI 牌价折算的**等效**成本
    （订阅制下并没有真付）。经中转站的 token **绝不许用 `rates.ts` 乘**。
 
 **用量是只读的、零计费的。** `relay/monitor.py` 打对方的 `/usage`（端点各家不同，要探测并记住），
@@ -95,6 +95,11 @@ codex ──> cxp ──> --profile rotateproxy ──> proxy.py
 
 `traffic/scan.py` 只读各家 CLI 自己落的盘，**零额度消耗、不联网、不碰凭证**。
 八个数据源，加一家 = 写一个 `_scan_*` + 在 `SOURCES` 加一行，前端不用动。
+
+同一条链路上还有两份**逐请求**账本，供「请求」页、托盘 t/s 胶囊与悬停面板用：
+`traffic/requests.py` 从各家落盘里拆出每次模型响应（token · 首字时间 · 生成耗时 · t/s · 账号）；
+`traffic/otel_receiver.py` 收 Claude Code 的 OTel span（`127.0.0.1:4318`，launchd 服务 `otel`），给 Claude 补实测速度。
+两者同样不联网（接收端只听回环）、不碰凭证、不存消息正文。
 
 ⚠️ 这条「不碰凭证」的安全线**按目录判定**：`grok-quota` / `agy-quota` 会读凭证或打接口，
 所以它们**刻意放在仓库根、不在 `traffic/` 里**。别把它们挪进来。
@@ -119,16 +124,18 @@ codex ──> cxp ──> --profile rotateproxy ──> proxy.py
 
 ## 展示层
 
-CodexBar = Tauri 2 + React，**唯一有构建系统的地方**。两个 webview（主窗 + 菜单栏）是
+AICoop = Tauri 2 + React，**唯一有构建系统的地方**（源码目录仍叫 `codexbar/`，bundle id 仍是
+`com.doushutangmu.codexbar`）。四个 webview（主窗 · 菜单栏 · 托盘悬停面板 `tpshover` · 刘海卡 `notch`）都是
 独立 JS 上下文，`localStorage` 不互通，跨窗口同步只能走 Tauri 事件：数据、完成信号、
 **以及进行态**（`useBusyMirror`）三样都要广播，少一样就会出现「一边在转圈、另一边像没事发生」。
 
-主窗五个导航项：**总览**（账号池）· **AI用量信息** · **日志** · **中转站** · **设置**。
-中转站页内再分「账号 / 用量」两块（两块都挂载、CSS 隐藏 —— 条件渲染会在切 tab 时
-把填了一半的表单清空）。版式按 `design_handoff_codexbar/中转站-交接说明.md`
-1:1 复刻（2026-09-10）：账号块是「当前出口」两张同权卡 + 中转站表格，
-用量块是**每模型一张小图卡**（每卡独立 y 轴）而不是堆叠面积图 ——
-堆叠图回答"这段时间的构成"，而这一页被问的是"**哪个模型在烧钱**"。
+主窗左侧是固定 64px 的图标栏，不能折叠。六页：**总览**（账号池）· **Token 消耗** · **代理轮换** · **中转站** · **请求** · **设置**。
+主窗没有 macOS 标题栏：红黄绿按钮、隐私眼睛与版本号都在图标栏里。
+中转站页是一页：标题行 → 路由图（入口 · 本地代理 · 两个出口，当前出口实线流动）→ 两个出口各一块明细 →
+页底可折叠的「用量」趋势块。出口单选：账号池与各中转站账户互斥。
+
+托盘有两种形态。有 AI 在跑时，托盘显示运行胶囊与实时 t/s，悬停弹出每个在跑 AI 的面板。
+空闲时，托盘显示叠放的 AI logo，并配一个额度格子面板。带刘海的 Mac 上另有刘海光晕卡。
 
 ★ **同一个 sidecar 的所有实例共享一次取数**（`useQuotaSidecar` 按 `runCmd` 去重 + 广播）。
 两个组件各挂一个 hook 时，原来会各起一次 python 子进程、各打一次外网，
