@@ -27,16 +27,38 @@ jobs:
 
   # ★★ 同一套守卫在 **macOS** 上再跑一遍（B85 · 四方评审 P2）。产品只在 macOS 上用，而上面那条在 ubuntu ——
   #   `/bin/bash` 3.2、BSD 工具、`/opt/homebrew` 布局这些差异只有这里碰得到（B74 的 bash 3.2 就是这一类）。
-  #   ⚠️ 2026-10-16 加入时**未在 CI 上跑过**（本机 = macOS，全套绿）；第一次推送后看它的结果再下结论。
+  # ★★ 这一条同时跑 **UI 闸**（2026-10-23，用户「CI 跑 UI 闸」）：harness 用仓库里的固定夹具
+  #   `codexbar/uishot/fixture/`（脱敏快照 + 日期平移），不需要本机的 state.json / 用量快照。
+  #   `CODEXBAR_REQUIRE_HARNESS=1` ⇒ 因为 harness / Chrome / playwright 不在而 skip 的 UI 闸一律算红（tests/conftest.py）。
+  #   ⚠️ 加入时**未在 CI 上跑过**（只在本机验过）；第一次推送后看它的结果再下结论。
   invariants-macos:
     runs-on: macos-latest
+    env:
+      CODEXBAR_REQUIRE_HARNESS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - run: python3 -m pip install --quiet pytest pyflakes
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: codexbar/package-lock.json
+      # playwright 只要 Python 包：测试用 `executable_path` 指向 runner 自带的 Google Chrome，不下载浏览器
+      - run: python3 -m pip install --quiet pytest pyflakes playwright
       - run: command -v zstd || brew install zstd
-      - run: python3 -m pytest tests/ -q
+      - run: test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      - run: npm ci
+        working-directory: codexbar
+      # 顺序不能反：vite build 会清空 outDir（make_harness.py 的陈旧产物闸）
+      - run: npx vite build --outDir uishot/app && python3 uishot/make_harness.py
+        working-directory: codexbar
+      - name: harness static server (127.0.0.1:3304)
+        run: |
+          nohup python3 -m http.server 3304 --bind 127.0.0.1 --directory codexbar/uishot/app > "$RUNNER_TEMP/harness.log" 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3304/harness.html > /dev/null && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/harness.log"; exit 1
+      - run: python3 -m pytest tests/ -q -rs
 
   build:
     strategy:

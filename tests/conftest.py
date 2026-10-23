@@ -111,3 +111,20 @@ def _real_data_canary(request, _baseline):
               "   注意 `LIVE = CODEX_HOME / \"auth.json\"` 与 `STORE` 是**两个**变量，\n"
               "   只设一个不够(2026-09-09 事故就是这么发生的)。"
         )
+
+
+#: UI 闸在 CI 上**不许 skip**（2026-10-23，用户「CI 跑 UI 闸」）。设了 `CODEXBAR_REQUIRE_HARNESS=1`
+#: 的 job 已经起了 harness 与 Chrome；这时还因为「harness / Chrome / playwright 不在」而 skip，
+#: 就是那一步坏了 —— 而 skip 在汇总行里和绿一样不刺眼（本仓的规矩：skip 不是绿）。
+_HARNESS_SKIP = re.compile(r"harness|3304|Chrome|playwright", re.I)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    if rep.skipped and __import__("os").environ.get("CODEXBAR_REQUIRE_HARNESS") == "1":
+        reason = str(rep.longrepr[-1] if isinstance(rep.longrepr, tuple) else rep.longrepr)
+        if _HARNESS_SKIP.search(reason):
+            rep.outcome = "failed"
+            rep.longrepr = "★ CODEXBAR_REQUIRE_HARNESS=1 下 UI 闸被 skip（%s）—— harness / Chrome 那一步坏了" % reason

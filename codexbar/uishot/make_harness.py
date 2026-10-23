@@ -24,7 +24,14 @@ APP = HERE / "app"
 # 快照可覆盖:`CODEXBAR_SNAPSHOT=<path>` 用来渲染**退化态**(只有 1 个小时桶、空数据…)。
 # 真实快照是 app 在写的活文件,**只读不改** —— 要造夹具就另写一份再用这个变量指过去。
 REPO = HERE.parent.parent                       # 仓库根:state.json 夹具的来源,**与快照路径解耦**
-SNAP = pathlib.Path(os.environ.get("CODEXBAR_SNAPSHOT") or (REPO / ".traffic-latest.json"))
+# ★★ 数据源两档（2026-10-23）：默认 = 仓库里的固定夹具 `uishot/fixture/`（脱敏快照 + 日期平移，见 `fixture_tool.py`），
+#   CI 的干净 checkout 也能生成、本机的闸也不再随真实数据漂；`CODEXBAR_HARNESS_REAL=1` = 本机真实数据（看真排版时用）。
+REAL = os.environ.get("CODEXBAR_HARNESS_REAL") == "1"
+SNAP = pathlib.Path(os.environ["CODEXBAR_SNAPSHOT"]) if os.environ.get("CODEXBAR_SNAPSHOT") else (
+    REPO / ".traffic-latest.json" if REAL else None)
+import sys as _sys                                   # noqa: E402
+_sys.path.insert(0, str(HERE))
+import fixture_tool                                  # noqa: E402
 
 # ★★ **陈旧产物闸。** 2026-09-05 实测踩到:`uishot/app/` 的 bundle 停在 5 天前,
 #    而我以为 `npm run build` 会喂给它 —— 那个命令只写 `dist/`,harness 读的是 `app/`。
@@ -50,7 +57,7 @@ def _assert_fresh_bundle():
 
 _assert_fresh_bundle()
 index = (APP / "index.html").read_text()
-snapshot = SNAP.read_text()          # 只传递,不打印
+snapshot = SNAP.read_text() if SNAP else json.dumps(fixture_tool.load_traffic())   # 只传递,不打印
 
 STUB = """
 <script>
@@ -2516,7 +2523,7 @@ def redacted_state():
     (上次正是真数据才暴露出徽章变长把日期挤断行)。**只替换能认人的三样**:邮箱、姓名、
     account_id。account_id 同时是槽位的键和 `active` 的值,必须整体重映射,否则「当前号」判错。
     """
-    raw = json.loads((REPO / "state.json").read_text())
+    raw = json.loads((REPO / "state.json").read_text()) if REAL else fixture_tool.load_state()
     idmap, out_slots = {}, {}
     for i, (aid, sl) in enumerate(raw.get("slots", {}).items(), 1):
         fake = f"user-demo{i:02d}0000000000000000000000"
@@ -2732,3 +2739,4 @@ for src, dst in (("index.html", "harness.html"), ("menubar.html", "harness-menub
     print(f"  ✓ {dst}")
 print(f"  ✓ 内联快照 {len(snapshot)//1024}KB，bundle 与部署产物同一份")
 print("  ✓ state fixture 已脱敏（邮箱/姓名/account_id 全替换），真实 state.json 未进入伺服目录")
+print("  ✓ 数据源：" + ("本机真实数据（CODEXBAR_HARNESS_REAL=1）" if REAL else "仓库夹具 uishot/fixture/（日期已平移到今天）"))
