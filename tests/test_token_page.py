@@ -312,7 +312,8 @@ class Rendered(unittest.TestCase):
         vis = """() => { const b = document.querySelector('[data-cache-body]'); const t = document.querySelector('[data-act="cache-toggle"]');
           if (!b || !t) return null; const r = b.getBoundingClientRect();
           return {shown: getComputedStyle(b).display !== 'none' && r.height > 0, cells: b.querySelectorAll('[data-cache-cell]').length,
-                  exp: t.getAttribute('aria-expanded'), label: t.textContent}; }"""
+                  exp: t.getAttribute('aria-expanded'), label: t.textContent,
+                  sum: (document.querySelector('[data-cache-summary]') || {}).textContent || null}; }"""
         a = pg.evaluate(vis)
         pg.evaluate("() => document.querySelector('[data-act=\"cache-toggle\"]').click()")
         pg.wait_for_timeout(150)
@@ -325,8 +326,12 @@ class Rendered(unittest.TestCase):
         self.assertEqual(a["cells"], 4, "已知阳性：折叠时四格仍在 DOM 里")
         self.assertEqual((a["shown"], a["exp"]), (False, "false"), "★ 默认要折叠")
         self.assertIn("展开", a["label"])
+        self.assertRegex(a["sum"] or "", r"命中率 \d+\.\d%.*已省 \$\d+K?.*请求成本 \$\d+\.\d\d/次",
+                         "★ 折叠时标题行要有汇总：命中率 · 已省（取整）· 请求成本 /次")
+        self.assertNotRegex(a["sum"] or "", r"已省 \$\d+\.\d", "已省取整，不带小数")
         self.assertEqual((b["shown"], b["exp"]), (True, "true"), "★ 点标题行要展开")
         self.assertIn("收起", b["label"])
+        self.assertIsNone(b["sum"], "展开后四格自己说，标题行不重复汇总")
         self.assertEqual((c["shown"], c["exp"]), (False, "false"), "再点一次收起")
 
 

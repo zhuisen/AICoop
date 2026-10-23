@@ -70,7 +70,12 @@ export function useRotationBoard(enabled: boolean, opts?: {
   source?: "codex" | "agy"; dep?: unknown;
 }): { board: Board | null; err: string | null } {
   const source = opts?.source ?? "codex";
-  const [board, setBoard] = useState<Board | null>(null);
+  // ★ 先画上次的板子（用户 2026-10-23「有没有缓存」）：冷启动 / 窗口重载后置顶区、在用、下一个不再先空着、
+  //   等子进程回来再跳一次。只是种子 —— 首次 `load()` 回来就整份换掉；读失败照旧不清空（下面 catch）。
+  const cacheKey = `aicoop_board_${source}`;
+  const [board, setBoard] = useState<Board | null>(() => {
+    try { const raw = localStorage.getItem(cacheKey); return raw ? (JSON.parse(raw) as Board) : null; } catch { return null; }
+  });
   const [err, setErr] = useState<string | null>(null);
   /** 在途请求数（只许 1 个）+ 期间来过新事件吗。见下面 `load` 的注释。 */
   const inflight = useRef(false);
@@ -96,6 +101,7 @@ export function useRotationBoard(enabled: boolean, opts?: {
         //   两个 webview 一起闪）。闸：`tests/test_no_event_feedback_loop.py`。
         const raw = await invoke<string>(source === "agy" ? "read_agy_board" : "read_rotation_board");
         setBoard(JSON.parse(raw) as Board);
+        try { localStorage.setItem(cacheKey, raw); } catch { /* 无痕 / 配额满：只是少了种子 */ }
         setErr(null);
       } catch (e: unknown) {
         // ★ 读不到**不清空**已有的板子：保留上一次 + 记下原因，
@@ -108,7 +114,7 @@ export function useRotationBoard(enabled: boolean, opts?: {
         if (pending.current) { pending.current = false; load(); }
       }
     })();
-  }, [enabled, source]);
+  }, [enabled, source, cacheKey]);
 
   useEffect(() => {
     load();

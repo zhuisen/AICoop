@@ -619,7 +619,7 @@ class TheGoogleTabShowsThePoolNotAReadOnlyCard(unittest.TestCase):
         self.assertIn("sections(agyPinned, agyRest, (a, i) => agyCard(a, i, true))", self.OV,
                       "★★ Google 档还是只画一张卡 —— 池里有几个号就该有几张")
         self.assertIn("const agyPinned = agyShownList.filter(", self.OV)
-        self.assertIn("const agyRest = agyShownList.filter(", self.OV)
+        self.assertIn("const agyRest0 = agyShownList.filter(", self.OV)
         self.assertIn("const gMain = p.agyPool.accounts.filter((a) => !hidden.has(`agy:${a.sub}`))", self.OV,
                       "★ 主网格必须仍然源自 agyPool.accounts，且只筛掉撤销窗口里的号")
 

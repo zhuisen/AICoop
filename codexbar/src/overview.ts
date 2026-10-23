@@ -339,6 +339,20 @@ export function ovSort<T>(items: readonly T[], key: (x: T) => { id: string; stat
   return [...inC, ...def.filter((x) => !pos.has(key(x).id))];
 }
 
+/**
+ * 打开期间顺序不动（用户 2026-10-23：窗口开着时额度刷新、数字变了，「其余 · 按可用度」不跟着重排；
+ * 下次打开或切档时才按新数字排）。`prev` = 这次打开以来画过的顺序（id）。
+ * - `prev` 为空 ⇒ 原样返回（第一次画 / 刚重置）。
+ * - 在 `prev` 里的照 `prev` 的位置；不在的（新出现、刚取消置顶）按它们自己的顺序接在后面。
+ * - 已经不在 `items` 里的 id（删了、置顶走了）自然消失。
+ */
+export function stableOrder<T>(prev: readonly string[] | null | undefined, items: readonly T[], id: (x: T) => string): T[] {
+  if (!prev || prev.length === 0) return [...items];
+  const pos = new Map(prev.map((k, i) => [k, i]));
+  const kept = items.filter((x) => pos.has(id(x))).sort((a, b) => (pos.get(id(a)) ?? 0) - (pos.get(id(b)) ?? 0));
+  return [...kept, ...items.filter((x) => !pos.has(id(x)))];
+}
+
 /** 标题行计数：`5 可用 · 1 冷却中 · 1 需处理 · 3 已停用`（0 的项不写）。 */
 export interface OvCounts { ok: number; cool: number; bad: number; off: number; low: number }
 export function ovCounts(states: readonly OvState[]): OvCounts {

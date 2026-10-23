@@ -1446,7 +1446,12 @@ def _has_tokens(r):
     return any(r.get(k) for k in ("input", "cached", "output", "reasoning"))
 
 
-def build_json(now, days=2, rt=None):
+#: `--since` 往回多给的秒数。行在写完之后还会被补：Claude 的 OTel span 晚几秒到、估值行换成实测行。
+#: 界面每 5 分钟还会整份读一次兜底（`useRequests`），所以这里只需盖住「几秒到几分钟」那一段。
+SINCE_MARGIN = 600
+
+
+def build_json(now, days=2, rt=None, since=None):
     rt = rt or roots()
     st = Store(rt["ledger"])
     st.lock()
@@ -1474,7 +1479,12 @@ def build_json(now, days=2, rt=None):
         d = {"date": time.strftime("%Y-%m-%d", time.localtime(a)), **_day_stats(rs)}
         d["platforms"] = {p: _day_stats([r for r in rs if r["platform"] == p]) for p in PLATFORMS}
         days_out[name] = d
-    return {"v": V, "generated_at": int(now), **_meta(cur), "requests": rows, "days": days_out}
+    # ★ 增量（用户 2026-10-23「增量显示，而不是再全量加载」）：只回 since 之后（含余量）的行，`days` 照旧按全量算。
+    #   界面按 key 合并、按 `window_start` 剪掉滑出窗口的旧行。`partial` 让界面分得清「这是一段」还是「这是全部」。
+    out = {"v": V, "generated_at": int(now), **_meta(cur), "days": days_out,
+           "window_start": _local_midnight(now, max(1, days) - 1), "partial": since is not None}
+    out["requests"] = rows if since is None else [r for r in rows if (r["t_end"] or 0) >= since - SINCE_MARGIN]
+    return out
 
 
 def _session_of(path, ent):
@@ -1599,12 +1609,13 @@ def main(argv=None):
     g.add_argument("--json", action="store_true")
     g.add_argument("--live", action="store_true")
     ap.add_argument("--days", type=int, default=2)
+    ap.add_argument("--since", type=float, default=None, help="只回 t_end ≥ since − %d s 的行（增量）" % 600)
     # `--active-secs` 是旧名（2026-10-19 前它是「N 秒没写 = 停了」）；现在两个名字都是兜底窗口。
     ap.add_argument("--fallback-secs", "--active-secs", dest="fallback_secs", type=float, default=FALLBACK_SECS)
     a = ap.parse_args(argv)
     now = time.time()
     try:
-        out = build_live(now, a.fallback_secs) if a.live else build_json(now, max(1, a.days))
+        out = build_live(now, a.fallback_secs) if a.live else build_json(now, max(1, a.days), since=a.since)
     except Exception as e:                           # noqa: BLE001 —— 退出码恒 0：Err 在前端会被读成「没数据」
         # ★ `stale_since` 不填 now：「此刻才开始读不到」是编的 —— 说不出就留空，界面保留上次真读到的时刻（全方面评审 §5）
         out = {"v": V, "generated_at": int(now), "ok": False, "error": "%s: %s" % (type(e).__name__, e),

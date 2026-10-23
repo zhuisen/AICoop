@@ -914,3 +914,21 @@ class AgyBulkResponsesAreEstimates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SinceReturnsOnlyTheTail(Base):
+    """增量（用户 2026-10-23「增量显示，而不是再全量加载」）：`--since` 只回那之后（含余量）的行，汇总仍按全量算。"""
+
+    def test_since_filters_rows_but_not_the_day_totals(self):
+        full = self.run_json()
+        self.assertGreaterEqual(len(full["requests"]), 2, "已知阳性：夹具里得有不止一行")
+        self.assertIs(full["partial"], False)
+        newest = max(r["t_end"] for r in full["requests"])
+        tail = RQ.build_json(time.time(), 2, since=newest + RQ.SINCE_MARGIN + 1)
+        self.assertIs(tail["partial"], True)
+        self.assertEqual(tail["requests"], [], "★ since 之后没有新行 ⇒ 一行都不回")
+        self.assertEqual(tail["days"], full["days"], "★ 汇总按全量算，不随 since 变")
+        self.assertEqual(tail["window_start"], full["window_start"])
+        near = RQ.build_json(time.time(), 2, since=newest)
+        self.assertIn(newest, [r["t_end"] for r in near["requests"]], "since 那一刻的行（含余量）要回")
+        self.assertLess(len(near["requests"]) + 0, len(full["requests"]) + 1)

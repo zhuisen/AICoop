@@ -17,7 +17,8 @@ import type { Integration } from "../../hooks/useIntegration";
 import type { CardDragWiring } from "../../hooks/useCardDrag";
 import { applyOrder, undoPinStep } from "../../cardOrder";
 import type { OvState } from "../../overview";
-import { dayStart, lastUseByAcct, ovCounts, ovIsLow, OV_BP_WIDE, ovBand, ovLayout, ovSort, ovState, todaySwitches } from "../../overview";
+import { dayStart, lastUseByAcct, ovCounts, ovIsLow, OV_BP_WIDE, ovBand, ovLayout, ovSort, ovState, stableOrder, todaySwitches } from "../../overview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { POOL_PLATFORMS, type PoolKey } from "../../platforms";
 import AccountCard from "../AccountCard";
 import AgyCard from "../AgyCard";
@@ -124,7 +125,9 @@ export default function Overview(p: OverviewProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => { const id = window.setInterval(() => setNowMs(Date.now()), 30_000); return () => window.clearInterval(id); }, []);
   const [sort, setSort] = useState<Record<string, SortMode>>(loadSort);
-  const setSortFor = (k: string, m: SortMode) => setSort((cur) => {
+  // ★ 用户自己换排序 = 要立刻按新规则排：清掉「打开期间顺序不动」记下的顺序（`frozen` 在下面定义，调用时已存在）。
+  const setSortFor = (k: string, m: SortMode) => { frozen.current = {}; setSortState(k, m); };
+  const setSortState = (k: string, m: SortMode) => setSort((cur) => {
     const next = { ...cur, [k]: m };
     try { localStorage.setItem(SORT_KEY, JSON.stringify(next)); } catch { /* 无痕：本次生效 */ }
     return next;
@@ -133,6 +136,27 @@ export default function Overview(p: OverviewProps) {
   const toggleStrip = (k: string) => setStripOpen((c) => ({ ...c, [k]: !c[k] }));
 
   const prov = p.provider;
+  // ── 打开期间顺序不动（用户 2026-10-23）：「其余 · 按可用度」在窗口开着时只更新数字、不换位置。
+  //   重置（按新数字重排）的时机：切档、重新进总览（组件重挂）、窗口失焦 ≥ 60 s 后再回来（= 「下次打开」）。
+  //   只管自动排序；「我拖的顺序」本来就固定。置顶区按置顶先后，是用户的操作，照常即时生效。
+  const frozen = useRef<Record<string, string[]>>({});
+  const frozenProv = useRef(prov);
+  if (frozenProv.current !== prov) { frozenProv.current = prov; frozen.current = {}; }
+  const [, setFreezeEpoch] = useState(0);
+  useEffect(() => {
+    let blurAt = 0;
+    const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused) { blurAt = Date.now(); return; }
+      if (blurAt && Date.now() - blurAt >= 60_000) { frozen.current = {}; setFreezeEpoch((e) => e + 1); }
+      blurAt = 0;
+    });
+    return () => { void un.then((f) => f()).catch(() => {}); };
+  }, []);
+  const freeze = <T,>(key: string, list: T[], id: (x: T) => string): T[] => {
+    const out = stableOrder(frozen.current[key], list, id);
+    frozen.current[key] = out.map(id);
+    return out;
+  };
   const codexOn = prov === "codex", agyOn = prov === "gemini";
   const { rot: codexRot } = useRotationDay("codex", codexOn);
   const { rot: agyRot } = useRotationDay("agy", agyOn);
@@ -183,7 +207,8 @@ export default function Overview(p: OverviewProps) {
   const codexShown = p.preview ? applyOrder(codexSorted, p.preview, (a) => a.aid) : codexSorted;
   // 置顶区（P5 §1.2）：按置顶先后；「其余」按排序。拖拽只排「其余」。
   const codexPinned = codexShown.filter((a) => a.pinRank !== null).sort((x, y) => (x.pinRank ?? 0) - (y.pinRank ?? 0));
-  const codexRest = codexShown.filter((a) => a.pinRank === null);
+  const codexRest0 = codexShown.filter((a) => a.pinRank === null);
+  const codexRest = codexMode === "auto" && !p.preview ? freeze("codex", codexRest0, (a) => a.aid) : codexRest0;
   const cBest = cMain.filter((a) => a.rotates && a.cooldownSec <= 0 && a.windows.length).reduce<number | null>((m, a) => (m == null || a.tightest > m ? a.tightest : m), null);
 
   // ── Gemini 档 ──
@@ -199,7 +224,8 @@ export default function Overview(p: OverviewProps) {
   const agyShownList = p.preview ? applyOrder(agySorted, p.preview, (a) => a.sub) : agySorted;
   const gPin = (a: AgyPoolAccount) => { const e = agyEnt.get(a.sub); return e?.pin == null ? null : e.pin - 1; };
   const agyPinned = agyShownList.filter((a) => gPin(a) !== null).sort((x, y) => (gPin(x) ?? 0) - (gPin(y) ?? 0));
-  const agyRest = agyShownList.filter((a) => gPin(a) === null);
+  const agyRest0 = agyShownList.filter((a) => gPin(a) === null);
+  const agyRest = agyMode === "auto" && !p.preview ? freeze("gemini", agyRest0, (a) => a.sub) : agyRest0;
   // 失效号的读数是作废前的旧值，不能当「最好的余量」（2026-10-22 评审核实：gMain 只滤用户藏起来的）
   const gBest = gMain.filter((a) => !a.rotate_off && gState(a) !== "cool" && gState(a) !== "dead").reduce<number | null>((m, a) => { const v = gTight(a); return v == null ? m : m == null || v > m ? v : m; }, null);
 

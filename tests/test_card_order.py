@@ -120,7 +120,7 @@ class TheCardsRenderFromTheOrderedList(unittest.TestCase):
         # ★ P5（2026-10-21）：网格分「置顶 / 其余」两区，两区都从排序后的 `codexShown` 切出来。
         self.assertIn("grid = grid0(sections(codexPinned, codexRest, (a, i) => codexCard(a, i, true)))", self.code,
                       "★★ 卡片没走排序后的列表 —— 拖完不生效")
-        self.assertIn("const codexRest = codexShown.filter(", self.code, "★★ 「其余」区没从排序后的列表切出来")
+        self.assertIn("const codexRest0 = codexShown.filter(", self.code, "★★ 「其余」区没从排序后的列表切出来")
         self.assertIn("const codexPinned = codexShown.filter(", self.code, "★★ 「置顶」区没从排序后的列表切出来")
         self.assertIn("const codexShown = p.preview ? applyOrder(codexSorted, p.preview", self.code,
                       "★★ 拖动中的预览顺序没接进网格")
@@ -146,7 +146,7 @@ class TheGeminiLaneFollowsTheSameRule(unittest.TestCase):
     def test_gemini_cards_render_from_the_ordered_list(self):
         self.assertIn("sections(agyPinned, agyRest, (a, i) => agyCard(a, i, true))", self.code,
                       "★ Gemini 卡片没走排序后的列表")
-        self.assertIn("const agyRest = agyShownList.filter(", self.code, "★ Gemini「其余」区没从排序后的列表切出来")
+        self.assertIn("const agyRest0 = agyShownList.filter(", self.code, "★ Gemini「其余」区没从排序后的列表切出来")
 
     def test_grok_gets_no_handle(self):
         """单卡档不给手柄。判据：GrokCard 的调用点不传 `drag`。"""

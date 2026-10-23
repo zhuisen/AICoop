@@ -59,6 +59,10 @@ export interface ReqPayload {
   generated_at: number | null;
   requests: ReqRow[];
   days: { today: DayInfo; yesterday: DayInfo };
+  /** 账本窗口的起点（秒）。比它旧的行已滑出窗口。null = 老后端没给。 */
+  window_start: number | null;
+  /** true = 这份只是 `since` 之后的一段（增量），要与手里的合并；false = 全部。 */
+  partial: boolean;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -117,7 +121,34 @@ export function parsePayload(raw: unknown): ReqPayload {
     generated_at: num(v.generated_at),
     requests: rows,
     days: { today: parseDay(days.today), yesterday: parseDay(days.yesterday) },
+    window_start: num(v.window_start),
+    partial: v.partial === true,
   };
+}
+
+/**
+ * 增量合并（用户 2026-10-23「增量显示，而不是再全量加载」）：把 `next` 这一段并进 `prev`。
+ * - `next` 是全部（`partial` 为假）或手里还没有东西 ⇒ 直接用 `next`。
+ * - 否则按 `key` 合并，新值覆盖旧值（行写完后还会被补：Claude span 晚到、估值换实测）；
+ *   比 `window_start` 旧的行剪掉（滑出窗口）；按 `t_end` 倒序。`days` 等汇总一律取 `next` 的（后端按全量算）。
+ * - ★ 读失败（`ok` 为假）且这一段一行都没有 ⇒ 手里的行原样保留（「这次拿到空」≠「确实没有」，§7.0b）。
+ */
+export function mergePayload(prev: ReqPayload | null, next: ReqPayload): ReqPayload {
+  if (!prev || !next.partial) return next;
+  const cut = next.window_start;
+  const byKey = new Map<string, ReqRow>();
+  for (const r of prev.requests) if (cut == null || toMs(r.t_end) >= toMs(cut)) byKey.set(r.key, r);
+  for (const r of next.requests) byKey.set(r.key, r);
+  const rows = [...byKey.values()].sort((a, b) => toMs(b.t_end) - toMs(a.t_end));
+  return { ...next, requests: rows, partial: false };
+}
+
+/** 下一次增量从哪儿读：手里最新一行的 `t_end`，**单位秒**（后端 `--since` 按秒）。null = 手里没有 ⇒ 读全部。 */
+export function sinceOf(p: ReqPayload | null): number | null {
+  if (!p || p.requests.length === 0) return null;
+  let m = 0;
+  for (const r of p.requests) m = Math.max(m, toMs(r.t_end));
+  return m > 0 ? m / 1000 : null;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");

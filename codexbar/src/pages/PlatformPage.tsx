@@ -17,6 +17,12 @@ import { MONO, SPR9, tkPal } from "../components/tk/tkPal";
 import { useDirAnim, useWidth, useWinDensity } from "./TrafficPage";
 import "../components/tk/tk.css";
 
+/** 「已省」的标题行写法：≥ $1000 取整到 K（`$53K`），以下取整到元（`$412`）；读不到写 —。 */
+function usdWholeK(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${Math.round(n)}`;
+}
+
 const SRC: Record<string, string> = {
   claude: "~/.claude/projects/**/*.jsonl",
   codex: "~/.codex/sessions/**/rollout-*.jsonl",
@@ -488,6 +494,15 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
                  style={{ display: "flex", alignItems: "center", gap: 8, height: 22, cursor: "pointer" }}>
               <span title="缓存命中 = 缓存读 ÷（缓存读 + 输入）；输入含缓存写" style={{ display: "inline-flex", alignItems: "center", gap: 6,
                             fontSize: 14, fontWeight: 600 }}>缓存命中<InfoI color={p.label} /></span>
+              {/* 折叠时把四格的要点放进标题行（用户 2026-10-23）：命中率 · 已省（取整到 K）· 每请求成本。展开后四格自己说，这行不重复。 */}
+              {!cacheOpen && (
+                <span data-cache-summary style={{ display: "inline-flex", alignItems: "baseline", gap: 6, marginLeft: 10, fontSize: 12, color: p.label,
+                                                   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                  命中率 <b style={{ fontFamily: MONO, fontSize: 13, color: p.accent }}>{cache.hit == null ? "—" : `${cache.hit.toFixed(1)}%`}</b>
+                  <span>·</span>已省 <b style={{ fontFamily: MONO, fontSize: 13, color: p.up }}>{usdWholeK(v?.saving ?? null)}</b>
+                  <span>·</span>请求成本 <span><b style={{ fontFamily: MONO, fontSize: 13, color: p.amber }}>{cache.perReq == null ? "—" : `$${cache.perReq.toFixed(2)}`}</b>/次</span>
+                </span>
+              )}
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 12, color: p.label, fontFamily: MONO }}>{rangeText(st, today, labels, null)}</span>
               <span style={{ fontSize: 12, color: p.label }}>{cacheOpen ? "收起 ▴" : "展开 ▾"}</span>

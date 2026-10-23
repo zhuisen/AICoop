@@ -94,7 +94,7 @@ class TheOverviewIsTabbedByProvider(unittest.TestCase):
         # P5（2026-10-21）：主网格分「置顶 / 其余」两区，两区合起来 = 排序后的 codexShown（= cMain）。
         self.assertIn("grid = grid0(sections(codexPinned, codexRest, (a, i) => codexCard(a, i, true)));", OV)
         self.assertIn("const codexPinned = codexShown.filter((a) => a.pinRank !== null)", OV)
-        self.assertIn("const codexRest = codexShown.filter((a) => a.pinRank === null)", OV, "★★ 两区合起来不等于 codexShown —— 计数与张数对不上")
+        self.assertIn("const codexRest0 = codexShown.filter((a) => a.pinRank === null)", OV, "★★ 两区合起来不等于 codexShown —— 计数与张数对不上")
         self.assertIn("const codexSorted = ovSort(cMain,", OV, "★★ 主网格画的不是 cMain —— 计数与张数对不上")
         self.assertRegex(OV, r"const codexShown = p\.preview \? applyOrder\(codexSorted,[^;]*: codexSorted;")
 

@@ -838,12 +838,18 @@ fn run_live_blocking() -> Result<String, String> {
     run_py_script_timeout(&requests_script(), &["--live"], LIVE_TIMEOUT)
 }
 
-/// 最近 2 天的逐条请求（「请求」页）。
+/// 最近 2 天的逐条请求（「请求」页）。`since` = 界面手里最新一行的 `t_end`：给了就只回那之后的行（增量）。
 #[tauri::command]
-async fn read_requests() -> Result<String, String> {
+async fn read_requests(since: Option<f64>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _g = requests_lock(JSON_TIMEOUT)?;
-        run_py_script_timeout(&requests_script(), &["--json"], JSON_TIMEOUT)
+        match since.filter(|t| t.is_finite() && *t > 0.0) {
+            Some(t) => {
+                let ts = format!("{:.3}", t);
+                run_py_script_timeout(&requests_script(), &["--json", "--since", &ts], JSON_TIMEOUT)
+            }
+            None => run_py_script_timeout(&requests_script(), &["--json"], JSON_TIMEOUT),
+        }
     })
     .await
     .map_err(|e| format!("join: {}", e))?

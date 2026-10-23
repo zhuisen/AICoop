@@ -228,7 +228,9 @@ class RequestsShapes(unittest.TestCase):
         self.assertIn("if pi < len(parsed) - 1:", body[i:i + 400], "★ 中间那次永远缺时间戳 ⇒ 游标永不前进")
 
     def test_first_failure_keeps_payload_null(self):
-        self.assertIn("setPayload((prev) => (p.requests.length ? p : prev));", code("hooks/useRequests.ts"))
+        # 2026-10-24 增量合并后：读失败且一行都没带回 ⇒ 不碰 payload（第一次就失败时它仍是 null）
+        self.assertIn("if (p.requests.length) { held.current = mergePayload(held.current, p); setPayload(held.current); }",
+                      code("hooks/useRequests.ts"))
 
     def test_row_dims_follow_the_platform(self):
         got = node("requests.ts", "[m.rowStale(['codex'],'codex'), m.rowStale(['codex'],'claude'), m.rowStale(['*'],'grok'), m.rowStale(null,'codex')]")

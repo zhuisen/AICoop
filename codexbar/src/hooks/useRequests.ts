@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../pages/SettingsPage";
-import { parsePayload, type ReqPayload } from "../requests";
+import { mergePayload, parsePayload, sinceOf, type ReqPayload } from "../requests";
 
 /**
  * 「请求」页取数：`invoke("read_requests")` → `traffic/requests.py --json`（PLAN §2.3 / §2.1）。
@@ -17,6 +17,9 @@ import { parsePayload, type ReqPayload } from "../requests";
  * 关掉时只在进页和点「重试」时读（与 `useQuotaSidecar` 同一个开关）。
  */
 const POLL_MS = 10_000;
+/** 每隔多少次轮询整份读一次（30 × 10 s = 5 分钟）。增量只回 `since` 往前 10 分钟之后的行；
+ *  更早的行若被后端改过（少见），靠这次整读补上。 */
+const FULL_EVERY = 30;
 
 function autoRefreshEnabled(): boolean {
   try { return getSettings().autoRefresh !== false; } catch { return true; }
@@ -46,13 +49,21 @@ export function useRequests(enabled: boolean): RequestsState {
   /** 上一份原文。★ 两天的账本实测 2453 行（本机 2026-10-19）；内容没变就不换 payload，
    *  否则每 10 s 整张表重渲一次。 */
   const lastRaw = useRef<string | null>(null);
+  /** 手里那份（给 `since` 用；state 在回调里读不到最新值）。 */
+  const held = useRef<ReqPayload | null>(null);
+  /** 距上次整读的轮询次数。 */
+  const sinceFull = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (forceFull = false) => {
     if (inflight.current) return;
     inflight.current = true;
     setBusy(true);
     try {
-      const raw = await invoke<string>("read_requests");
+      // ★ 增量（用户 2026-10-23）：手里有数据就只要 `since` 之后的行（实测 4.7 MB → 20 KB），每 5 分钟整读一次兜底。
+      const full = forceFull || held.current == null || sinceFull.current >= FULL_EVERY;
+      const since = full ? null : sinceOf(held.current);
+      const raw = await invoke<string>("read_requests", { since });
+      sinceFull.current = since == null ? 0 : sinceFull.current + 1;
       if (!alive.current) return;
       // `generated_at` 每次都变，比较时剔掉它，其余逐字相同才算「没变」。
       const sig = raw.replace(/"generated_at":\s*[\d.]+/, "");
@@ -64,12 +75,14 @@ export function useRequests(enabled: boolean): RequestsState {
       const p = parsePayload(raw);
       if (p.ok) {
         lastRaw.current = sig;
-        setPayload(p);
+        const merged = mergePayload(held.current, p);
+        held.current = merged;
+        setPayload(merged);
         setReadAt(Date.now());
         setErr(null); setFailed(null);
       } else {
         // ★ 第一次就失败且一条都没有 ⇒ 留 null（页面写「读不到请求账本」），不塞空表冒充「今天还没有请求」（全方面评审 §5）
-        setPayload((prev) => (p.requests.length ? p : prev));
+        if (p.requests.length) { held.current = mergePayload(held.current, p); setPayload(held.current); }
         // ★ `readAt` 只在读成功时前进（阶段 B 评审）：`stale_since` 是「从什么时候开始读不到」，不是「数据是什么时候的」——
         //   拿它当读取时刻会把 09:00 的旧数说成 10:05 读到的，第一次就失败时还会写出一个根本不存在的「读到时刻」。
         setErr(p.error ?? "请求账本读取失败");
@@ -98,6 +111,6 @@ export function useRequests(enabled: boolean): RequestsState {
     return () => clearInterval(id);
   }, [enabled, load]);
 
-  const retry = useCallback(() => { void load(); }, [load]);
+  const retry = useCallback(() => { void load(true); }, [load]);
   return { payload, readAt, err, failed, busy, retry };
 }
