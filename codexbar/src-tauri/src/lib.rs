@@ -2592,55 +2592,14 @@ fn place_popover(
     (x, y)
 }
 
-/// 上一次左键单击托盘的时刻（秒，0 = 没有 / 刚判过一次双击）。
-static LAST_TRAY_CLICK: Mutex<f64> = Mutex::new(0.0);
-
-/// 这一下是不是**双击的第二下**（纯函数）。判过一次就清零：三连击不会算两次双击。
-fn is_double_click(prev: f64, now: f64, interval: f64) -> bool {
-    prev > 0.0 && now >= prev && now - prev <= interval
-}
-
-/// 双击托盘图标 = 打开工作台总览（用户 2026-10-23）。
-/// ★ macOS 上 `tray-icon` 不发 `DoubleClick`（只有 Windows 实现了），只能自己按系统双击间隔判。
-///   第一下照常开菜单栏弹窗（单击不能为了等第二下而延迟 —— 那会让每次单击都慢半秒）；第二下收起弹窗、开总览。
-///   走 `open-main-page`（与菜单栏 / 刘海同一条跳转），不带平台 ⇒ 停在总览当前那一档。
-fn on_tray_left_click(app: &AppHandle, rect: tauri::Rect) {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-    #[cfg(target_os = "macos")]
-    let interval: f64 = unsafe { objc2::msg_send![objc2::class!(NSEvent), doubleClickInterval] };
-    #[cfg(not(target_os = "macos"))]
-    let interval = 0.5;
-    let double = {
-        let mut last = LAST_TRAY_CLICK.lock().unwrap();
-        let d = is_double_click(*last, now, interval);
-        *last = if d { 0.0 } else { now };
-        d
-    };
-    if !double {
-        toggle_menubar(app, Some(rect));
-        return;
-    }
+/// 右键托盘图标 = 打开工作台总览（用户 2026-10-24「双击打开工作台，更改为鼠标右键」，取代 10-23 的双击）。
+/// 左键照旧只开 / 收菜单栏弹窗。弹窗若开着先收起；走 `open-main-page`（与菜单栏 / 刘海同一条跳转），
+/// 不带平台 ⇒ 停在总览当前那一档。
+fn on_tray_right_click(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("menubar") {
         let _ = w.hide();
     }
     let _ = app.emit("open-main-page", serde_json::json!({ "page": "overview" }));
-}
-
-#[cfg(test)]
-mod tray_double_click_tests {
-    use super::is_double_click;
-
-    #[test]
-    fn second_click_inside_the_interval_is_a_double() {
-        assert!(is_double_click(100.0, 100.3, 0.5));
-    }
-
-    #[test]
-    fn too_slow_first_click_or_clock_going_back_is_not() {
-        assert!(!is_double_click(100.0, 100.6, 0.5));
-        assert!(!is_double_click(0.0, 100.0, 0.5), "没有上一下");
-        assert!(!is_double_click(100.0, 99.0, 0.5), "墙钟回拨");
-    }
 }
 
 fn toggle_menubar(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
@@ -3038,9 +2997,9 @@ pub fn run() {
                             // ★ 先收起胶囊的悬停面板，再走原有菜单栏弹窗（page 2：点击胶囊 = 菜单栏弹窗）
                             #[cfg(target_os = "macos")]
                             tps_hover::on_click(tray.app_handle());
-                            // 左键双击 = 打开工作台总览；右键照旧只开 / 收弹窗
-                            if button == MouseButton::Left {
-                                on_tray_left_click(tray.app_handle(), rect);
+                            // 左键 = 开 / 收菜单栏弹窗；右键 = 打开工作台总览（用户 2026-10-24）
+                            if button == MouseButton::Right {
+                                on_tray_right_click(tray.app_handle());
                             } else {
                                 toggle_menubar(tray.app_handle(), Some(rect));
                             }
