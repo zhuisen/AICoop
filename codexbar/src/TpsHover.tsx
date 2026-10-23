@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { useLive } from "./hooks/useLive";
+import { useTodayTotal } from "./hooks/useTodayTotal";
 import { PLATFORM_NAME, PLATFORM_ORDER, fmtTokens, fmtTps, numColor, runningRows, type PlatformKey, type RunningRow } from "./live";
 import PlatformLogo, { logoSrc } from "./components/PlatformLogo";
 import * as L from "./tpsHoverLogic";
@@ -48,6 +49,7 @@ function noop(_e: unknown): void { /* 托盘 / 高度命令失败不影响面板
 
 export default function TpsHover() {
   const { live, error: liveErr } = useLive();
+  const todayTotal = useTodayTotal();
   const [theme, setTheme] = useState<"dark" | "light">(loadTheme);
   const [reduce, setReduce] = useState<boolean>(prefersReduce);
   const [mode, setMode] = useState<Mode>("closed");
@@ -342,7 +344,8 @@ export default function TpsHover() {
         <div className="hv-foot" data-hover-foot style={{ opacity: isOpen ? 1 : 0, transition: footT }}>
           {/* 「均」不跨 AI（2026-10-22）：两家以上今天有实测时后端给 null，这里整段不画 */}
           {/* ★ 读不到实时速度：数字是上一份的，说出来（全方面评审 §8）。不另起一行，面板高度不变 */}
-          <span>{liveErr && live && <span className="hv-stale" data-hover-stale title={`实时速度这次没读到：${liveErr}`}>⚠ 上次的数 · </span>}今日 <b>{live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{L.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
+          {/* ★ 「今日」= 用量快照按缓存口径（与菜单栏今日 Tab、刘海同一个数）；快照没到才退回实时账本（也已按口径） */}
+          <span>{liveErr && live && <span className="hv-stale" data-hover-stale title={`实时速度这次没读到：${liveErr}`}>⚠ 上次的数 · </span>}今日 <b data-hover-today>{todayTotal != null ? fmtTokens(todayTotal) : live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{L.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
           <a href="#" className="hv-link" data-hover-link onClick={openLink}>请求页 →</a>
         </div>
       </div>

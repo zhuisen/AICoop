@@ -131,6 +131,17 @@ class TheProtobufMappingIsPinned(unittest.TestCase):
         got = [int(r[0]) for r in scan._scan_agy_db(self.db)]
         self.assertEqual(got, [TS, TS + 60], "配对错位了 —— 时间会整体漂移")
 
+    def test_the_day_follows_the_end_of_generation(self):
+        """★ 有 `f7` finished_generating_at 就按它分日，没有才退回 `f1` created_at（2026-10-23 token 审查）。
+
+        其余几家与 `requests.py` 都按**结束**时刻分日；agy 原来按开始 ⇒ 跨午夜那条（实测 3742 条里 1 条）
+        在用量页与请求页落在不同的天。真实库里 3741/3742 条生成步带 `f7`。"""
+        make_db(self.db,
+                [gen_blob(1, 1, 1, 0, "m"), gen_blob(2, 2, 2, 0, "m")],
+                [(15, step_meta(TS) + _bytes(7, _u64(1, TS + 620))),
+                 (15, step_meta(TS + 900))])                     # 没有 f7 ⇒ 用 f1
+        self.assertEqual([int(r[0]) for r in scan._scan_agy_db(self.db)], [TS + 620, TS + 900])
+
     def test_a_corrupt_blob_does_not_lose_the_whole_file(self):
         """★ 半个会话的数字也比整份丢掉强（这些库里有正在被写入的）。"""
         make_db(self.db,
@@ -305,6 +316,14 @@ class TheLedgerOnlyFillsGaps(unittest.TestCase):
                          "row 形状必须是 [ts, model, in, cache_read, cache_write, out]")
 
 
+def _newest_dbs(n=40):
+    """★ 按**有效 mtime**（主库与 `-wal` 取晚者，同 `scan._agy_db_sig`）取最近 n 个库。
+    原来 `sorted(glob)` 按文件名排 —— 文件名是 UUID，「最后 40 个」与真正最新的 40 个实测只重合 2 个
+    （2026-10-23 token 审查），agy 最近改了字段号这条 canary 也看不到。"""
+    dbs = list(scan.AGY_DB_ROOT.glob("*.db"))
+    return sorted(dbs, key=lambda p: scan._agy_db_sig(p, p.stat())[0])[-n:]
+
+
 @unittest.skipUnless(scan.AGY_DB_ROOT.is_dir() and any(scan.AGY_DB_ROOT.glob("*.db")),
                      "本机没有 agy 的会话库")
 class RealDataCanary(unittest.TestCase):
@@ -315,9 +334,8 @@ class RealDataCanary(unittest.TestCase):
     """
 
     def test_the_local_databases_still_parse(self):
-        dbs = sorted(scan.AGY_DB_ROOT.glob("*.db"))
         rows = []
-        for p in dbs[-40:]:                     # 取最近 40 个，够判且够快
+        for p in _newest_dbs():                 # 取最近 40 个（按有效 mtime），够判且够快
             rows.extend(scan._scan_agy_db(p))
         self.assertGreater(len(rows), 50,
                            f"★ 最近 40 个库只解出 {len(rows)} 条 —— 字段号可能已经漂移")
@@ -328,11 +346,18 @@ class RealDataCanary(unittest.TestCase):
         self.assertGreater(named, len(rows) * 0.5,
                            "★ 一半以上的行解不出模型名 —— f19 可能挪位了")
 
+    def test_it_samples_the_newest_databases(self):
+        """反向：取到的 40 个里最老的那个，不能比全部库里第 40 新的更旧（按文件名取时实测最老的是 09-25）。"""
+        sig = lambda p: scan._agy_db_sig(p, p.stat())[0]
+        all_t = sorted((sig(p) for p in scan.AGY_DB_ROOT.glob("*.db")), reverse=True)
+        picked = _newest_dbs()
+        self.assertGreaterEqual(min(sig(p) for p in picked), all_t[min(39, len(all_t) - 1)])
+
     def test_cache_read_dominates_as_measured(self):
         """实测构成里 `cache_read` 远大于 input —— 这是这类 agent 会话的固有形状。
         反过来（input 远大于 cache_read）说明 f2/f5 认反了。"""
         rows = []
-        for p in sorted(scan.AGY_DB_ROOT.glob("*.db"))[-40:]:
+        for p in _newest_dbs():
             rows.extend(scan._scan_agy_db(p))
         i_tot = sum(r[3] for r in rows)
         cr_tot = sum(r[4] for r in rows)

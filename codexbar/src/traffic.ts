@@ -1,4 +1,4 @@
-import { costOf, cacheSavingOf, noCacheCostOf } from "./rates";
+import { costOf, cacheSavingOf, noCacheCostOf, type Classes } from "./rates";
 import { platformColor } from "./theme";
 import type { SourceStatus } from "./scanHealth";
 
@@ -8,6 +8,10 @@ export interface ModelBucket {
   output: number; total: number; rounds: number;
   /** `cache_write` 里 1h 档的份额（子集，只决定价格）。只有 Claude 有，缺省 0。见 `rates.ts::costOf`。 */
   cache_write_1h?: number;
+  /** 长上下文请求那部分的四类（子集，只决定价格；只在模型桶里）。见 `rates.ts::costOf`。 */
+  long?: Classes;
+  /** 带自报实扣费用的那部分四类 + 美元（子集；目前只有 Grok）。见 `rates.ts::costOf`。 */
+  rep?: Classes & { usd: number };
 }
 export interface Bucket extends ModelBucket {
   models: Record<string, ModelBucket>;
@@ -712,6 +716,11 @@ export function sortCardsByToday<T extends { total: number; buckets: Bucket[] }>
   return [...list].sort((a, b) => cardTodayOf(b, isToday) - cardTodayOf(a, isToday));
 }
 
+function addClasses(a: Classes | undefined, b: Classes): Classes {
+  return { uncached_in: (a?.uncached_in ?? 0) + (b.uncached_in ?? 0), cache_read: (a?.cache_read ?? 0) + (b.cache_read ?? 0),
+           cache_write: (a?.cache_write ?? 0) + (b.cache_write ?? 0), output: (a?.output ?? 0) + (b.output ?? 0) };
+}
+
 export function sumBuckets(bs: Bucket[]): Bucket {
   const out: Bucket = { ...EMPTY, models: {} };
   for (const b of bs) {
@@ -727,6 +736,8 @@ export function sumBuckets(bs: Bucket[]): Bucket {
       t.cache_write += mv.cache_write; t.output += mv.output;
       t.total += mv.total; t.rounds += mv.rounds;
       if (mv.cache_write_1h) t.cache_write_1h = (t.cache_write_1h ?? 0) + mv.cache_write_1h;
+      if (mv.long) t.long = addClasses(t.long, mv.long);
+      if (mv.rep) t.rep = { ...addClasses(t.rep, mv.rep), usd: (t.rep?.usd ?? 0) + (mv.rep.usd ?? 0) };
     }
   }
   return out;

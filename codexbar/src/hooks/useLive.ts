@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { parseLive, type LiveSnapshot } from "../live";
+import { applyLiveCacheMode, parseLive, type LiveSnapshot } from "../live";
+import { useCacheMode } from "./useCacheMode";
 
 /**
  * 「谁在跑、多快」：先读一次 `read_live`，之后只收 Rust 推的 `tps-live`。
  * ★ 读失败保留上一份（§7.0b），`error` 单独给，UI 自己决定怎么说。
+ * ★ token 数已按设置里的「缓存计入口径」重塑（`applyLiveCacheMode`）——所有入口同一个口径。
  */
 export function useLive(): { live: LiveSnapshot | null; error: string | null } {
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { mode } = useCacheMode();
 
   useEffect(() => {
     let alive = true;
@@ -34,5 +37,6 @@ export function useLive(): { live: LiveSnapshot | null; error: string | null } {
     };
   }, []);
 
-  return { live, error };
+  const shaped = useMemo(() => applyLiveCacheMode(live, mode), [live, mode]);
+  return { live: shaped, error };
 }

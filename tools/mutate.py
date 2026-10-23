@@ -29,6 +29,7 @@
 
 每一步任何一项校验不过就 `SystemExit(1)` —— **不许继续跑出一份看着完整的报告**。
 """
+import os
 import re
 import subprocess
 import sys
@@ -47,7 +48,10 @@ def _run(test_file, k):
     选中 0 条时 pytest 退出码是 0，看起来和「全绿」一模一样。"""
     r = subprocess.run(
         [sys.executable, "-m", "pytest", test_file, "-q"] + (["-k", k] if k else []),
-        capture_output=True, text=True, cwd=str(ROOT), timeout=900)
+        capture_output=True, text=True, cwd=str(ROOT), timeout=900,
+        # ★ 不读 / 不写 .pyc（2026-10-23 踩到）：两次变异若文件大小相同、又落在同一秒，pyc 的
+        #   (mtime, size) 校验认不出改动，下一个变异跑的还是上一个的字节码 ⇒ 假绿，读起来像「闸是空的」。
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": "/nonexistent-pycache"})
     tail = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
     passed = int((re.search(r"(\d+) passed", tail) or [0, 0])[1] or 0)
     failed = int((re.search(r"(\d+) failed", tail) or [0, 0])[1] or 0)

@@ -102,7 +102,7 @@ PLATFORMS = ("codex", "claude", "agy", "grok")      # 固定顺序 Codex → Cla
 
 #: ★★ 落盘白名单 —— 账本 / 窗口快照里**只能**出现这些键。加字段必须改这里，且不得是正文。
 KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "session_title",
-        "account", "input", "cached", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
+        "account", "input", "cached", "cache_write", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
         "tool_ms", "tps", "est", "session_req_n")
 
 MIN_GEN_S = 0.3              # 生成段短于它就不当分母（毫秒级的段除出来是噪音）
@@ -121,7 +121,9 @@ DISCOVER_EVERY = 0           # 每次都全量发现（实测四家合计 < 70 m
 #: 4 = agy 整包响应退估值（2026-10-22，streaming 占比 + 上限）；同上，全量重解一次。
 #: 5 = 三方评审 t/s 修正（2026-10-22）：Codex 首字取开头连续推理项的**最后一项** · Claude span 整包守卫 ·
 #:     Grok 分母含首字 ⇒ 估值 · agy 缺 ttft ⇒ 估值。速度字段整组替换（见 `_merge`），旧数不复活。
-CUR_V = 5
+#: 6 = 2026-10-23 token 审查：记录加 `cache_write`（界面「今日 token」要跟缓存口径走）· Claude 有 span 时
+#:     输出取 span 与 transcript 的较大值（流式中途值）。全量重解一次。
+CUR_V = 6
 #: 速度相关字段：同一次计算的产物，必须整组替换 —— 新算法主动给 null（判不出）时，不许留着旧算法的数。
 SPEED_KEYS = ("ttft_ms", "gen_ms", "total_ms", "tps", "est")
 #: ★ 判停的兜底窗口：轮次开着、但这么久没写过文件 ⇒ 当它停了（崩溃 / 被杀 / Ctrl-C 没来得及写结束标记）。
@@ -426,7 +428,7 @@ def _codex_consume(path, lines, fresh, state, horizon, emit):
                 "platform": "codex", "t_start": t0, "t_end": state["last"] or ts, "model": state["model"],
                 "source": "exec" if state["src"] == "exec" else "交互",
                 "session": state["sess"], "session_title": state["title"] or _short(state["sess"]),
-                "account": None, "input": _i0(u, "input_tokens"), "cached": _i0(u, "cached_input_tokens"),
+                "account": None, "input": _i0(u, "input_tokens"), "cached": _i0(u, "cached_input_tokens"), "cache_write": 0,
                 "output": _i0(u, "output_tokens"), "reasoning": _int(u.get("reasoning_output_tokens")),
                 "tool_ms": (state["tool"] if state["turn_n"] else None),
                 "session_req_n": state["n"],
@@ -684,6 +686,8 @@ def _otel_consume(lines, spans, horizon, touched):
         t1 = r.get("t_end")
         if not isinstance(rid, str) or not isinstance(t1, (int, float)) or t1 < horizon:
             continue
+        if not any(_i0(r, k) for k in ("input_tokens", "cache_read_tokens", "cache_creation_tokens", "output_tokens")):
+            continue                                   # 四项全 0 的 span 跳过（同 scan.py）
         spans[rid] = {"t0": r.get("t_start"), "t1": t1, "ttft": _int(r.get("ttft_ms")),
                       "dur": _int(r.get("duration_ms")), "i": _i0(r, "input_tokens"),
                       "cr": _i0(r, "cache_read_tokens"), "cw": _i0(r, "cache_creation_tokens"),
@@ -700,6 +704,9 @@ def _claude_rec(rid, t, sp, span_n):
             "reasoning": (t or {}).get("th"), "tool_ms": None}
     if sp:
         i, cr, cw, out = sp["i"], sp["cr"], sp["cw"], sp["out"]
+        # ★ span 的 output 偶尔是流式中途值（2026-10-23 审查：共有的 6,646 条里 24 条比 transcript 低，合计 −16,607）
+        #   ⇒ 取两边较大的。transcript 的最后一行是 `stop_reason` 非空那行，不会比真值大。
+        out = max(out, (t or {}).get("out") or 0)
         dur, ttft = sp["dur"], sp["ttft"]
         gen = (dur - ttft) if (dur is not None and ttft is not None and dur >= ttft) else None
         # ★ 分子是**全部输出（含 thinking）**：实测 thinking 在首字之后流式产出 —— 带 thinking > 50% 的 88 条
@@ -727,7 +734,7 @@ def _claude_rec(rid, t, sp, span_n):
                     total_ms=_ms(total) if total >= 0 else None, tps=_div(out, total), est=True,
                     session=t["sess"], session_title=t["title"] or _short(t["sess"]),
                     session_req_n=t["n"])
-    base.update(input=i + cr + cw, cached=cr, output=out)
+    base.update(input=i + cr + cw, cached=cr, cache_write=cw, output=out)
     return base
 
 
@@ -975,7 +982,7 @@ def _agy_db(path, ent, horizon, emit):
             continue
         emit({"key": "agy:%s:%d" % (conv, gidx), "_file": path, "platform": "agy", "t_start": created, "t_end": t_end,
               "model": model, "source": None, "session": conv, "session_title": stt["title"],
-              "account": None, "input": i_tok + cr, "cached": cr, "output": out,
+              "account": None, "input": i_tok + cr, "cached": cr, "cache_write": 0, "output": out,
               "reasoning": think if (_pb1(u, 9) is not None) else None,
               "ttft_ms": _ms(ttft), "gen_ms": _ms(strm), "total_ms": _ms(t_end - created),
               "tool_ms": int(round(tool * 1000)) if stt["n"] > 1 else None,
@@ -1096,11 +1103,11 @@ def _grok_updates(lines, fresh, state, sess, title, ev, horizon, emit):
         model = max(mu, key=lambda m: _i0(mu[m], "outputTokens")) if mu else None
         out = _i0(u, "outputTokens")
         pid = up.get("prompt_id") if isinstance(up.get("prompt_id"), str) else "%s:%d" % (sess, state["n"])
-        if t_end < horizon:
-            continue
+        if t_end < horizon or not (_i0(u, "inputTokens") or out):
+            continue                                   # 0 token 的轮次不是一次调用（`_has_tokens`）
         emit({"key": "grok:" + pid, "_file": sess, "platform": "grok", "t_start": t0, "t_end": t_end, "model": model,
               "source": "grok CLI", "session": sess, "session_title": title, "account": "单号",
-              "input": _i0(u, "inputTokens"), "cached": _i0(u, "cachedReadTokens"), "output": out,
+              "input": _i0(u, "inputTokens"), "cached": _i0(u, "cachedReadTokens"), "cache_write": 0, "output": out,
               "reasoning": _int(u.get("reasoningTokens")), "ttft_ms": ttft,
               "gen_ms": (api - ttft) if (api is not None and ttft is not None and api >= ttft) else None,
               "total_ms": el, "tool_ms": turn["tool"] if turn else None,
@@ -1421,8 +1428,22 @@ def _day_stats(rs):
     #   Gemini 87% 是整包行，混进来首字中位成了 10.3 s —— 那是整包总耗时，不是首字等待。
     ttft = [r["ttft_ms"] / 1000.0 for r in rs if r.get("ttft_ms") is not None and not r.get("est")]
     return {"n": len(rs), "avg_tps": round(_median(tps), 1) if tps else None,
-            "ttft_median_s": round(_median(ttft), 2) if ttft else None,
-            "tokens": sum((r.get("input") or 0) + (r.get("output") or 0) for r in rs)}
+            "ttft_median_s": round(_median(ttft), 2) if ttft else None, **_tok_sums(rs)}
+
+
+def _tok_sums(rs):
+    """`tokens` = 输入（含缓存读 / 写）+ 输出；另给缓存读、缓存写两项，界面按「缓存口径」设置减掉
+    （2026-10-23 用户「跟设置走」；口径的唯一定义在前端 `traffic.ts::countedClasses`，这里只出原料）。
+    ⚠️ CUR_V 6 之前的旧记录没有 `cache_write` ⇒ 当 0（Claude 那几条在「不含缓存」档会偏大，重解后消失）。"""
+    return {"tokens": sum((r.get("input") or 0) + (r.get("output") or 0) for r in rs),
+            "cache_read": sum(r.get("cached") or 0 for r in rs),
+            "cache_write": sum(r.get("cache_write") or 0 for r in rs)}
+
+
+def _has_tokens(r):
+    """四项全 0 的记录不是一次「调用」（2026-10-23 token 审查：10-22 Claude 5 条 span、grok 1/1 轮都是 0 token），
+    与 `scan.py` 同口径（它在解析时就跳过）。账本只增不减，旧行还在盘上 ⇒ 出口处统一滤。"""
+    return any(r.get(k) for k in ("input", "cached", "output", "reasoning"))
 
 
 def build_json(now, days=2, rt=None):
@@ -1433,7 +1454,7 @@ def build_json(now, days=2, rt=None):
         recs, cur, _seen = update(now, days, rt, join=True)
     finally:
         st.unlock()
-    rows = sorted((_whitelist(r) for r in recs.values()), key=lambda r: -(r["t_end"] or 0))
+    rows = sorted((_whitelist(r) for r in recs.values() if _has_tokens(r)), key=lambda r: -(r["t_end"] or 0))
     # ★ 只在 OTel 里有的 Claude 调用（后台调用，transcript 不写）拿不到工作目录，标题退成会话短 id。
     #   同一会话别的行有真标题就借过来（全方面评审 §5「Claude 标题是 UUID」：本机 2 天 760 行，
     #   同一会话都另有带标题的行）。
@@ -1480,6 +1501,7 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
     finally:
         st.unlock()
     t_today = _local_midnight(now, 0)
+    recs = {k: r for k, r in recs.items() if _has_tokens(r)}
     today = [r for r in recs.values() if r["t_end"] >= t_today]
     plats = {}
     for p in PLATFORMS:
@@ -1492,6 +1514,7 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
             if not sid:
                 continue
             s = sess.setdefault(sid, {"id": sid, "title": title or _short(sid), "tps": None, "tokens": 0,
+                                      "cache_read": 0, "cache_write": 0,
                                       "last_t_end": None, "active": False, "_last": None})
             if _turn_open(ent) and mt >= now - fallback_secs:
                 s["active"] = True
@@ -1500,11 +1523,14 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
                 continue
             s = sess.setdefault(r["session"], {"id": r["session"], "title": r.get("session_title")
                                                or _short(r["session"]), "tps": None, "tokens": 0,
+                                               "cache_read": 0, "cache_write": 0,
                                                "last_t_end": None, "active": False, "_last": None})
             tt = r.get("session_title")              # 先来的行可能只有短 id（OTel 旁路调用）⇒ 后面有真标题就换上
             if tt and tt != _short(r["session"]) and s["title"] in (None, _short(r["session"])):
                 s["title"] = tt
             s["tokens"] += (r.get("input") or 0) + (r.get("output") or 0)
+            s["cache_read"] += r.get("cached") or 0
+            s["cache_write"] += r.get("cache_write") or 0
             if s["_last"] is None or r["t_end"] > s["_last"]["t_end"]:
                 s["_last"] = r
         # ★ 速度的「最近一条实测」不按自然日切（用户 2026-10-23「Gemini 经常 — t/s」）：只看今天的话，过了午夜、
@@ -1545,18 +1571,20 @@ def build_live(now, fallback_secs=FALLBACK_SECS, rt=None):
         act = [s for s in lst if s["active"]]
         tv = [s["tps"] for s in act if s["tps"] is not None]
         # ★ 只在同一个 AI 内相加；在跑但还没完成第一条响应的会话 tps 是 null，不计。
+        tp = _tok_sums([r for r in today if r["platform"] == p])
         plats[p] = {"running": bool(act), "n_sessions": len(act),
                     "avg_tps": _day_stats([r for r in today if r["platform"] == p])["avg_tps"],
                     "tps": round(sum(tv), 1) if tv else None,
-                    "tokens_today": sum((r.get("input") or 0) + (r.get("output") or 0)
-                                        for r in today if r["platform"] == p),
+                    "tokens_today": tp["tokens"], "cache_read_today": tp["cache_read"],
+                    "cache_write_today": tp["cache_write"],
                     "sessions": lst[:20]}
     ds = _day_stats(today)
     # ★ 「今日 · 均」不跨 AI（2026-10-22 Opus 评审：四家口径不同，混在一起取中位违反「任何界面不跨 AI 合计」）：
     #   今天只有一家有实测 ⇒ 就是那一家的；两家以上 ⇒ null，界面不显示「均」，各家的均速在 `platforms[p].avg_tps`。
     meas_p = [p for p in PLATFORMS if plats[p]["avg_tps"] is not None]
     out = {"v": V, "generated_at": int(now), **_meta(cur), "platforms": plats,
-           "today": {"tokens": ds["tokens"], "avg_tps": plats[meas_p[0]]["avg_tps"] if len(meas_p) == 1 else None,
+           "today": {"tokens": ds["tokens"], "cache_read": ds["cache_read"], "cache_write": ds["cache_write"],
+                     "avg_tps": plats[meas_p[0]]["avg_tps"] if len(meas_p) == 1 else None,
                      "n": ds["n"]}}
     try:
         _atomic_write(Path(rt["ledger"]) / ".live.json", json.dumps(out, ensure_ascii=False))

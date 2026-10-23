@@ -31,7 +31,7 @@ NOW = time.time()
 #: ★ 契约正本（PLAN §2.1 的 `requests[]` 形状）抄在这里**是刻意的**：拿 `RQ.KEYS` 自己比自己，
 #:   往白名单里混一个内部键照样绿（变异实测）。改契约 = 两边一起改，并通知前端。
 CONTRACT_KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "session_title",
-                 "account", "input", "cached", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
+                 "account", "input", "cached", "cache_write", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
                  "tool_ms", "tps", "est", "session_req_n")
 N_FIXTURE = 9           # codex 2 + claude 4（主会话 2 + 子 agent 2）+ agy 2 + grok 1
 T0 = NOW - 900          # 夹具全部落在「15 分钟前」附近：一定在 2 天窗口内
@@ -429,6 +429,80 @@ class FailureKeepsOldValues(Base):
         self.assertTrue(ok["ok"])
         self.assertIsNone(ok["stale_since"])
         self.assertIn("codex:resp_D", self.by_key(ok), "失败期间写下的那条恢复后要补上（游标没前进）")
+
+
+class ZeroTokenRowsAreNotCalls(Base):
+    """2026-10-23 token 审查：四项全 0 的 span / grok 轮次不是一次调用，不进次数与均速（同 scan.py）。"""
+
+    def test_zero_span_and_zero_grok_turn_are_skipped(self):
+        with open(self.tmp / "otel" / time.strftime("%Y-%m.jsonl"), "a") as fh:
+            fh.write(json.dumps({"t_start": T0 + 40, "t_end": T0 + 41, "request_id": "req_zero",
+                                 "session.id": self.csid, "model": "claude-opus-5-5", "ttft_ms": 0,
+                                 "duration_ms": 900, "input_tokens": 0, "output_tokens": 0,
+                                 "cache_read_tokens": 0, "cache_creation_tokens": 0}) + "\n")
+        d = self.tmp / "grok" / "%2Fx%2Fproj-delta" / "01a14e2e-d73e-7e22-80d4-6152bdf3e025"
+        zero = {"timestamp": int(T0 + 60), "method": "_x.ai/session/update", "params": {
+            "sessionId": d.name, "_meta": {"agentTimestampMs": int((T0 + 60) * 1000)},
+            "update": {"sessionUpdate": "turn_completed", "prompt_id": "p0", "elapsed_ms": 100,
+                       "usage": {"inputTokens": 0, "outputTokens": 0, "apiDurationMs": 0}}}}
+        with open(d / "updates.jsonl", "a") as fh:
+            fh.write(json.dumps(zero) + "\n")
+        r = self.by_key(self.run_json())
+        self.assertIn("grok:p1", r, "已知阳性：有 token 的那一轮仍在")
+        self.assertNotIn("grok:p0", r)
+        self.assertFalse(any(k.endswith("req_zero") for k in r), "0 token 的 span 不该自成一条")
+        keys = {x["key"] for x in self.ledger_lines()}
+        self.assertIn("grok:p1", keys)
+        self.assertFalse({"grok:p0"} & keys or any(k.endswith("req_zero") for k in keys),
+                         "解析时就跳过，0 行不进只增账本")
+
+    def test_old_zero_rows_already_in_the_ledger_are_filtered_on_output(self):
+        self.run_json()
+        n0 = RQ.build_live(time.time())["today"]["n"]
+        rec = dict(next(x for x in self.ledger_lines() if x["key"] == "grok:p1"))
+        rec.update(key="grok:old-zero", input=0, cached=0, output=0, reasoning=0,
+                   t_end=max(time.time() - 60, RQ._local_midnight(time.time(), 0) + 1))
+        with open(next((self.tmp / "ledger").glob("????-??.jsonl")), "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        snap = self.tmp / "ledger" / ".window.json"
+        if snap.exists():
+            w = json.loads(snap.read_text())
+            w["records"]["grok:old-zero"] = rec
+            snap.write_text(json.dumps(w))
+        self.assertNotIn("grok:old-zero", self.by_key(self.run_json()))
+        self.assertEqual(RQ.build_live(time.time())["today"]["n"], n0, "托盘「今日 N 次」不数 0 行")
+
+
+class CacheClassesForTheCacheModeSetting(Base):
+    """2026-10-23 用户：界面上的「今日 token」跟「缓存口径」设置走 ⇒ 后端出缓存读 / 写两项原料。"""
+
+    def test_records_and_aggregates_carry_cache_read_and_write(self):
+        r = self.by_key(self.run_json())
+        c = r["claude:req_1"]
+        self.assertEqual((c["input"], c["cached"], c["cache_write"]), (10 + 5000 + 200, 5000, 200))
+        self.assertEqual(r["codex:resp_A" + self.sid[:4]]["cache_write"], 0)
+        live = RQ.build_live(time.time())
+        recs = [x for x in r.values() if x["t_end"] >= RQ._local_midnight(time.time(), 0)]
+        self.assertTrue(recs, "夹具得落在今天（T0 = 15 分钟前；刚过午夜跑会空）")
+        self.assertEqual(live["today"]["cache_read"], sum(x["cached"] or 0 for x in recs))
+        self.assertEqual(live["today"]["cache_write"], sum(x["cache_write"] or 0 for x in recs))
+        cl = live["platforms"]["claude"]
+        self.assertEqual(cl["cache_write_today"], sum(x["cache_write"] for x in recs if x["platform"] == "claude"))
+        self.assertGreater(cl["cache_write_today"], 0)
+        ses = {s["id"]: s for s in cl["sessions"]}
+        self.assertEqual(ses[self.csid]["cache_read"],
+                         sum(x["cached"] for x in recs if x["platform"] == "claude" and x["session"] == self.csid))
+
+
+class ClaudeOutputTakesTheLargerOfSpanAndTranscript(Base):
+    """2026-10-23 审查：span 的 output 偶尔是流式中途值（6,646 条共有请求里 24 条偏低）⇒ 取两边较大的。"""
+
+    def test_a_low_span_output_is_lifted_to_the_transcript_value(self):
+        (self.tmp / "otel" / time.strftime("%Y-%m.jsonl")).write_text(
+            otel_span("req_1", self.csid, T0 + 0.5, T0 + 5, 1500, 4500, 120))   # transcript 末行是 400
+        r = self.by_key(self.run_json())
+        self.assertEqual(r["claude:req_1"]["output"], 400)
+        self.assertFalse(r["claude:req_1"]["est"], "仍是 span 实测那条")
 
 
 class TheLedgerHoldsOnlyWhitelistedKeys(Base):

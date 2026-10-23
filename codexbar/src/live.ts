@@ -32,6 +32,9 @@ export interface LiveSession {
   title: string;
   tps: number | null;
   tokens: number;
+  /** `tokens` 里的缓存读 / 缓存写（2026-10-23 起后端给；旧快照没有 ⇒ 当 0）。 */
+  cache_read?: number;
+  cache_write?: number;
   last_t_end: number | null;
   active: boolean;
 }
@@ -41,6 +44,8 @@ export interface LivePlatform {
   n_sessions: number;
   tps: number | null;
   tokens_today: number;
+  cache_read_today?: number;
+  cache_write_today?: number;
   sessions: LiveSession[];
 }
 
@@ -48,7 +53,38 @@ export interface LiveSnapshot {
   v: number;
   generated_at: number;
   platforms: Partial<Record<PlatformKey, LivePlatform>>;
-  today: { tokens: number; avg_tps: number | null; n: number };
+  today: { tokens: number; avg_tps: number | null; n: number; cache_read?: number; cache_write?: number };
+}
+
+/** 与 `traffic.ts::CACHE_MODES` 同一组值（本模块零 import，不能引它）。 */
+export type LiveCacheMode = "full" | "noRead" | "none";
+
+/** 一个「输入（含缓存读 / 写）+ 输出」总数按缓存口径扣掉对应的类。口径定义同 `traffic.ts::cacheModeDesc`。 */
+export function tokByMode(full: number, cr: number | undefined, cw: number | undefined, mode: LiveCacheMode): number {
+  if (mode === "full") return full;
+  const drop = (cr || 0) + (mode === "none" ? cw || 0 : 0);
+  return Math.max(0, full - drop);
+}
+
+/**
+ * ★ 按缓存口径重塑实时快照（用户 2026-10-23「今日 token 跟设置走」）。只在 `useLive` 出口做一次 ——
+ *   悬停面板 / 菜单栏在跑条 / 刘海 / 总览卡片读到的 `tokens` / `tokens_today` / `today.tokens` 全部跟着变，
+ *   与 `useTraffic` 的 `applyCacheMode` 同一个道理（逐处改必然漏）。`full` 返回原引用。
+ */
+export function applyLiveCacheMode(snap: LiveSnapshot | null, mode: LiveCacheMode): LiveSnapshot | null {
+  if (!snap || mode === "full") return snap;
+  const platforms: LiveSnapshot["platforms"] = {};
+  for (const k of Object.keys(snap.platforms) as PlatformKey[]) {
+    const p = snap.platforms[k];
+    if (!p) continue;
+    platforms[k] = {
+      ...p,
+      tokens_today: tokByMode(p.tokens_today || 0, p.cache_read_today, p.cache_write_today, mode),
+      sessions: (p.sessions ?? []).map((s) => ({ ...s, tokens: tokByMode(s.tokens || 0, s.cache_read, s.cache_write, mode) })),
+    };
+  }
+  const t = snap.today;
+  return { ...snap, platforms, today: { ...t, tokens: tokByMode(t.tokens, t.cache_read, t.cache_write, mode) } };
 }
 
 /** 后端给的 JSON 字符串 → 快照；形状不对返回 null（「读不到」，不是「没人在跑」）。 */
@@ -69,6 +105,8 @@ export function parseLive(raw: unknown): LiveSnapshot | null {
       tokens: typeof today.tokens === "number" ? today.tokens : 0,
       avg_tps: typeof today.avg_tps === "number" ? today.avg_tps : null,
       n: typeof today.n === "number" ? today.n : 0,
+      cache_read: typeof today.cache_read === "number" ? today.cache_read : 0,
+      cache_write: typeof today.cache_write === "number" ? today.cache_write : 0,
     },
   };
 }

@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import urllib.request
 from html import unescape
@@ -288,7 +289,16 @@ class TheBundleRenders(unittest.TestCase):
         for name in ("Codex", "Claude", "Gemini", "Grok"):
             self.assertIn(name, t)
         self.assertNotRegex(t, r"\bagy\b", "显示名叫 Gemini，agy 不作名字")
-        self.assertEqual(text(element(h, "data-hover-foot")), "今日 48.7M · 均 58.4 t/s 请求页 →")
+        # ★ 「今日」= 用量快照（全部 AI、按缓存口径）的今日合计，不再是实时账本的 48.7M（2026-10-23 token 审查 #3，
+        #   与菜单栏今日 Tab 同一个数）。期望从 harness 用的同一份夹具现算，不写死。
+        import sys as _sys
+        _sys.path.insert(0, str(ROOT / "codexbar" / "uishot"))
+        import fixture_tool as _F
+        day = time.strftime("%Y-%m-%d")
+        tot = sum((pl["days"].get(day) or {}).get("total", 0) for pl in _F.load_traffic()["platforms"].values())
+        self.assertGreater(tot, 0, "已知阳性：夹具今天得有用量")
+        want = "%.1fM" % (tot / 1e6) if tot >= 1e6 else "%dk" % round(tot / 1e3)
+        self.assertEqual(text(element(h, "data-hover-foot")), "今日 %s · 均 58.4 t/s 请求页 →" % want)
         self.assertEqual(re.findall(r"data-hover-n[^>]*>×(\d+)<", h), ["2", "3"], "×N 只给多会话的行")
 
     def test_no_response_dash_and_no_approx(self):

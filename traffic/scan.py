@@ -88,7 +88,9 @@ CACHE = _STORE / ".traffic-cache.json"
 CACHE_V = 1
 # ★ 改任何 _scan_* 的解析逻辑(改变 rows 里存什么/怎么算)必须 +1,否则那些此生不再变 mtime 的文件
 #   会永远沿用旧结果,产出一份新旧混血、无法察觉的数据集。
-PARSER_V = 13         # +1 于 2026-10-19:Claude row 多第 10 位 = requestId(与 OTel 账本对账去重)
+PARSER_V = 15         # +1 于 2026-10-23:长上下文档(row[10] 提示词) · Grok 自报费用(row[11]) · `[1m]` 归一 · Codex 首个 turn_context 前的行回填模型
+# 14 = 2026-10-23:agy 按生成结束时刻(steps.metadata f7)分日,与 requests.py / 其余几家一致
+# 13         # +1 于 2026-10-19:Claude row 多第 10 位 = requestId(与 OTel 账本对账去重)
 #                       ★ 必须 +1:旧缓存里的 Claude 行没有 requestId,对账集合会是空的 ⇒ OTel 整本双计。
 # PARSER_V = 12       # 2026-10-15:Claude row 多第 9 位 = 缓存写里的 1h 档份额(按 2× 输入价计)
 # PARSER_V = 11      # 2026-09-10:agy 时间戳改用 last_step_index 精确 join(4.4% 的记录换了日子)
@@ -102,10 +104,35 @@ PARSER_V = 13         # +1 于 2026-10-19:Claude row 多第 10 位 = requestId(�
                       # +4 于 2026-08-19:agy 模型名归一改了(各家 id 点/横线惯例 + Sonnet 例外)
                       # +5 于 2026-08-22:Claude 走增量解析(缓存多存 off/anchors 两个字段)
 
-_DATED = re.compile(r"-\d{8}$")          # claude-haiku-4-5-20251001 -> claude-haiku-4-5
+# claude-haiku-4-5-20251001 -> claude-haiku-4-5 · claude-opus-5-5[1m] -> claude-opus-5-5
+#   ★ `[1m]` 是 Claude Code 的 1M 上下文开关，不是另一个模型：4.6 起 1M 窗口按标准价（官方定价页 2026-10-23），
+#     不归一会在模型表里多出一行、价格走兜底（2026-10-23 token 审查）。
+_DATED = re.compile(r"(-\d{8}|\[1m\])$")
+
+#: ★ 长上下文档：单次请求的提示词（输入 + 缓存读 + 缓存写）**超过**这个数，整单按高档计
+#:   （单价在 `codexbar/src/rates.ts` 各模型的 `long`；两边由 `tests/test_long_context_tier.py` 对齐）。
+#:   来源 2026-10-23：OpenAI「>272K input tokens」· Gemini 3.1 Pro「prompts > 200k」·
+#:   Claude Haiku 5.5「prompts over 100,000 tokens … a request over the threshold pays the higher prices」。
+#:   ★ Claude 其余模型（4.6 起）1M 全窗口标准价 ⇒ **不在表里**；Opus 5.5 有 88.7% 的输入落在 >200K 的请求，按标准价是对的。
+#:   ⚠️ Grok（≥200k 整单 2×）不在表里：grok 的一条记录是一**轮**（实测 130 轮 = 1,580 次模型调用），
+#:     看不到单次提示词 ⇒ 改用 grok 自报的实扣费用（row[11]，见 `_scan_grok_file`）。
+LONG_CTX = {m: 272_000 for m in ("gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5")}
+LONG_CTX.update({m: 200_000 for m in ("gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low")})
+LONG_CTX["claude-haiku-5-5"] = 100_000
+LONG_CTX_MIN = min(LONG_CTX.values())
+
+
+def _with_ctx(row, ctx):
+    """提示词超过最低的长上下文门槛才记 row[10]（其余行形状不变；缺的尾位补 None）。"""
+    if ctx > LONG_CTX_MIN:
+        row += [None] * (10 - len(row))
+        row.append(ctx)
+    return row
 
 # rows 元素: [epoch, model, uncached_in, cache_read, cache_write, output]
 #   可选尾部: [6] 平台键(宿主源) · [7] model_provider(codex) · [8] cache_write 里 1h 档的份额(Claude)
+#             · [9] requestId(Claude) · [10] 本次请求的提示词 token(只在 > `LONG_CTX_MIN` 时有)
+#             · [11] 自报的实扣美元(Grok `costUsdTicks` ÷ 1e10)
 #             · [9] requestId(Claude,只用于和 OTel 账本去重,不进聚合)
 #   ★ [8] 是 cache_write 的**子集**不是第五类 —— 只决定价格(1h 档 2× 输入、5m 档 1.25×),不进 total。
 IDX_EPOCH, IDX_MODEL, IDX_IN, IDX_CR, IDX_CW, IDX_OUT = range(6)
@@ -309,7 +336,7 @@ def _scan_claude_lines(lines):
             row += [None, None, h1, rid]
         elif h1:
             row += [None, None, h1]
-        rows[mid] = row
+        rows[mid] = _with_ctx(row, i + cr + cw)
     return rows
 
 
@@ -334,8 +361,9 @@ def _scan_otel_lines(lines):
     """OTel 账本行 -> {request_id: row}。逐行无状态（可增量）。
 
     ★ 用 `t_end`（响应结束）当时刻，分桶交给聚合层（同 transcript：只存 epoch）。
-    ★ 缓存写没有 1h/5m 拆分 ⇒ 不带第 9 位，按 5m 档计价。这是账本的事实限制：
-      transcript 里同一类调用实测全是 1h 档，所以这部分费用偏低（约 cache_write × 0.75 × 输入价）。
+    ★ 缓存写没有 1h/5m 拆分 ⇒ 不带第 9 位，按 5m 档计价（下限）。这是账本的事实限制。
+      ⚠️ 2026-10-23 更正旧注释「同一类调用实测全是 1h」：90 天实测主会话 1h、子 agent 5m（288.1M，约 26%），
+      OTel 补进来的后台调用（`agent_summary` 等）是哪一档没有数据，偏低多少说不准。
     ★ 不按 `success` 筛：本机 2026-10-19 账本 2164 行 `success` 全为 true、`attempt` 全为 1。
       失败的请求若带了 token，那是服务端真处理过的量；四项全 0 的照 transcript 规矩跳过。
       重试（attempt>1）每次有自己的 request_id，各算一次真调用。
@@ -356,7 +384,8 @@ def _scan_otel_lines(lines):
         if not (i or cr or cw or out):
             continue
         model = r.get("model")
-        rows[rid] = [t1, _DATED.sub("", model if isinstance(model, str) else "unknown"), i, cr, cw, out]
+        rows[rid] = _with_ctx([t1, _DATED.sub("", model if isinstance(model, str) else "unknown"), i, cr, cw, out],
+                              i + cr + cw)
     return rows
 
 
@@ -494,6 +523,13 @@ def _scan_codex_file(path):
                 if isinstance(d, dict) and d.get("type") == "turn_context":
                     m = (d.get("payload") or {}).get("model")
                     if isinstance(m, str) and m:
+                        if cur is None:
+                            # ★ 回填（2026-10-23 token 审查：Codex `unknown` 37.4M，36 个文件全是 `codex exec`
+                            #   0.146/0.147）：它在第一条 `turn_context` **之前**就写了 token_count。同一个会话，
+                            #   归给随后出现的第一个模型；整份文件都没有模型才留 `unknown`。
+                            for r in rows:
+                                if r[1] == "unknown":
+                                    r[1] = m
                         cur = m
                 continue
             if '"token_count"' not in line:
@@ -526,9 +562,9 @@ def _scan_codex_file(path):
             cw = _num(lt, "cache_write_input_tokens")      # 实测该端点恒 0
             # ★ 第 7 位 = 平台键(恒 "codex"),第 8 位 = **provider**。
             #   不占第 7 位:那一位是宿主型源(OpenClaw)用来路由平台的,语义完全不同。
-            rows.append([ep, cur or "unknown",
-                         max(0, raw_in - cr - cw), cr, cw, _num(lt, "output_tokens"),
-                         "codex", cur_provider or "unknown"])
+            rows.append(_with_ctx([ep, cur or "unknown",
+                                   max(0, raw_in - cr - cw), cr, cw, _num(lt, "output_tokens"),
+                                   "codex", cur_provider or "unknown"], raw_in))
     return rows
 
 
@@ -567,8 +603,14 @@ def _scan_grok_file(path):
                 out = _num(mv, "outputTokens")
                 if not (raw_in or out):
                     continue
-                rows.append([int(ep), model if isinstance(model, str) else "unknown",
-                             max(0, raw_in - cr), cr, 0, out])
+                row = [int(ep), model if isinstance(model, str) else "unknown", max(0, raw_in - cr), cr, 0, out]
+                # ★ grok 自报的实扣费用（xAI 文档：`cost_in_usd_ticks` = 这次请求实际扣的钱，1 USD = 1e10 tick）。
+                #   2026-10-23 审查：本机 130 轮自报 $47.6，按牌价估 $153.5（3.2×）—— 一轮含多次调用、长上下文
+                #   整单翻倍，牌价估算对不上，最小二乘拟合也得不出一组正的单价。有就用它，没有才按牌价。
+                ticks = mv.get("costUsdTicks")
+                if isinstance(ticks, (int, float)) and not isinstance(ticks, bool) and ticks >= 0:
+                    row += [None] * (11 - len(row)) + [ticks / 1e10]
+                rows.append(row)
     return rows
 
 
@@ -1042,7 +1084,7 @@ def _agy_rows(db_rows):
     out, seen = [], set()
     for ts, conv, model, i_tok, cr_tok, o_tok in db_rows:
         seen.add(conv)
-        out.append([int(ts), _agy_canon(model), i_tok, cr_tok, 0, o_tok])
+        out.append(_with_ctx([int(ts), _agy_canon(model), i_tok, cr_tok, 0, o_tok], i_tok + cr_tok))
     # 账本是**会话内累计值**，要按会话差分（见 `_agy_deltas`）。只取 db 没有的那些会话。
     led = []
     try:
@@ -1199,12 +1241,16 @@ def _scan_agy_db(path):
         def _step_ts(i):
             if not (0 <= i < len(steps)) or not steps[i][1]:
                 return None
+            # ★ 先取 `f7` finished_generating_at（生成结束），没有才退回 `f1` created_at（2026-10-23 token 审查：
+            #   其余几家都按**结束**时刻分日、`requests.py` 的 agy 也按结束；只有这里按开始 ⇒ 跨午夜的请求两边分到不同的天）。
             try:
-                f1 = _pb(steps[i][1]).get(1)
-                if f1 and isinstance(f1[0], (bytes, bytearray)):
-                    v = _pb(f1[0]).get(1)
-                    if v and isinstance(v[0], int) and 1.6e9 < v[0] < 4e9:
-                        return v[0]
+                md = _pb(steps[i][1])
+                for fno in (7, 1):
+                    f = md.get(fno)
+                    if f and isinstance(f[0], (bytes, bytearray)):
+                        v = _pb(f[0]).get(1)
+                        if v and isinstance(v[0], int) and 1.6e9 < v[0] < 4e9:
+                            return v[0]
             except Exception:
                 pass
             return None
@@ -1580,7 +1626,7 @@ def _blank():
             "total": 0, "rounds": 0, "models": {}}
 
 
-def _add(b, model, i, cr, cw, out, cw1h=0):
+def _add(b, model, i, cr, cw, out, cw1h=0, ctx=None, usd=None):
     t = i + cr + cw + out
     b["uncached_in"] += i; b["cache_read"] += cr; b["cache_write"] += cw
     b["output"] += out; b["total"] += t; b["rounds"] += 1
@@ -1594,6 +1640,22 @@ def _add(b, model, i, cr, cw, out, cw1h=0):
     if cw1h:
         b["cache_write_1h"] = b.get("cache_write_1h", 0) + cw1h
         m["cache_write_1h"] = m.get("cache_write_1h", 0) + cw1h
+    # ★ 长上下文 / 自报费用：模型桶里的**子集**（同 1h 档，只决定价格、不进 total），只在有时才写键。
+    #   `long` = 超过本模型门槛的那些请求的四类；`rep` = 带自报费用的那些行的四类 + `usd`。
+    lim = LONG_CTX.get(model)
+    if lim and ctx and ctx > lim:
+        _sub(m, "long", i, cr, cw, out)
+    if usd is not None:
+        r = _sub(m, "rep", i, cr, cw, out)
+        r["usd"] = r.get("usd", 0) + usd
+
+
+def _sub(m, key, i, cr, cw, out):
+    s = m.get(key)
+    if s is None:
+        s = m[key] = {"uncached_in": 0, "cache_read": 0, "cache_write": 0, "output": 0}
+    s["uncached_in"] += i; s["cache_read"] += cr; s["cache_write"] += cw; s["output"] += out
+    return s
 
 
 #: 往回**几天**保留逐小时桶。
@@ -1773,6 +1835,8 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
             #   AI 平台 —— 宿主自己不作为平台出现。普通源没这一位,就归自己。
             pk = (row[6] if len(row) > 6 else None) or key   # Claude 带第 9 位时这一位是 None
             cw1h = row[8] if len(row) > 8 else 0
+            ctx = row[10] if len(row) > 10 else None
+            usd = row[11] if len(row) > 11 else None
             # ★ `setdefault` **必须在窗口判断之前**。我一度把 `continue` 提前,以为"窗口外的行
             #   反正出表时会被丢弃、跳过等价" —— 错了:只有窗口外数据的平台会因此**整家从输出里
             #   消失**(旧行为是输出一列全零桶)。实测 `platform_keys` 由 `['agy']` 变成 `[]`。
@@ -1785,7 +1849,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
             b = days_b.get(d)
             if b is None:
                 b = days_b[d] = _blank()
-            _add(b, model, i, cr, cw, o, cw1h)
+            _add(b, model, i, cr, cw, o, cw1h, ctx, usd)
             # ★★ **分账不动总量,而且必须与 `days` 同窗口。**
             #    `by_provider` 是旁挂的:30+ 处读 `b.total` 的地方一个都不用迁,
             #    而"这些 token 走的是哪条路由"有了地方放。
@@ -1801,7 +1865,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 pv = by_provider.setdefault(pk, {}).setdefault(prov, {}).get(d)
                 if pv is None:
                     pv = by_provider[pk][prov][d] = _blank()
-                _add(pv, model, i, cr, cw, o, cw1h)
+                _add(pv, model, i, cr, cw, o, cw1h, ctx, usd)
             # ★ 逐小时桶：最近 `HOURLY_DAYS` 天都留，外加调用方点名的那一天（`hours_day`）。
             #   以前只算今天（`di == last_di`），于是选中昨天只能画出一根日柱。
             #   ⚠️ 判据用**日期标签**而不是 `di` 的算术：`day_labels` 是用真日历逐日
@@ -1812,7 +1876,7 @@ def scan(days=90, use_cache=True, only=None, exclude=None, hours_day=None):
                 hb = hours_b.get(h)
                 if hb is None:
                     hb = hours_b[h] = _blank()
-                _add(hb, model, i, cr, cw, o, cw1h)
+                _add(hb, model, i, cr, cw, o, cw1h, ctx, usd)
 
         # ★ 按**自然日窗口**切,不是「最后 N 个有数据的日期」。后者是新旧扫描器共有的缺陷:
         # 实测 mtime 窗口内 codex 有 113(UTC)/116(本地) 个不同日期、最早回到 2026-04-07,

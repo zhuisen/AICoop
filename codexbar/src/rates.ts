@@ -19,13 +19,23 @@ export interface Price {
   cacheWrite?: number; // 缓存写（Anthropic = 1.25×输入；OpenAI/Grok 该端点实测恒 0，不需要）
   est?: boolean;       // 估算价
   note?: string;
+  /** 长上下文档：单次请求提示词 > `over` 时**整单**按这组价（门槛在 `scan.py::LONG_CTX`，两边由测试对齐）。 */
+  long?: LongPrice;
 }
 
+export interface LongPrice { over: number; in: number; cacheRead: number; out: number; cacheWrite?: number }
+
+const OPENAI_LONG = 272_000;
+const GEMINI_LONG = 200_000;
+
 export const RATES: Record<string, Price> = {
-  // ── Claude · platform.claude.com/docs/en/about-claude/pricing（2026-09-29 取）
+  // ── Claude · platform.claude.com/docs/en/about-claude/pricing（2026-09-29 取；2026-10-23 复核）
   //    缓存写 `cacheWrite` = **5m** 档(1.25×输入);**1h 档 = 2×输入**,由 `costOf` 按 `cache_write_1h` 份额另算。
-  //    ★ 2026-10-15 更正：旧注释说「transcript 区分不出来」是错的 —— `usage.cache_creation` 一直分两档，
-  //      本机实测 1h 档 625.9M、5m 档 0（Claude Code 现在全走 1h）⇒ 全按 5m 计时这一类少算 1.6 倍。
+  //    ★ 2026-10-15 更正：旧注释说「transcript 区分不出来」是错的 —— `usage.cache_creation` 一直分两档。
+  //    ★ 2026-10-23 再更正：10-15 那句「5m 档 0、Claude Code 全走 1h」只对**主会话**成立。90 天实测
+  //      主会话 1h 806.5M、子 agent 5m 288.1M（约 26%）—— 子 agent 走 5m 档，两档都在用。
+  //    ★ 长上下文：4.6 起（Haiku 5.5 除外）**1M 全窗口标准价**（官方原话「A 900k-token request is billed at
+  //      the same per-token rate as a 9k-token request」）。只有 Haiku 5.5 提示词 > 100K 整单高档。
   //    ★ 缓存读**不再一律是输入价的 10%**：Fable 5.1 / Mythos 5.1 是 2.5%（$0.25），Opus 5.5 是 5%（$0.20）；
   //      Fable 5 / Mythos 5 / 其余仍是 10%。别按「输入价 ÷ 10」心算。
   "claude-fable-5-1":  { in: 10.0, cacheRead: 0.25, out: 50.0, cacheWrite: 12.5 },
@@ -44,25 +54,35 @@ export const RATES: Record<string, Price> = {
   "claude-sonnet-5":   { in: 2.0,  cacheRead: 0.2,  out: 10.0, cacheWrite: 2.5 },
   "claude-sonnet-4-6": { in: 3.0,  cacheRead: 0.3,  out: 15.0, cacheWrite: 3.75 },
   "claude-haiku-4-5":  { in: 1.0,  cacheRead: 0.1,  out: 5.0,  cacheWrite: 1.25 },
+  // 2026-10-23 补（「价格待核」报出来的：90 天 43 次 / 998K token，此前走 $5/$25 兜底，高估 50 倍）。
+  "claude-haiku-5-5":  { in: 0.10, cacheRead: 0.01, out: 0.5,  cacheWrite: 0.125,
+                         long: { over: 100_000, in: 0.5, cacheRead: 0.05, out: 2.5, cacheWrite: 0.625 } },
 
   // ── Codex / OpenAI · developers.openai.com/api/docs/pricing（2026-09-29 取,Standard 档）
-  //    ★ 全部按**短上下文**档。官方另有长上下文档（gpt-6-astra 输入 $20 / 输出 $75，即输入翻倍、
-  //      输出 1.5 倍），阈值页面没写明；我们按天分桶、看不到单次提示词长度，所以长会话会**低估**。
+  //    ★ 长上下文档（2026-10-23）：提示词 > 272K 整单换 `long` 那组（输入 / 缓存读 ×2、输出 ×1.5）。
+  //      官方页没写是整单还是只算超出部分 —— 按整单（xAI / Anthropic 都明写整单）。
+  //      本机 Codex 有 16.3% 的输入 token 落在 > 272K 的请求里。只有官方页列了长档价的型号才有 `long`。
   //    ★ `gpt-5.6-sol` 已从 $5/$30 降到 $4/$20（2026-09-29 核；此前表里是旧价）。费用一律按**当前**牌价重算，
   //      所以历史日的等效成本会随之下移 —— 这是牌价变了，不是数据变了。
-  "gpt-6-astra":   { in: 10.0, cacheRead: 1.0,  out: 50.0 },
-  "gpt-6-sol":     { in: 2.0,  cacheRead: 0.2,  out: 10.0 },
+  "gpt-6-astra":   { in: 10.0, cacheRead: 1.0,  out: 50.0,
+                   long: { over: OPENAI_LONG, in: 20.0, cacheRead: 2.0, out: 75.0 } },
+  "gpt-6-sol":     { in: 2.0,  cacheRead: 0.2,  out: 10.0,
+                   long: { over: OPENAI_LONG, in: 4.0, cacheRead: 0.4, out: 15.0 } },
   "gpt-6-luna":    { in: 0.1,  cacheRead: 0.01, out: 0.5 },
   // 2026-10-01：`~/.codex/models_cache.json` 里多了 gpt-6.1-sol（新闸 test_rates_cover_live_models 当场抓到），
   // 官方页只列这一个 6.1；缓存读 $0.10（输入的 5%，与 6-sol 的 $0.20 不同）。
-  "gpt-6.1-sol":   { in: 2.0,  cacheRead: 0.1,  out: 10.0 },
+  "gpt-6.1-sol":   { in: 2.0,  cacheRead: 0.1,  out: 10.0,
+                   long: { over: OPENAI_LONG, in: 4.0, cacheRead: 0.2, out: 15.0 } },
   //    ★ 本机跑的就是 gpt-5.6-sol 与 gpt-5.5,此前它们**不在表里**、全走 $1.75/$14 的兜底,
   //      把 Codex 30 天费用低估成真价的 1/2.55（$1,020 vs $2,595,实测)。
-  "gpt-5.6-sol":   { in: 4.0,  cacheRead: 0.4,  out: 20.0 },
-  "gpt-5.6-terra": { in: 2.0,  cacheRead: 0.2,  out: 12.0 },
+  "gpt-5.6-sol":   { in: 4.0,  cacheRead: 0.4,  out: 20.0,
+                   long: { over: OPENAI_LONG, in: 8.0, cacheRead: 0.8, out: 30.0 } },
+  "gpt-5.6-terra": { in: 2.0,  cacheRead: 0.2,  out: 12.0,
+                   long: { over: OPENAI_LONG, in: 4.0, cacheRead: 0.4, out: 18.0 } },
   "gpt-5.6-luna":  { in: 0.2,  cacheRead: 0.02, out: 1.2 },
   "gpt-5.6-cyber": { in: 12.5, cacheRead: 1.25, out: 75.0 },
-  "gpt-5.5":       { in: 5.0,  cacheRead: 0.5,  out: 30.0, note: "<272K 上下文档" },
+  "gpt-5.5":       { in: 5.0,  cacheRead: 0.5,  out: 30.0,
+                   long: { over: OPENAI_LONG, in: 10.0, cacheRead: 1.0, out: 45.0 } },
   "gpt-5.5-cyber": { in: 12.5, cacheRead: 1.25, out: 75.0 },
   "gpt-5.5-pro":   { in: 30.0, cacheRead: 3.0,  out: 180.0, est: true,
                      note: "官方未列缓存价,按输入 10% 估" },
@@ -75,13 +95,16 @@ export const RATES: Record<string, Price> = {
   //    （2026-09-29 复核：3.8 Flash 上线，与 3.7 同价同促销；3.1 Pro / 3.5 Flash 价不变。）
   //    ⚠️ 两个会让这张表悄悄过期的地方：
   //      ① 3.8/3.7/3.6 Flash 现在是**促销价**，2026-12-31 到期后翻倍（0.75→1.50 / 3.75→7.50）。
-  //      ② 全部 Gemini 价按 **≤200k 提示词**档。超过 200k，3.1 Pro 的输入 2→4、输出 12→18。
-  //         本机实测单次提示词约 17k，远未触线；长会话逼近 200k 时这里会低估一倍。
+  //      ② 3.1 Pro 提示词 > 200k 整单换 `long`（输入 2→4、输出 12→18、缓存 0.2→0.4；2026-10-23 接上）。
+  //         3.8 Flash / 4 Argon 官方页不分长上下文档。
   // ★ 用量页把 gemini 的推理档位去掉后再聚合（`scan._agy_canon`，会话库本来就不记档位），
   //   所以**每个系列都必须有裸名一条**，否则合并后的那条带掉到兜底价（3.1 Pro 会被按 Flash 低估 2.7 倍）。
-  "gemini-3.1-pro":          { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
-  "gemini-3.1-pro-high":     { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
-  "gemini-3.1-pro-low":      { in: 2.0,  cacheRead: 0.20,  out: 12.0 },
+  "gemini-3.1-pro":          { in: 2.0,  cacheRead: 0.20,  out: 12.0,
+                             long: { over: GEMINI_LONG, in: 4.0, cacheRead: 0.40, out: 18.0 } },
+  "gemini-3.1-pro-high":     { in: 2.0,  cacheRead: 0.20,  out: 12.0,
+                             long: { over: GEMINI_LONG, in: 4.0, cacheRead: 0.40, out: 18.0 } },
+  "gemini-3.1-pro-low":      { in: 2.0,  cacheRead: 0.20,  out: 12.0,
+                             long: { over: GEMINI_LONG, in: 4.0, cacheRead: 0.40, out: 18.0 } },
   // 无档位后缀的裸名（`gemini-3.8-flash`）真实出现在 agy 落盘的记录里（2026-09-29 实测），必须单独收一条。
   "gemini-3.8-flash":        { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
   "gemini-3.8-flash-high":   { in: 0.75, cacheRead: 0.075, out: 3.75, note: "促销价,2026-12-31 后翻倍" },
@@ -127,7 +150,9 @@ export const RATES: Record<string, Price> = {
                                 note: "开源权重,无官方托管牌价;按同级开源模型粗估" },
 
   // ── Grok / xAI · docs.x.ai/docs/models（2026-09-29 取,<200k 档）
-  //    ★ ≥200k 提示词整单进高档（输入/输出/缓存读全部 2×），我们看不到单次提示词长度 ⇒ 长会话会低估。
+  //    ★ 2026-10-23 起费用**优先用 grok 自报的实扣**（`costUsdTicks`，xAI 文档：1 USD = 1e10 tick，「the exact
+  //      cost you were charged」；`costOf` 的 `rep`）。下面的牌价只给没有自报的旧记录用。
+  //    ★ ≥200k 提示词整单进高档（输入/输出/缓存读全部 2×）；grok 一条记录是一轮（多次调用），看不到单次提示词。
   //    ★ 2026-09-29：`grok models` 的默认已是 **grok-4.7**（$2/$0.5/$6，与 4.6 同价），本机落盘的是 `grok-4.7-build`。
   //    ⚠️ 官方只列 Grok 4.5 / 4.6 / Build 0.1,**没有 `-build` 后缀的条目**。本机跑的
   //      `grok-4.5-build` / `grok-4.6-build` 究竟是「Grok 4.x 走 Build 界面」还是独立的
@@ -248,24 +273,65 @@ export function priceWarnings(used: readonly { model: string; platform: string }
   return out.sort((x, y) => (x.kind === y.kind ? (x.model < y.model ? -1 : 1) : x.kind === "promo" ? -1 : 1));
 }
 
-export interface TokenClasses {
+export interface Classes {
   uncached_in: number;
   cache_read: number;
   cache_write: number;
   output: number;
-  /** `cache_write` 里 1h 档的份额（**子集**，不是第五类）。只有 Claude 有；缺省 = 全按 5m 档。 */
-  cache_write_1h?: number;
 }
 
-/** 四类 token 分别乘单价 → 美元。不用构成假设。 */
-export function costOf(t: TokenClasses, model: string, platform: string): number {
-  const p = priceOf(model, platform);
+export interface TokenClasses extends Classes {
+  /** `cache_write` 里 1h 档的份额（**子集**，不是第五类）。只有 Claude 有；缺省 = 全按 5m 档。 */
+  cache_write_1h?: number;
+  /** 长上下文请求（提示词超过本模型门槛）的那部分四类 —— **子集**，只决定价格（`scan.py::LONG_CTX`）。 */
+  long?: Classes;
+  /** 带自报实扣费用的那部分四类 + 美元 —— **子集**（目前只有 Grok，`costUsdTicks ÷ 1e10`）。 */
+  rep?: Classes & { usd: number };
+}
+
+/** 子集钳到不超过当前各类：缓存口径把某一类清零时，子集里那一类跟着归零。 */
+function clampTo(sub: Classes, t: Classes): Classes {
+  return { uncached_in: Math.min(sub.uncached_in, t.uncached_in), cache_read: Math.min(sub.cache_read, t.cache_read),
+           cache_write: Math.min(sub.cache_write, t.cache_write), output: Math.min(sub.output, t.output) };
+}
+
+const minus = (a: Classes, b: Classes): Classes => ({
+  uncached_in: a.uncached_in - b.uncached_in, cache_read: a.cache_read - b.cache_read,
+  cache_write: a.cache_write - b.cache_write, output: a.output - b.output,
+});
+
+/** 一组价 × 四类。`h1` = 其中 1h 档缓存写（2× 这组价的输入价）。 */
+function priced(c: Classes, h1: number, pin: number, pread: number, pwrite: number, pout: number): number {
+  return c.uncached_in * pin + c.cache_read * pread + (c.cache_write - h1) * pwrite + h1 * pin * 2 + c.output * pout;
+}
+
+/** 牌价估算（含长上下文档），美元。 */
+function listCost(t: TokenClasses, p: Price): number {
   const cw = p.cacheWrite ?? p.in;   // 无缓存写价的平台按输入价（该端点实测恒 0，不影响结果）
   // ★ 1h 档 = 2× 输入（Anthropic 官方规则，只有 Claude 会带这个份额）。钳到不超过 `cache_write`：
   //   缓存口径 `none` 把 cache_write 清零时份额跟着归零，否则会算出负的 5m 档。
   const h1 = Math.min(t.cache_write_1h ?? 0, t.cache_write);
-  return (t.uncached_in * p.in + t.cache_read * p.cacheRead
-          + (t.cache_write - h1) * cw + h1 * p.in * 2 + t.output * p.out) / 1e6;
+  const lp = p.long;
+  if (!lp || !t.long) return priced(t, h1, p.in, p.cacheRead, cw, p.out) / 1e6;
+  // ★ 长上下文请求**整单**换高档（2026-10-23）。1h 份额按缓存写比例分到两边（只有 Haiku 5.5 两样都有）。
+  const lg = clampTo(t.long, t), base = minus(t, lg);
+  const h1L = t.cache_write > 0 ? h1 * lg.cache_write / t.cache_write : 0;
+  return (priced(base, h1 - h1L, p.in, p.cacheRead, cw, p.out)
+          + priced(lg, h1L, lp.in, lp.cacheRead, lp.cacheWrite ?? lp.in, lp.out)) / 1e6;
+}
+
+/**
+ * 四类 token 分别乘单价 → 美元。不用构成假设。
+ * ★ 有自报实扣费用的那部分（Grok）用它自己的数，不按牌价估（2026-10-23：本机 130 轮自报 $47.6，牌价估 $153.5）。
+ *   缓存口径去掉某一类时，按「去掉后 / 去掉前」的牌价比例缩放自报费用 —— 自报的数分不出各类各占多少。
+ */
+export function costOf(t: TokenClasses, model: string, platform: string): number {
+  const p = priceOf(model, platform);
+  const all = listCost(t, p);
+  if (!t.rep || !(t.rep.usd >= 0)) return all;
+  const repNow = clampTo(t.rep, t), repFull = listCost(t.rep, p), repList = listCost(repNow, p);
+  const scale = repFull > 0 ? repList / repFull : 0;
+  return Math.max(0, all - repList) + t.rep.usd * scale;
 }
 
 /**
@@ -277,7 +343,9 @@ export function costOf(t: TokenClasses, model: string, platform: string): number
  */
 export function cacheSavingOf(t: TokenClasses, model: string, platform: string): number {
   const p = priceOf(model, platform);
-  return (t.cache_read * (p.in - p.cacheRead)) / 1e6;
+  const lg = p.long && t.long ? clampTo(t.long, t).cache_read : 0;
+  const lp = p.long;
+  return ((t.cache_read - lg) * (p.in - p.cacheRead) + (lp ? lg * (lp.in - lp.cacheRead) : 0)) / 1e6;
 }
 
 /**
@@ -287,7 +355,10 @@ export function cacheSavingOf(t: TokenClasses, model: string, platform: string):
  */
 export function noCacheCostOf(t: TokenClasses, model: string, platform: string): number {
   const p = priceOf(model, platform);
-  return ((t.uncached_in + t.cache_read + t.cache_write) * p.in + t.output * p.out) / 1e6;
+  const flat = (c: Classes, pin: number, pout: number): number => (c.uncached_in + c.cache_read + c.cache_write) * pin + c.output * pout;
+  if (!p.long || !t.long) return flat(t, p.in, p.out) / 1e6;
+  const lg = clampTo(t.long, t);
+  return (flat(minus(t, lg), p.in, p.out) + flat(lg, p.long.in, p.long.out)) / 1e6;
 }
 
 export const fmtUSD = (n: number): string =>

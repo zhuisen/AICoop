@@ -359,7 +359,7 @@ export function sourceNote(r: Pick<ReqRow, "platform" | "est">): string {
       ? "来源：~/.claude/projects 会话 jsonl，同 requestId 最后一行；速度含首字等待"
       : "来源：Claude Code 的 OpenTelemetry 账本（首字、耗时为实测）";
     case "agy": return "来源：agy 会话库（conversations/*.db）的生成元数据";
-    case "grok": return "来源：grok 会话文件 turn_completed（按轮）+ events.jsonl 的首字";
+    case "grok": return "来源：grok 会话文件 turn_completed（一条 = 一轮，含多次模型调用）+ events.jsonl 的首字";
   }
 }
 
