@@ -130,6 +130,17 @@ def parse_quota(payload):
     if not isinstance(cfg, dict):
         return None
     used = cfg.get("creditUsagePercent")
+    # ★★ 字段**缺席** = 本周已用 0（2026-10-23 实测，用户拍板「剩 ≥99% · 推断」）：这个接口是 proto3 JSON，
+    #   省略零值与空列表 —— 同一份响应里非默认值都在（`isUnifiedBillingUser: true`、`topUpMethod: …SAVED_PAYMENT_METHOD`），
+    #   而 `creditUsagePercent` 与 `productUsage` 一起缺。账本 6 周 400 个读数从没出现过一条 0%：5 次周重置后
+    #   第一条读数全 ≥1%，正是「0 就不发」的样子；上一次读成功是 10-22 19:31（100%），3 分钟后重置，之后一直 bad_payload。
+    #   另一个仍能解释的假说是「接口删了这个字段」—— 用量 ≥1% 时字段回来即可证伪，所以标 `used_inferred`，不当实测。
+    #   只在结构完整（有带类型的 `currentPeriod`）且**没有任何分项用量**时才推；有分项却缺总数 ⇒ 前后矛盾 ⇒ 仍是 bad_payload。
+    inferred = False
+    if "creditUsagePercent" not in cfg:
+        cp = cfg.get("currentPeriod")
+        if isinstance(cp, dict) and cp.get("type") and not cfg.get("productUsage"):
+            used, inferred = 0.0, True
     if not isinstance(used, (int, float)):
         return None
 
@@ -150,6 +161,7 @@ def parse_quota(payload):
 
     return {
         "used_percent": float(used),
+        "used_inferred": inferred,
         "period_type": period.get("type"),
         "period_start": start,
         "period_end": end,
@@ -268,13 +280,16 @@ def prev_index(path):
             out[key] = {"used_percent": q.get("used_percent"),
                         "fetched_at": old.get("fetched_at"),
                         "period_end": q.get("period_end")}
+            if q.get("used_inferred"):
+                out[key]["used_inferred"] = True       # 推断的 0 搬成旧读数时也带着，界面照旧写「≥ · 推断」
         elif isinstance(acc.get("last_good"), dict):
             out[key] = acc["last_good"]
     return out
 
 
 def prev_extras(path):
-    """上一份 sidecar 里**跨进程要带着走**的两样：套餐名（一天读一次）与 429 退避截止时刻。"""
+    """上一份 sidecar 里**跨进程要带着走**的：套餐名（一天读一次）· 429 退避截止时刻 ·
+    最近一次真发出请求的时刻与最近一次请求失败（诊断用，见 `scan_account`）。"""
     if not path:
         return {}
     try:
@@ -288,6 +303,8 @@ def prev_extras(path):
             out[acc["account_key"]] = {
                 "plan": acc.get("plan") if isinstance(acc.get("plan"), dict) else None,
                 "retry_at": acc.get("retry_at") if isinstance(acc.get("retry_at"), (int, float)) else None,
+                "last_sent_at": acc.get("last_sent_at") if isinstance(acc.get("last_sent_at"), (int, float)) else None,
+                "last_fail": acc.get("last_fail") if isinstance(acc.get("last_fail"), dict) else None,
             }
     return out
 
@@ -309,6 +326,11 @@ def scan_account(key, entry, carried, extras=None):
         # ★ 套餐名与它读到的时刻。读不到 / 本轮没读 ⇒ 带上次的（§7.0b：读不到 ≠ 没有）。
         "plan": (extras or {}).get("plan"),
         "retry_at": None,
+        # ★ 诊断（2026-10-23「grok 用了额度也没更新」）：token 有效的 6 小时里一次成功读数都没有，而 sidecar 只剩
+        #   最后一次的 `token_expired` —— 那段时间是「根本没发请求」还是「发了但失败」，事后分不出来。
+        #   现在带着走：最近一次**真发出**请求的时刻、最近一次请求失败的原因。不发请求的轮次不覆盖它们。
+        "last_sent_at": (extras or {}).get("last_sent_at"),
+        "last_fail": (extras or {}).get("last_fail"),
     }
     retry_at = (extras or {}).get("retry_at")
 
@@ -330,6 +352,7 @@ def scan_account(key, entry, carried, extras=None):
         acc["retry_at"] = int(retry_at)
     else:
         quota, reason, status, detail, wait = fetch(token, entry.get("user_id"))
+        acc["last_sent_at"] = int(time.time())
         acc["http_status"] = status
         if quota is not None:
             acc["available"] = True
@@ -342,6 +365,7 @@ def scan_account(key, entry, carried, extras=None):
         else:
             acc["reason"] = reason
             acc["detail"] = detail
+            acc["last_fail"] = {"reason": reason, "detail": detail, "http_status": status, "at": int(time.time())}
             if wait:
                 acc["retry_at"] = int(time.time() + wait)
 

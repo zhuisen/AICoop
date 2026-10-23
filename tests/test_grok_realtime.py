@@ -137,7 +137,7 @@ class TheUiIsPushedNotPolled(unittest.TestCase):
 
     def test_the_push_handler_reads_the_sidecar_and_never_runs_the_fetcher(self):
         i = HOOK.index("if (!updateEvent) return;")
-        body = HOOK[i:i + 800]
+        body = HOOK[i:HOOK.index("}, [updateEvent", i)]     # 只看这个 effect 本身（定长窗口会截进后面的 return）
         self.assertIn("invoke<string | null>(readCmd)", body)
         self.assertNotIn("runCmd", body, "推送处理里调了 runCmd —— 白发一次 RPC")
 

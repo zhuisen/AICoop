@@ -222,7 +222,7 @@ export default function App() {
    */
   // ★ 取 `refresh`：交接包 page5 的只读卡底栏有「刷新」（只读号只有这一个操作）。
   //   取数平时仍是自动的 —— 采样器推送 + 10min 兜底轮询；手动刷新是只读 GET，不计费。
-  const { snap: grokSnap, busy: grokBusy, err: grokErr, refresh: refreshGrok } =
+  const { snap: grokSnap, busy: grokBusy, err: grokErr, refresh: refreshGrok, last: grokLast } =
     useGrokQuota({ enabled: page === "overview" });
   /**
    * ★ agy 额度。**与上面那条最大的区别:它不联网。**
@@ -361,7 +361,7 @@ export default function App() {
               board={board} boardErr={boardErr}
               agyPool={agyPool} agyBoard={agyBoard} agyBoardErr={agyBoardErr}
               agySnap={agySnap} agyBusy={agyBusy} agyErr={agyErr} refreshAgy={refreshAgy}
-              grokSnap={grokSnap} grokBusy={grokBusy} grokErr={grokErr} refreshGrok={refreshGrok}
+              grokSnap={grokSnap} grokBusy={grokBusy} grokErr={grokErr} refreshGrok={refreshGrok} grokLast={grokLast}
               claudeQuota={claudeQuota} claudeErr={claudeErr} refreshClaude={refreshClaude}
               live={live} liveErr={liveErr}
               autoSwitch={autoSwitch} toggleAutoSwitch={toggleAutoSwitch}

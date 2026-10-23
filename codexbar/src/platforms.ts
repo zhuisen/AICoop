@@ -51,8 +51,8 @@ export const POOL_PLATFORMS: readonly PoolPlatform[] = [
     note: "Antigravity · 启动前换凭证（agy 只在启动时读）",
     addHint: "加号：终端里跑 `agy-rotate login`" },
   { key: "grok", label: "Grok", colorKey: "grok", codexActions: false,
-    note: "Grok · 单号只读 · 周窗口",
-    addHint: "grok 是单号只读 —— 登录由 grok CLI 自己管" },
+    note: "Grok · 单号 · 周窗口",
+    addHint: "grok 是单号 —— 登录由 grok CLI 自己管" },
 ] as const;
 
 export const platformOf = (k: PoolKey): PoolPlatform =>

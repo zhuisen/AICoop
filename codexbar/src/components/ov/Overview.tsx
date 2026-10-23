@@ -7,7 +7,7 @@ import type { AgyPoolAccount, useAgyPool } from "../../hooks/useAgyPool";
 import type { AgySnapshot } from "../../agy";
 import { agyAction, agyProbeToast, agyShown, agyTightest, agyWinRows } from "../../agy";
 import type { GrokSnapshot } from "../../grok";
-import { grokLastGoodRemPct, grokRemPct } from "../../grok";
+import { grokLastGoodRemPct, grokRefreshToast, grokRemPct } from "../../grok";
 import type { ClaudeQuota } from "../../mbLogic";
 import { SUB_WARN_DAYS, expiryWarnings } from "../../mbLogic";
 import { getSettings } from "../../pages/SettingsPage";
@@ -71,6 +71,8 @@ export interface OverviewProps {
   agyPool: AgyPoolApi; agyBoard: Board | null; agyBoardErr: string | null;
   agySnap: AgySnapshot | null; agyBusy: boolean; agyErr: string | null; refreshAgy: () => void;
   grokSnap: GrokSnapshot | null; grokBusy: boolean; grokErr: string | null; refreshGrok: () => Promise<boolean>;
+  /** 最近一次取回的 grok 快照（刷新后 toast 按它说原因）。缺省 = 当前 `grokSnap`。 */
+  grokLast?: () => GrokSnapshot | null;
   claudeQuota: ClaudeQuota | null; claudeErr: string | null; refreshClaude: () => Promise<boolean | null>;
   live: LiveSnapshot | null; liveErr: string | null;
   autoSwitch: boolean; toggleAutoSwitch: () => void;
@@ -104,6 +106,10 @@ const HARNESS = (() => {
 const TAB_ORDER: PoolKey[] = POOL_PLATFORMS.map((p) => p.key);
 
 export default function Overview(p: OverviewProps) {
+  // ★ grok 的三个刷新入口（头部 / 卡片 / ⌘K）共用：结果出来就说一句（2026-10-23「点刷新没有 UI 反应」）
+  const grokRefresh = (): void => {
+    void p.refreshGrok().then((ok) => p.showToast(grokRefreshToast(ok, (p.grokLast?.() ?? p.grokSnap)?.accounts?.[0])));
+  };
   const rootRef = useRef<HTMLDivElement>(null);
   const [cw, setCw] = useState(OV_BP_WIDE);
   useEffect(() => {
@@ -280,8 +286,8 @@ export default function Overview(p: OverviewProps) {
     </>);
   } else {
     actions = (<>
-      <RefreshBtn labels={layout.labels} busy={p.grokBusy} text="刷新" title="重新取一次 grok 周额度（只读 GET，不计费）" onClick={p.refreshGrok} />
-      <HeadMore items={[{ key: "why", label: "grok 单号只读：只有周额度，不切号", info: true }]} />
+      <RefreshBtn labels={layout.labels} busy={p.grokBusy} text="刷新" title="重新取一次 grok 周额度（一次 GET，不计费）" onClick={grokRefresh} />
+      <HeadMore items={[{ key: "why", label: "grok 单号：只有周额度，不切号", info: true }]} />
     </>);
   }
 
@@ -498,7 +504,7 @@ export default function Overview(p: OverviewProps) {
         if (codexOn) void p.run("refresh-all", ["refresh-all", "--notify"], "刷新全池", { done: "已刷新全池 · 免费" });
         else if (agyOn) { void p.agyPool.refresh().then((ok) => p.showToast(ok === null ? "Gemini 正在刷新" : ok ? "已刷新全池 · 免费" : "✗ Gemini 刷新失败")); }
         else if (prov === "claude") void p.refreshClaude().then((ok) => p.showToast(ok === null ? "Claude 正在重读" : ok ? "已重读 Claude 额度 · 本机" : "✗ Claude 额度读不到"));
-        else { void p.refreshGrok().then((ok) => p.showToast(ok ? "已刷新 Grok · 免费" : "✗ Grok 刷新失败")); }
+        else grokRefresh();
       } },
     ...(() => {
       const nc = codexOn && p.board?.next ? p.accounts.find((a) => a.aid === p.board?.next?.aid) : undefined;
@@ -563,9 +569,11 @@ export default function Overview(p: OverviewProps) {
     grid = grid0(<ClaudeCard t={p.t} color={p.colors.claude} quota={p.claudeQuota} err={p.claudeErr} live={liveOf("claude")} onRefresh={p.refreshClaude}
                              nowMs={nowMs} hov={isHov("claude-local", 0)} />);
   } else {
-    title = <AccountsTitle name="Grok" readOnly />;
+    const ga = p.grokSnap?.accounts?.[0] ?? null;
+    const gRem = ga ? (ga.available ? grokRemPct(ga) : grokLastGoodRemPct(ga)) : null;
+    title = <AccountsTitle name="Grok" c={ovCounts([gRem == null ? "unprobed" : ovIsLow(gRem) ? "low" : "inuse"])} />;
     grid = grid0(<GrokCard t={p.t} color={p.colors.grok} snap={p.grokSnap} privacy={p.privacy} busy={p.grokBusy} err={p.grokErr} disabled={p.platOff.grok}
-                           hov={isHov("grok", 0)} onOpen={() => p.onOpenUsage("grok")} onRefresh={p.refreshGrok} />);
+                           hov={isHov("grok", 0)} onOpen={() => p.onOpenUsage("grok")} onRefresh={grokRefresh} />);
   }
   useFlip(gridRef, flipSig, p.preview);
 
@@ -612,8 +620,8 @@ const Chev = () => (
 );
 
 /** 账号区标题行：`Codex 账号 · 5 可用 · 1 冷却中 · 1 需处理 · 3 已停用`，右侧排序。0 的项不写。 */
-function AccountsTitle({ name, c, offN = 0, mode, canCustom, onMode, readOnly, warn }: {
-  name: string; c?: ReturnType<typeof ovCounts>; offN?: number; mode?: SortMode; canCustom?: boolean; onMode?: (m: SortMode) => void; readOnly?: boolean;
+function AccountsTitle({ name, c, offN = 0, mode, canCustom, onMode, warn }: {
+  name: string; c?: ReturnType<typeof ovCounts>; offN?: number; mode?: SortMode; canCustom?: boolean; onMode?: (m: SortMode) => void;
   /** 计数后面的「快到期」堆叠警告（只有 Codex 有）。 */
   warn?: ReactNode;
 }) {
@@ -632,7 +640,7 @@ function AccountsTitle({ name, c, offN = 0, mode, canCustom, onMode, readOnly, w
     <div data-ov-acct-title="" style={{ display: "flex", alignItems: "center", gap: 14, height: 20, minWidth: 0, flexShrink: 0 }}>
       <b style={{ fontSize: 14 }}>{name} 账号</b>
       <span style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11.5, color: "var(--tx2)", overflow: "hidden", minWidth: 0 }}>
-        {readOnly ? <span><b style={{ color: "var(--tx2)" }}>1</b> 只读</span> : c && (<>
+        {c && (<>
           {item(c.ok, "可用", "var(--tx)")}
           {item(c.cool, "冷却中", "var(--ovWarnTx)")}
           {item(c.low, "额度低", "var(--badTx)")}
@@ -641,9 +649,7 @@ function AccountsTitle({ name, c, offN = 0, mode, canCustom, onMode, readOnly, w
         </>)}
       </span>
       {warn}
-      {readOnly ? (
-        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--tx2)" }}>只读</span>
-      ) : onMode && (
+      {onMode && (
         <span ref={box} style={{ marginLeft: "auto", position: "relative", display: "inline-flex", flexShrink: 0 }}>
           <span data-ov-sort={mode} role="button" tabIndex={0} onClick={() => setOpen((o) => !o)}
                 onKeyDown={(e) => { if (e.key === "Enter") setOpen((o) => !o); }}

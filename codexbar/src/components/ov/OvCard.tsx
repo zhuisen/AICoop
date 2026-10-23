@@ -34,6 +34,8 @@ export interface OvWin {
   dim?: boolean;
   /** 这一格整个不存在（只有周额度的平台的 5h）⇒ 空槽 + 「—」。 */
   absent?: boolean;
+  /** 数字是下限（grok 推断的「不到 1%」）⇒ 前面写「≥」。 */
+  atLeast?: boolean;
 }
 
 export interface OvTagSpec { text: string; kind: OvState | "ultra" | "best" }
@@ -126,6 +128,10 @@ const TAG_STYLE: Record<string, { color: string; bg: string }> = {
  * 宽度与底色同步过渡（交接包 P5 §9：swOut .2s / swIn .26s，420 ms 后清掉旧字）。中文标签按「字数 × 11 + 14」定宽，
  * 宽度才过渡得起来；拉丁字（PRO / ULTRA）不定宽。
  */
+/** 套餐徽章（PRO / ULTRA / SuperGrok）的紫底外观 —— 唯一出处，GrokCard 的可缩版也用它。 */
+export const ULTRA_TAG_STYLE = { fontSize: 10, fontWeight: 700, color: "#fff", background: "#8b5cf6", padding: "1px 6px",
+                                 borderRadius: 5, letterSpacing: ".04em" } as const;
+
 export function OvTag({ tag, title }: { tag: OvTagSpec; title?: string }) {
   const last = useRef(tag);
   const [prev, setPrev] = useState<{ t: OvTagSpec; n: number } | null>(null);
@@ -141,8 +147,7 @@ export function OvTag({ tag, title }: { tag: OvTagSpec; title?: string }) {
   if (tag.kind === "ultra") {
     return (
       <span data-ov-tag="ultra" title={title}
-            style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#8b5cf6", padding: "1px 6px",
-                     borderRadius: 5, flexShrink: 0, letterSpacing: ".04em" }}>{tag.text}</span>
+            style={{ ...ULTRA_TAG_STYLE, flexShrink: 0 }}>{tag.text}</span>
     );
   }
   const s = TAG_STYLE[tag.kind] ?? TAG_STYLE.off;
@@ -205,7 +210,7 @@ export function OvWinRow({ w, off }: { w: OvWin; off?: boolean }) {
       <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", width: 34, textAlign: "right", fontSize: 11.5,
                      fontWeight: 600, flexShrink: 0,
                      color: w.pct == null ? "var(--ovPh)" : low ? "var(--badTx)" : "var(--tx)" }}>
-        {w.pct == null ? "—" : `${Math.round(w.pct)}%`}
+        {w.pct == null ? "—" : `${w.atLeast ? "≥" : ""}${Math.round(w.pct)}%`}
       </span>
       <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", width: 46, textAlign: "right", fontSize: 11, color: "var(--tx3)",
                      flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis" }}>

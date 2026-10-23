@@ -79,6 +79,8 @@ paths:
   - ★★ **codex 续航条改按连续使用时间**（2026-10-15，用户：「全池续航≈98.6 小时，实际不到半小时几张号都没了」）：`codex-rotate::_burst` 给 `next --json` 的 `burst` —— 现在能连续用 = Σ 可挑号 min(5h 剩余分钟, 周剩余分钟)、本周 = Σ 周剩余分钟、回满 = 5h 没满的号里最早重置；周↔5h 换算比 `_wk_per_5h` 只用有 5h 窗口的号（实测 0.156，2 号 77pp），5h 消耗 <50pp ⇒ None。钟点口径 `_runway` 只剩 CLI 内部字段，界面不再显示。闸 `tests/test_burst_runway.py` + `test_runway_hero::TheHonestyLineTravelsWithTheNumber`。
   - 5h 跨进 ≥99 时代理往 `state.json` 的 `exhaust_log`（≤200 条）落一条「用完」事件 `{aid,t,active_s,pp}`，`active_s` 只累加 ≤5 分钟的间隔；`codex-rotate next` 每号给 `eta5h`（本号 ≥3 次用本号、否则借全池、都不够 ⇒ null）。只在续航条显示全池口径（用户：账号卡上不显示）。闸 `tests/test_exhaust_eta.py`。
   - grok：429 ⇒ `reason: rate_limited` + `retry_at`（`Retry-After` 秒或 HTTP 日期，夹 [1,3600]，缺省 120s），退避期内**不发请求**；套餐名读 `GET /v1/settings` 的 `subscription_tier_display`，24h 一次、读不到留旧值。仍只读 GET、不碰 refresh_token。闸 `tests/test_grok_rate_limit_and_plan.py`。
+  - ★★ grok 账单 `creditUsagePercent` **缺席 = 本周已用 0**（2026-10-23，用户拍板「剩 ≥99% · 推断」）：接口是 proto3 JSON、省略零值与空列表。10-22 19:34 周重置后一直 `bad_payload`（上次读成功 19:31 = 100%），实测响应里非默认值都在、`creditUsagePercent` 与 `productUsage` 一起缺；账本 6 周 400 个读数从无 0%，5 次重置后首条全 ≥1%。只在有带类型的 `currentPeriod` 且没有任何分项时推断，`quota.used_inferred: true`；界面按下限 1% 已用（剩 99）+「≥」「推断」，绝不画满 100。★ 与 agy「`remainingFraction` 缺席 ⇒ 读不到」**方向相反、不矛盾**：agy 缺的是剩余（可能是 0 = 见底，会影响挑号），grok 缺的是已用（单号、不挑号）。未证伪的另一假说「接口删了字段」：用量 ≥1% 时字段回来即可证伪。闸 `tests/test_grok_last_fail.py::AMissingUsageFieldMeansZero`。
+  - grok-quota 带 `last_sent_at`（最近一次真发出请求）与 `last_fail`（最近一次请求失败），不发请求的轮次不覆盖；采样器比内容时剔掉 `last_sent_at`。
 - ★★ **选号策略 C：Plus 优先、Pro 保底**（用户 2026-09-07 定；`proxy.py::_plan_tier` + `_tightest_used`）。
   Plus 平时承担轮换，**Pro 只在没有任何可用 Plus 时才动**。读不到 `plan` 的归 **Plus 档** ——
   归到保底档会让刚入池、还没解出 plan 的号永远排最后、拿不到流量。

@@ -55,7 +55,8 @@ fi
 
 echo "==> stopping old instance (graceful)"
 # ★ 按**可执行文件路径**找进程（新旧两个安装位置），强杀也只杀这些 PID —— 不用宽泛的 `pkill -f`。
-_ours() { ps -Ao pid=,comm= | awk -v a="$APP/Contents/MacOS/codexbar" -v b="$LEGACY_APP/Contents/MacOS/codexbar" '$2 == a || $2 == b {print $1}'; }
+#   可执行文件 2026-10-23 起叫 `AICoop`（进程名统一）；升级那一次在跑的还是旧名 `codexbar`，两个都认。
+_ours() { ps -Ao pid=,comm= | awk -v a="$APP/Contents/MacOS/AICoop" -v b="$APP/Contents/MacOS/codexbar" -v c="$LEGACY_APP/Contents/MacOS/codexbar" '$2 == a || $2 == b || $2 == c {print $1}'; }
 # ★ 只在真有进程时才发 quit，且按 bundle id 发、带超时（四方评审 Opus M4）：
 #   按 app 名发时，第一次部署（/Applications 里还没有 AICoop）会弹「AICoop 在哪里？」对话框把脚本卡住；
 #   app 卡死时 Apple Event 默认要等 2 分钟。新旧两个名字共用同一个 bundle id，发一次就够。
@@ -133,17 +134,17 @@ sleep 3
 #   pipefail 把它算成整条管道失败，`set -e` 随即**静默杀掉整个 deploy.sh** ——
 #   后面的版本号与 B≠0 告警一行都不打，而看上去和成功一模一样（新包其实已经装好并启动了）。
 #   是竞态：`ps` 写得比 awk 退出快就不触发，所以时好时坏。闸：tests/test_deploy_script_sigpipe.py。
-_running="$(ps -Ao pid=,comm= | awk '$2 ~ /codexbar$/ && !f {print $1; f=1}')"
+_running="$(ps -Ao pid=,comm= | awk '$2 ~ /\/MacOS\/(AICoop|codexbar)$/ && !f {print $1; f=1}')"
 # ★ 后验失败要以非 0 退出（全方面评审 §11）：原来只打一行警告、照样 exit 0，调用方（与我）读到的是「部署成功」。
 #   放到最后才退：版本号与 B≠0 告警照常打完。
 _verify_fail=0
 if [ -z "$_running" ]; then
     _verify_fail=1
-    echo "⚠️  启动后没看到 codexbar 进程 —— 它可能被单实例闸挡住了，或者崩了。"
-elif [ "$(ps -o comm= -p "$_running")" != "$APP/Contents/MacOS/codexbar" ]; then
+    echo "⚠️  启动后没看到 AICoop 进程 —— 它可能被单实例闸挡住了，或者崩了。"
+elif [ "$(ps -o comm= -p "$_running")" != "$APP/Contents/MacOS/AICoop" ]; then
     _verify_fail=1
     echo "🛑 **跑起来的不是刚装的那一份！**"
-    echo "   期望: $APP/Contents/MacOS/codexbar"
+    echo "   期望: $APP/Contents/MacOS/AICoop"
     echo "   实际: $(ps -o comm= -p "$_running")  (pid $_running)"
     echo "   原因：同 bundle id 的另一个副本先抢到了单实例锁，新装的这份静默退出了。"
     echo "   处理：先退掉上面那个进程（kill ${_running}），"

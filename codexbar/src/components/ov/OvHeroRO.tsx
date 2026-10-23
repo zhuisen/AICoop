@@ -1,5 +1,5 @@
 import type { GrokSnapshot } from "../../grok";
-import { grokLastGoodRemPct, grokRemPct } from "../../grok";
+import { GROK_INFERRED_NOTE, grokInferred, grokLastGoodRemPct, grokRemPct } from "../../grok";
 import type { ClaudeQuota } from "../../mbLogic";
 import type { LivePlatform } from "../../live";
 import type { OvLayout } from "../../overview";
@@ -19,10 +19,11 @@ export function GrokHero({ snap, layout, err, pc }: { snap: GrokSnapshot | null;
   const end = (degraded ? a?.last_good?.period_end : a?.quota?.period_end) ?? undefined;
   const low = ovIsLow(rem);
   const bar = degraded ? "var(--warn)" : low ? "var(--bad)" : pc;
+  const inferred = rem != null && grokInferred(a);
   return (
     <HeroShell pc={pc} layout={layout}>
-      <NowCol title="当前号 · 只读" pct={rem} color={bar} name="grok"
-              email={degraded ? (rem != null ? `${fmtAgo(a?.last_good?.fetched_at)}的读数` : "额度暂时读不到") : "xAI 账单"}
+      <NowCol title="当前号" pct={rem} color={bar} name="grok"
+              email={degraded ? (rem != null ? `${fmtAgo(a?.last_good?.fetched_at)}的读数` : "额度暂时读不到") : inferred ? "xAI 账单 · 推断" : "xAI 账单"}
               line={<span style={{ color: "var(--tx3)" }}>{err ? `读不到本机快照：${err}` : snap?.fetched_at ? `读数 ${fmtAgo(snap.fetched_at)}` : "—"}</span>} />
       <Divider />
       <div data-ov-grok-quota="" style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
@@ -36,7 +37,8 @@ export function GrokHero({ snap, layout, err, pc }: { snap: GrokSnapshot | null;
             {rem != null && <span style={{ display: "block", width: `${rem}%`, height: "100%", borderRadius: 6, background: bar }} />}
           </span>
           <b style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", width: 44, textAlign: "right", fontSize: 14,
-                      color: rem == null ? "var(--ovPh)" : low ? "var(--badTx)" : "var(--tx)" }}>{rem == null ? "—" : `${Math.round(rem)}%`}</b>
+                      color: rem == null ? "var(--ovPh)" : low ? "var(--badTx)" : "var(--tx)" }}
+             title={inferred ? GROK_INFERRED_NOTE : undefined}>{rem == null ? "—" : `${inferred ? "≥" : ""}${Math.round(rem)}%`}</b>
           <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", width: 64, fontSize: 11, color: "var(--tx3)" }}>
             {rem == null ? "" : `↻${fmtEta(end)}`}
           </span>
@@ -46,7 +48,7 @@ export function GrokHero({ snap, layout, err, pc }: { snap: GrokSnapshot | null;
         <Divider />
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
           <ColTitle><span>说明</span></ColTitle>
-          {["只有周额度 · xAI 账单", "只读 · 不切号", "低于 10% 同样告警"].map((s) => (
+          {["只有周额度 · xAI 账单", "单号 · 不切号", "低于 10% 同样告警"].map((s) => (
             <span key={s} style={{ display: "block", height: 20, lineHeight: "20px", fontSize: 12, color: "var(--tx2)",
                                    overflow: "hidden", textOverflow: "ellipsis" }}>{s}</span>
           ))}

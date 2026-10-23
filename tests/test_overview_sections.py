@@ -4,7 +4,7 @@
 
     Codex   池 · 经本地代理**逐请求**换号 · 5h/周双窗口 · 探针**要花钱**
     Google  池 · **启动前**换凭证（agy 只在启动时读）· 额度是随时可读的比例
-    xAI     单号只读 · 周窗口
+    xAI     单号 · 周窗口
 
 ## ★★★ 这一组闸真正在守的东西
 
@@ -82,7 +82,8 @@ class TheOverviewIsTabbedByProvider(unittest.TestCase):
     def test_the_notes_name_the_actual_mechanism(self):
         """★ 判据打在**机制词**上。写成「Google 的账号」这种同义反复也能过长度检查，但它什么都没说。"""
         joined = " ".join(self.NOTES)
-        for word in ("逐请求", "启动前", "只读", "只看额度"):
+        # 「只读」→「单号」：用户 2026-10-23 让 grok 去掉只读字样（「解锁吧，看着不舒服」），机制词换成单号
+        for word in ("逐请求", "启动前", "单号", "只看额度"):
             with self.subTest(word=word):
                 self.assertIn(word, joined, f"★ 没有一档提到「{word}」这个关键差异")
 

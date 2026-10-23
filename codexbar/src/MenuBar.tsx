@@ -28,7 +28,7 @@ import { useLive } from "./hooks/useLive";
 import { useIdleTray } from "./hooks/useIdleTray";
 import { runningRows, type PlatformKey } from "./live";
 import { fmtAgo, fmtEta, cardLeftText } from "./helpers";
-import { grokRemPct } from "./grok";
+import { grokRefreshToast, grokRemPct } from "./grok";
 import { usePrivacy } from "./hooks/usePrivacy";
 import { useCardBannerDismiss } from "./hooks/useCardBannerDismiss";
 import { useIntegration } from "./hooks/useIntegration";
@@ -405,7 +405,7 @@ export default function MenuBar() {
 
   // ★ grok **不进** `accounts`/`alive`:那两个数组同时驱动计数徽章、探针全池的号数、
   //   自动切号。混进去会去"切"/"探"一个切不了的东西,且不报错。闸在 tests/test_grok_not_in_pool_ui.py。
-  const { snap: grokSnap, busy: grokBusy, refresh: refreshGrok } = useGrokQuota();
+  const { snap: grokSnap, busy: grokBusy, refresh: refreshGrok, last: grokLast } = useGrokQuota();
   // ★ agy 同样不进 `accounts`/`alive`,理由与 grok 完全一致。
   const { snap: agySnap, busy: agyBusy } = useAgyQuota();
   // ★ agy 账号池。只在 gemini 档打开时才读盘 —— 菜单栏常开，无谓的 IPC 不该常驻。
@@ -445,7 +445,6 @@ export default function MenuBar() {
       : 1,
     // 死号红点只有 codex 这一档有数据来源；恒 false 不是偷懒：永远不亮的灯也比来路不明的灯好。
     hasDead: p.key === "codex" && dead.length > 0,
-    readOnly: p.key === "grok",
   }));
 
   const bestPct = alive.reduce((m, a) => Math.max(m, a.tightest), -1);
@@ -518,7 +517,7 @@ export default function MenuBar() {
       void agyPool.refresh().then((ok) => showToast(ok === null ? "Gemini 正在刷新" : ok ? "已刷新 Gemini · 免费" : "✗ Gemini 刷新失败"));
       return;
     }
-    if (plat === "grok") { void refreshGrok().then((ok) => showToast(ok ? "已刷新 Grok · 免费" : "✗ Grok 刷新失败")); return; }
+    if (plat === "grok") { void refreshGrok().then((ok) => showToast(grokRefreshToast(ok, grokLast()?.accounts?.[0]))); return; }
     if (plat === "claude") {
       void refreshClaude().then((ok) => showToast(ok === null ? "Claude 正在重读" : ok ? "已重读 Claude 额度 · 本机" : "✗ Claude 额度读不到"));
       return;
@@ -536,7 +535,7 @@ export default function MenuBar() {
         hint: "逐号刷一次 token 再打一次云端额度接口，两步都过才算这个号还能用。零消耗",
         action: () => { agyPool.health(); showToast("正在检查 Gemini 各号…"); } }] : []),
     ...(plat === "grok" ? [{ id: "open-grok", label: "打开 Grok 用量详情", loadingLabel: "",
-        hint: "grok 是单号只读：没有池可切、也没有可探的号,只有用量与周额度可看",
+        hint: "grok 是单号：没有池可切、也没有可探的号,只有用量与周额度可看",
         action: () => void openMain("navigate-platform", "grok") }] : []),
     { id: "open-traffic", label: "打开 Token 消耗", loadingLabel: "",
       hint: "在主窗口看分平台/分模型明细、切时间段、看费率卡",
@@ -548,7 +547,7 @@ export default function MenuBar() {
   const dir = MB_PLATS.findIndex((p) => p.key === plat) < MB_PLATS.findIndex((p) => p.key === prevPlat) ? -1 : 1;
   const nameW = nameColWidth(plat === "codex" ? alive.map((a) => a.node)
     : plat === "gemini" ? agyRows.map((r) => r.a.label) : plat === "claude" ? ["本机"] : ["grok"]);
-  const blockHead = plat === "grok" ? "当前号 · 只读" : plat === "claude" ? "本机 · 状态栏转写" : blockTitle(sortKeys);
+  const blockHead = plat === "grok" ? "当前号" : plat === "claude" ? "本机 · 状态栏转写" : blockTitle(sortKeys);
   // 进行态跟着当前这一档走：Gemini / Grok 的刷新不经 `loadingAction`，只认它会让按钮几秒内毫无反应、诱发连点（阶段 A 评审）
   const refreshing = plat === "gemini" ? agyPool.busy : plat === "grok" ? grokBusy : loadingAction === "refresh-all";
 
@@ -582,7 +581,8 @@ export default function MenuBar() {
         </span>
       </div>
 
-      <RunStrip rows={running} todayTokens={live?.today.tokens ?? null}
+      {/* 「今日」与今日 Tab 同一个数（快照、已按缓存口径）；快照没到才退回实时账本（也已按口径） */}
+      <RunStrip rows={running} todayTokens={today?.totalTok ?? live?.today.tokens ?? null}
                 open={stripOpen} onToggle={toggleStrip} isDark={isDark} />
 
       {/* Tab 32：账号 N / 今日 415M；选中底块横滑 380 ms 临界阻尼 */}

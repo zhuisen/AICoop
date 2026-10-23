@@ -1527,7 +1527,7 @@ def _is_bare_codex_line(line, pid_first=True):
     `pid_first`：`pgrep -fl` 每行以 pid 开头；没有 pid 的是别的进程多行命令串的续行，不是进程。"""
     low = line.lower()
     if ("codex-rotate" in low or "codex-account-rotator" in low
-            or "codexbar" in low or "quota_daemon" in low):
+            or "codexbar" in low or "aicoop" in low or "quota_daemon" in low):
         return False  # our own tooling, not a codex session
     # 只有**裸 codex** 会读/刷 ~/.codex/auth.json;cxp/代理会话(--profile rotateproxy)的 token 由代理
     # 的 auth-token 命令注入、不碰 auth.json → 放行(否则 graph-label 等 cxp 定时任务会一直阻塞轮换)。

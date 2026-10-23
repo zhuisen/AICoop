@@ -25,6 +25,8 @@ export type GrokReason =
 export interface GrokQuota {
   /** ★★ 0–100 的**已用**百分比，不是剩余。喂进 `quotaColor()` 前必须换向 —— 见 `grokRemPct`。 */
   used_percent: number;
+  /** ★ 响应里没有 `creditUsagePercent`（proto3 省略零值）⇒ 后端按「已用 0」推断。界面按下限显示（剩 ≥99%）并写「推断」。 */
+  used_inferred?: boolean;
   period_type: string | null;
   period_start: number | null;
   period_end: number | null;
@@ -47,7 +49,7 @@ export interface GrokAccount {
   /** ★ `available === false` 时恒 `null`，绝不是 0 —— 0% 是"这周没用"的合法值。 */
   quota: GrokQuota | null;
   /** 降级时搬运的上一次成功读数。**字段名不同**，消费方不可能误当现值。 */
-  last_good: { used_percent: number; fetched_at: number; period_end: number | null } | null;
+  last_good: { used_percent: number; fetched_at: number; period_end: number | null; used_inferred?: boolean } | null;
   /** 套餐名（`/v1/settings` 的 `subscription_tier_display`，一天读一次，读不到留上次的）。旧 sidecar 没有。 */
   plan?: { name: string; at: number } | null;
   /** 被 429 后，到这个 epoch 秒之前 `grok-quota` 不再发请求。 */
@@ -70,8 +72,19 @@ export interface GrokSnapshot {
  * 而且不报错**。同一个 app 里同时存在两种方向时，靠调用点自觉换算迟早有一处漏。
  */
 export function grokUsedPct(a: GrokAccount | null | undefined): number | null {
-  return a?.quota ? a.quota.used_percent : null;
+  if (!a?.quota) return null;
+  // ★ 推断的 0：按下限 1 算（剩 99），绝不画成「满 100」—— 只知道「不到 1%」，不知道是不是正好 0（用户 2026-10-23 选）
+  return a.quota.used_inferred ? Math.max(1, a.quota.used_percent) : a.quota.used_percent;
 }
+
+/** 显示的这个数是不是推断出来的（字段缺席 ⇒ 本周用量不到 1%）—— 现值或降级时沿用的旧值都算。 */
+export function grokInferred(a: GrokAccount | null | undefined): boolean {
+  if (!a) return false;
+  return a.available ? !!a.quota?.used_inferred : !!a.last_good?.used_inferred;
+}
+
+/** 推断时的说明（悬停提示 / 卡片小字共用一句）。 */
+export const GROK_INFERRED_NOTE = "xAI 没返回本周用量（它省略 0 值）⇒ 推断本周用量不到 1%，按剩 99% 下限显示；用量到 1% 后变实测";
 export function grokRemPct(a: GrokAccount | null | undefined): number | null {
   const used = grokUsedPct(a);
   return used == null ? null : 100 - used;
@@ -86,7 +99,7 @@ export function grokLastGoodRemPct(a: GrokAccount | null | undefined, nowSec: nu
   // ★ 那次读数所在的周期已经结束 ⇒ 「已用」属于上一个周期 ⇒ 读不到（不是 0，也不是满）。
   //   不判它，token 一直刷不新时，周期末之后各处仍画上周的 0% 红，而倒计时同时写「已重置」（2026-10-21 复查）。
   if (lg.period_end != null && lg.period_end <= nowSec) return null;
-  return 100 - lg.used_percent;
+  return 100 - (lg.used_inferred ? Math.max(1, lg.used_percent) : lg.used_percent);
 }
 
 export type GrokTone = "amber" | "red" | "muted";
@@ -113,6 +126,23 @@ export function grokReasonTone(a: GrokAccount): GrokTone {
 export function grokBadgePlan(a: GrokAccount | null | undefined): string {
   const n = a?.plan?.name ?? "";
   return /^free$/i.test(n) ? "" : n;
+}
+
+/**
+ * 手动刷新之后的 toast（用户 2026-10-23「grok 点刷新没有对应的 UI 交互反应」）。
+ * token 已过期时 grok-quota **不发请求、几十毫秒就回来**，转圈一闪而过、数字不变 —— 看上去就是没点中。
+ * 所以失败时按原因说一句「为什么没变、要做什么」，不只写「刷新失败」。长解释仍在卡上的标记悬停里（`grokReasonNote`）。
+ */
+export function grokRefreshToast(ok: boolean, a: GrokAccount | null | undefined): string {
+  if (ok) return "已刷新 Grok · 免费";
+  switch (a?.reason) {
+    case "token_expired": return "Grok token 已过期 · 在终端起一次 grok 会话会自动续期，再点刷新";
+    case "unauthorized": return "✗ xAI 拒绝了 Grok token · 需要重新登录 grok";
+    case "rate_limited": return "xAI 限流中 · 到点后自动重试";
+    case "network_error": return "✗ 连不上 xAI · 稍后再试";
+    case "auth_file_missing": case "auth_file_empty": return "本机没有 grok 登录信息 · 先登录 grok CLI";
+    default: return "✗ Grok 额度这次没读到 · 稍后再试";
+  }
 }
 
 export function grokReasonNote(a: GrokAccount): string {

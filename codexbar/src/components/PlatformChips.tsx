@@ -12,26 +12,17 @@ export interface ChipItem {
   count: number;
   /** 这一档有没有失效账号 —— 数字后跟一颗红点。 */
   hasDead?: boolean;
-  /** 只读档（只有 Grok）：数字后挂一把锁。 */
-  readOnly?: boolean;
 }
 
 /** 档位 → logo / 数字色用的平台键（请求账本那套：Gemini 的键是 `agy`）。 */
 export const LOGO_OF: Record<MbPlat, LogoPlatform & PlatformKey> = { codex: "codex", claude: "claude", gemini: "agy", grok: "grok" };
-
-const Lock = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
-    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
-    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-  </svg>
-);
 
 /**
  * 菜单栏的**平台芯片行**（交接包 2026-10-19 · 4f「平台芯片 28」，`P4PopRows.html` 第 53 行逐值照抄）。
  *
  * ★ 2026-10-19 起用**官方彩色 logo**（`PlatformLogo`，资产内置、不远程加载），取代 v4 稿的蒙版单色图：
  *   交接包规定「logo 任何状态都不变暗」，选中 / 未选中只换芯片的底色、描边与数字色（平台数字色）。
- * ★ 顺序固定 Codex → Claude → Gemini → Grok；只有 Grok 带锁（只读）。
+ * ★ 顺序固定 Codex → Claude → Gemini → Grok。Grok 原来带锁（只读），用户 2026-10-23「解锁吧，看着不舒服」⇒ 去掉。
  */
 export default function PlatformChips({ items, cur, on, right, isDark }: {
   items: ChipItem[];
@@ -49,7 +40,7 @@ export default function PlatformChips({ items, cur, on, right, isDark }: {
         const pc = numColor(LOGO_OF[p.key], isDark ? "dark" : "light");
         return (
           <button key={p.key} type="button" className="mb-chip2" data-mb-chip={p.key} data-on={sel ? "1" : "0"}
-                  onClick={() => on(p.key)} title={`${p.label} · ${p.count} 号${p.readOnly ? " · 只读" : ""}`}
+                  onClick={() => on(p.key)} title={`${p.label} · ${p.count} 号`}
                   style={{ display: "flex", alignItems: "center", gap: 5, height: 28, padding: "0 8px 0 6px",
                            borderRadius: 14, cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
                            background: sel ? `${pc}22` : "transparent",
@@ -57,7 +48,6 @@ export default function PlatformChips({ items, cur, on, right, isDark }: {
             <PlatformLogo platform={LOGO_OF[p.key]} isDark={isDark} size={16} alt={p.label} />
             <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 600,
                            color: sel ? pc : "var(--tx2)", transition: "color 200ms" }}>{p.count}</span>
-            {p.readOnly && <span style={{ color: "var(--tx3)" }}><Lock /></span>}
             {/* 死号提示：只在真有死号时出现 —— 常亮的灯会被学会忽略。 */}
             {p.hasDead && <span className="mb-chip-dead" />}
           </button>

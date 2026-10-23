@@ -38,10 +38,14 @@ export interface QuotaSidecar<T> {
   err: string | null;
   /** 手动刷新 → 成功与否（toast 要等结果出来再说「已刷新」）。 */
   refresh: () => Promise<boolean>;
+  /** 最近一次取回的快照（`refresh` 结束后立刻可读，不等 React 重渲染）—— toast 要按它说失败原因。 */
+  last: () => T | null;
 }
 
 /** ★ 同一个 `runCmd` 的在途请求。第二个调用方**等同一个 promise**，不再起第二个子进程。 */
 const _inflight = new Map<string, Promise<unknown>>();
+/** 每个 `runCmd` 最近一次取回的结果（给 `last()`）。 */
+const _last = new Map<string, unknown>();
 /** ★ 同一个 `runCmd` 的所有实例。取到结果后广播，保证同一屏上的两块永远同一份数据。 */
 const _subs = new Map<string, Set<(d: unknown) => void>>();
 
@@ -132,6 +136,7 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
     _inflight.set(runCmd, job);
     try {
       const d = await job;
+      _last.set(runCmd, d);
       // ★ 广播给**所有**实例，不只是发起的那个。
       for (const fn of _subs.get(runCmd) ?? []) fn(d);
       return judge(d);
@@ -208,5 +213,5 @@ export function useQuotaSidecar<T extends HasFetchedAt>(cfg: {
     return () => { dead = true; un?.(); };
   }, [updateEvent, readCmd, adopt]);
 
-  return { snap, busy, err, refresh: () => fetchQuota(true) };
+  return { snap, busy, err, refresh: () => fetchQuota(true), last: () => (_last.get(runCmd) as T | undefined) ?? snapRef.current };
 }

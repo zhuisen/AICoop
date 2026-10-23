@@ -307,7 +307,7 @@ class CardsAreFixedAndNothingWraps(unittest.TestCase):
         ("ovplat=codex&ovhover=1", {"inuse"}),
         ("ovplat=gemini&agypool=4&ovoff=1", {"inuse", "cool", "off"}),
         ("ovplat=claude", {"inuse"}),
-        ("ovplat=grok", {"readonly"}),
+        ("ovplat=grok", {"inuse"}),          # 2026-10-23 用户「grok 解锁」：与 Claude 本机卡同一套状态，不再 readonly
     ]
 
     def test_148_in_every_state_and_width(self):

@@ -13,6 +13,8 @@ export interface WinCell {
   /** 沿用的旧读数：降不透明度（与总览卡同一画法）。 */
   dim?: boolean;
   title?: string;
+  /** 数字是下限（grok 推断的「不到 1%」）⇒ 前面写「≥」。 */
+  atLeast?: boolean;
 }
 
 /**
@@ -106,7 +108,7 @@ function Cell({ w, label }: { w: WinCell | null; label: string }) {
       <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.15, flexShrink: 0 }}>
         <span style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 600,
                        whiteSpace: "nowrap", color: w.pct == null ? "var(--tx3)" : low ? "var(--bad)" : "var(--tx)" }}>
-          {w.pct == null ? "—" : `${Math.round(w.pct)}%`}
+          {w.pct == null ? "—" : `${w.atLeast ? "≥" : ""}${Math.round(w.pct)}%`}
         </span>
         <span title={w.refillTitle} style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 9.5,
                        whiteSpace: "nowrap", color: "var(--tx3)" }}>↻{w.refill}</span>

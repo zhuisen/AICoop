@@ -96,9 +96,11 @@ def _write_sidecar(snap):
     """
     global _last_sidecar, _last_sidecar_at
     try:
-        key = json.dumps({k: v for k, v in (snap or {}).items()
-                          if k not in ("fetched_at", "pid")},
-                         ensure_ascii=False, sort_keys=True)
+        # ★ `last_sent_at` 每轮都变（诊断字段，见 grok-quota `scan_account`）：比内容时剔掉，否则每 15 s 一次广播
+        body = {k: v for k, v in (snap or {}).items() if k not in ("fetched_at", "pid")}
+        body["accounts"] = [{k: v for k, v in a.items() if k != "last_sent_at"} if isinstance(a, dict) else a
+                            for a in (body.get("accounts") or [])]
+        key = json.dumps(body, ensure_ascii=False, sort_keys=True)
     except Exception:
         key = None
     now = time.time()
@@ -141,6 +143,7 @@ def flatten(snap):
         "reset": q.get("period_end"),
         "window": q.get("window_minutes"),
         "products": products,
+        "inferred": bool(q.get("used_inferred")),
     }
 
 
@@ -151,6 +154,7 @@ def row(ts, flat):
         "reset": flat["reset"],
         "window": flat["window"],
         "products": [{"product": n, "used": u} for n, u in flat["products"]],
+        **({"inferred": True} if flat.get("inferred") else {}),   # 推断的 0（字段缺席），见 grok-quota parse_quota
     }
 
 

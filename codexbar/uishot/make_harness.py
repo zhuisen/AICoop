@@ -416,6 +416,10 @@ STUB = """
     missing: { schema: 1, fetched_at: _NOW - 60, auth_path: '~/.grok/auth.json',
                accounts: [_acc({ account_key: null, email: null, token_expires_at: null,
                                  reason: 'auth_file_missing' })] },
+    // 本周用量不到 1%：xAI 不返回 `creditUsagePercent`（proto3 省略 0）⇒ grok-quota 推断 0、标 `used_inferred`（2026-10-23）
+    zero:    { schema: 1, fetched_at: _NOW - 60, auth_path: '~/.grok/auth.json',
+               accounts: [_acc({ available: true, http_status: 200,
+                                 quota: Object.assign({}, _Q, { used_percent: 0, used_inferred: true, products: [] }) })] },
     // 降级 + 保留陈旧读数:细条要变琥珀并写明是几时的,横幅在上。两者必须同时出现。
     stale:   { schema: 1, fetched_at: _NOW - 60, auth_path: '~/.grok/auth.json',
                accounts: [_acc({ reason: 'network_error', detail: 'TimeoutError: 超过 20s 整体上限',
@@ -1478,7 +1482,7 @@ function relayEntry() {
       // ★ grok 周额度。**不打桩就是假绿**:落到 default 会返回 null,页面永远画「未探测」,
       //   而你想验的六个降级态一张都截不到 —— 页面照常渲染、零报错,看着像通过。
       //   同族的前车之鉴:`metadata` 空对象 / `read_auth_tokens` 返 null 那两次假阴性。
-      //   `?grok=ok|expired|401|missing|never|stale`,email 一律脱敏。
+      //   `?grok=ok|expired|401|missing|never|stale|zero`,email 一律脱敏。
       // ★ 菜单栏在跑条 / 悬停面板的实时读数（`read_live`，契约 PLAN §2.1 `--live`）。
       //   `?run=0`（默认，空闲）· `1` 只有 Codex · `3` Codex×2 + Claude×3 + Gemini（交接包示意同形）。
       case 'read_live': {
@@ -1605,7 +1609,12 @@ function relayEntry() {
       case 'run_grok_quota': {
         var g = p.get('grok') || 'ok';
         if (g === 'never') return Promise.resolve(null);
-        return Promise.resolve(JSON.stringify(GROK[g] || GROK.ok));
+        var gs = JSON.parse(JSON.stringify(GROK[g] || GROK.ok));
+        // `?grokplan=SuperGrok`：带套餐徽章（名字行最挤的那一档，2026-10-23 用户截图「边界截断」）
+        if (p.get('grokplan') && gs.accounts && gs.accounts[0]) gs.accounts[0].plan = { name: p.get('grokplan'), at: _NOW };
+        // `?grokdelay=<ms>`：手动刷新慢一点返回，量得到「转圈 / 提示」（真机 token 过期时几十毫秒就回来了）
+        var gd = cmd === 'run_grok_quota' ? Number(p.get('grokdelay') || 0) : 0;
+        return new Promise(function (res) { setTimeout(function () { res(JSON.stringify(gs)); }, gd); });
       }
       // ★ agy 额度。**不打桩就是假绿** —— 落到 default 返回 null ⇒ `agyQuotaVisible` 判 false
       //   ⇒ 整张卡 `return null`,于是 sweep 一张 agy 卡都没渲染却报"干净"。

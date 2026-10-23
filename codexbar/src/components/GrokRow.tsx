@@ -2,22 +2,16 @@ import GrokStaleMark from "./GrokStaleMark";
 import QuotaRow, { type WinCell } from "./mb/QuotaRow";
 import type { Theme } from "../theme";
 import type { GrokSnapshot, GrokAccount } from "../grok";
-import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible, grokBadgePlan } from "../grok";
+import { grokRemPct, grokLastGoodRemPct, grokQuotaVisible, grokBadgePlan, grokInferred, GROK_INFERRED_NOTE } from "../grok";
 import { fmtEta } from "../helpers";
-
-const Lock = () => (
-  <svg width="9" height="9" viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
-    <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
-    <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-  </svg>
-);
 
 /**
  * 菜单栏里的 Grok 行（交接包 2026-10-19 · 4f「当前号 · 只读」）。外形在 `mb/QuotaRow`。
  *
  * ★★ **走完全独立的数据通路**：数据**绝不**混进 `accounts` / `alive` / `aliveByLabel`（计数徽章、
  *   探针全池、自动切号都读它们）。闸在 `tests/test_grok_not_in_pool_ui.py`。
- * ★ **只读**：grok 不在池里，这一行永远不出按钮（交接包：只有 Grok 只读）。
+ * ★ grok 不在池里，这一行永远不出按钮（`QuotaRow` 的 `readOnly` = 不出「切换」）。界面上不再写「只读」、不挂锁
+ *   （用户 2026-10-23「grok 不要变成只读了，解锁吧，看着不舒服」，取代交接包 4f「当前号 · 只读」）。
  * ★★ **grok 不画 5h 那一格的条**（用户 2026-09-15「取消 5h 窗口」）：xAI 只回 WEEKLY。
  *   固定槽位下那格写「5h —」（画板同款），说的是"这家没有这个窗口"，不是"读不到"。
  * ★ 方向：接口给的是**已用**，这里一律换成**剩余**再画（`grokRemPct`，见 `tests/test_grok_direction.py`）。
@@ -49,7 +43,7 @@ export default function GrokRow({ t, snap, busy, disabled, onOpen }: {
   if (!a.available) {
     // ★ 降级：有上次读数就画上次的（降不透明度 + 「上次读数」），没有就写 —。
     const stale = lgRem != null;
-    const week: WinCell = { label: "周", pct: stale ? lgRem : null, dim: stale,
+    const week: WinCell = { label: "周", pct: stale ? lgRem : null, dim: stale, atLeast: stale && grokInferred(a),
                             refill: fmtEta(a.last_good?.period_end ?? undefined),
                             title: stale ? "上次读数 —— 这次额度暂时读不到" : "额度暂时读不到" };
     return (
@@ -60,7 +54,9 @@ export default function GrokRow({ t, snap, busy, disabled, onOpen }: {
   }
 
   const q = a.quota!;
-  const week: WinCell = { label: "周", pct: rem, refill: fmtEta(q.period_end ?? undefined) };
+  const inf = grokInferred(a);
+  const week: WinCell = { label: "周", pct: rem, refill: fmtEta(q.period_end ?? undefined), atLeast: inf,
+                          title: inf ? GROK_INFERRED_NOTE : undefined };
   return (
     <QuotaRow platform="grok" isDark={isDark} name="grok" readOnly onOpen={onOpen}
               sub={<Sub plan={grokBadgePlan(a)} />} wins={[null, week]} data={{ "data-mb-grok": "ok" }} />
@@ -69,11 +65,12 @@ export default function GrokRow({ t, snap, busy, disabled, onOpen }: {
 
 function Sub({ plan, mark }: { plan?: string; mark?: React.ReactNode }) {
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 2, color: "var(--tx3)" }}
-            title="grok 不在轮换池，只显示额度，不参与切号"><Lock />只读</span>
-      {plan ? <span style={{ color: "var(--gr)", fontWeight: 700 }}>{plan}</span> : null}
+    <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, maxWidth: "100%" }}>
+      {/* 告警标记在前、套餐在后且可缩成省略号：名字列 46px，「SuperGrok」要 48（2026-10-23 实测被裁 2px） */}
       {mark}
+      {plan ? <span data-mb-grok-plan="" title={`套餐：${plan}`}
+                    style={{ color: "var(--gr)", fontWeight: 700, minWidth: 0, overflow: "hidden",
+                             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{plan}</span> : null}
     </span>
   );
 }

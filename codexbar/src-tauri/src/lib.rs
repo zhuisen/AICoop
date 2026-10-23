@@ -2706,12 +2706,17 @@ fn toggle_menubar(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
 
 // ---- 单实例闸门 ----
 
-/// 旧名 `CodexBar` 的开机自启 plist（autostart 插件按 productName 命名）。只认指向
-/// `CodexBar.app` 可执行文件的那一份 —— 同名但内容不是我们的，不碰。
+/// 需要重写的开机自启 plist（autostart 插件按 productName 命名、写进当时的可执行文件路径）。只认我们的旧路径：
+/// ① 旧名 `CodexBar.plist` 指着 `CodexBar.app/…/codexbar`（2026-10-21 改 productName 前）；
+/// ② `AICoop.plist` 还指着 `AICoop.app/…/codexbar`（2026-10-23 可执行文件改名 `AICoop` 前，进程名随之统一）。
+/// 同名但内容不是我们的，不碰。
 fn legacy_autostart_plist(home: &std::path::Path) -> Option<std::path::PathBuf> {
-    let p = home.join("Library/LaunchAgents/CodexBar.plist");
-    let body = fs::read_to_string(&p).ok()?;
-    body.contains("/CodexBar.app/Contents/MacOS/codexbar").then_some(p)
+    let la = home.join("Library/LaunchAgents");
+    [("CodexBar.plist", "/CodexBar.app/Contents/MacOS/codexbar"), ("AICoop.plist", "/AICoop.app/Contents/MacOS/codexbar")]
+        .into_iter()
+        .map(|(f, exe)| (la.join(f), exe))
+        .find(|(p, exe)| fs::read_to_string(p).map(|b| b.contains(exe)).unwrap_or(false))
+        .map(|(p, _)| p)
 }
 
 /// 开机自启只迁到**装好的** AICoop（`/Applications` 或 `~/Applications`）。插件把**当前可执行文件**写进新 plist，
@@ -2926,7 +2931,10 @@ pub fn run() {
                         use tauri_plugin_autostart::ManagerExt;
                         match app.autolaunch().enable() {
                             Ok(()) if new_autostart_ok(&home, &exe) => {
-                                if let Err(e) = fs::remove_file(&old) { log::warn!("autostart migration: old plist not removed: {}", e); }
+                                // ② 那种情况旧文件就是新文件（已被 enable 原地重写），不能删
+                                if old != home.join("Library/LaunchAgents/AICoop.plist") {
+                                    if let Err(e) = fs::remove_file(&old) { log::warn!("autostart migration: old plist not removed: {}", e); }
+                                }
                             }
                             Ok(()) => log::warn!("autostart migration: new plist missing or not ours — kept the old one"),
                             Err(e) => log::warn!("autostart migration: enable failed: {}", e),
@@ -3493,6 +3501,11 @@ mod legacy_name_tests {
         assert!(super::legacy_autostart_plist(&d).is_none(), "someone else's plist → untouched");
         fs::write(la.join("CodexBar.plist"), "<string>/Applications/CodexBar.app/Contents/MacOS/codexbar</string>").unwrap();
         assert!(super::legacy_autostart_plist(&d).is_some());
+        fs::remove_file(la.join("CodexBar.plist")).unwrap();
+        fs::write(la.join("AICoop.plist"), "<string>/Applications/AICoop.app/Contents/MacOS/AICoop</string>").unwrap();
+        assert!(super::legacy_autostart_plist(&d).is_none(), "已指着新可执行文件 → 不动");
+        fs::write(la.join("AICoop.plist"), "<string>/Applications/AICoop.app/Contents/MacOS/codexbar</string>").unwrap();
+        assert_eq!(super::legacy_autostart_plist(&d), Some(la.join("AICoop.plist")), "还指着旧可执行文件名 → 重写");
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -3502,6 +3515,7 @@ mod legacy_name_tests {
         let home = Path::new("/Users/x");
         let ok = |p: &str| super::autostart_migration_allowed(Path::new(p), home);
         assert!(ok("/Applications/AICoop.app/Contents/MacOS/codexbar"));
+        assert!(ok("/Applications/AICoop.app/Contents/MacOS/AICoop"));
         assert!(ok("/Users/x/Applications/AICoop.app/Contents/MacOS/codexbar"));
         assert!(!ok("/Users/x/repo/codexbar/src-tauri/target/release/bundle/macos/AICoop.app/Contents/MacOS/codexbar"), "构建树");
         assert!(!ok("/Users/x/repo/codexbar/src-tauri/target/debug/codexbar"), "tauri dev");
