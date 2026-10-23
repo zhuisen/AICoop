@@ -22,6 +22,11 @@ if not os.environ.get("CODEXBAR_QUOTA_ANCHORS"):
 os.environ.setdefault("AGY_KEYRING", "0")
 os.environ.setdefault("AGY_USAGE_REPORT", "0")   # B88：别在测试里起真 agy 跑 /usage
 os.environ.setdefault("CODEXBAR_LAUNCHCTL", "0")
+# ★ grok 的两个落盘标记（`grok-quota-sampler::grok_recent` 按 mtime 判「刚跑过」）指到不存在的路径：
+#   否则你刚用过 grok，测试起的采样器就会当它在跑、拿**真** auth 去打 xAI（2026-10-23 采样器放宽门时补）。
+_g = os.path.join(tempfile.gettempdir(), "codexbar-test-no-grok")
+os.environ.setdefault("GROK_AUTH_PATH", os.path.join(_g, "auth.json"))
+os.environ.setdefault("GROK_LOG_PATH", os.path.join(_g, "unified.jsonl"))
 # ★★ agy 账号池默认也指到临时目录：`bin/agy` → `agy-rotate auto` 对真池跑一次，
 #   装进钥匙串的就是**真凭证**（Google 签发），源头那道 `is_google_issued` 挡不住它。
 if not os.environ.get("AGY_POOL_STORE"):

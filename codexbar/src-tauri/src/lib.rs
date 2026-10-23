@@ -2586,6 +2586,57 @@ fn place_popover(
     (x, y)
 }
 
+/// 上一次左键单击托盘的时刻（秒，0 = 没有 / 刚判过一次双击）。
+static LAST_TRAY_CLICK: Mutex<f64> = Mutex::new(0.0);
+
+/// 这一下是不是**双击的第二下**（纯函数）。判过一次就清零：三连击不会算两次双击。
+fn is_double_click(prev: f64, now: f64, interval: f64) -> bool {
+    prev > 0.0 && now >= prev && now - prev <= interval
+}
+
+/// 双击托盘图标 = 打开工作台总览（用户 2026-10-23）。
+/// ★ macOS 上 `tray-icon` 不发 `DoubleClick`（只有 Windows 实现了），只能自己按系统双击间隔判。
+///   第一下照常开菜单栏弹窗（单击不能为了等第二下而延迟 —— 那会让每次单击都慢半秒）；第二下收起弹窗、开总览。
+///   走 `open-main-page`（与菜单栏 / 刘海同一条跳转），不带平台 ⇒ 停在总览当前那一档。
+fn on_tray_left_click(app: &AppHandle, rect: tauri::Rect) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    #[cfg(target_os = "macos")]
+    let interval: f64 = unsafe { objc2::msg_send![objc2::class!(NSEvent), doubleClickInterval] };
+    #[cfg(not(target_os = "macos"))]
+    let interval = 0.5;
+    let double = {
+        let mut last = LAST_TRAY_CLICK.lock().unwrap();
+        let d = is_double_click(*last, now, interval);
+        *last = if d { 0.0 } else { now };
+        d
+    };
+    if !double {
+        toggle_menubar(app, Some(rect));
+        return;
+    }
+    if let Some(w) = app.get_webview_window("menubar") {
+        let _ = w.hide();
+    }
+    let _ = app.emit("open-main-page", serde_json::json!({ "page": "overview" }));
+}
+
+#[cfg(test)]
+mod tray_double_click_tests {
+    use super::is_double_click;
+
+    #[test]
+    fn second_click_inside_the_interval_is_a_double() {
+        assert!(is_double_click(100.0, 100.3, 0.5));
+    }
+
+    #[test]
+    fn too_slow_first_click_or_clock_going_back_is_not() {
+        assert!(!is_double_click(100.0, 100.6, 0.5));
+        assert!(!is_double_click(0.0, 100.0, 0.5), "没有上一下");
+        assert!(!is_double_click(100.0, 99.0, 0.5), "墙钟回拨");
+    }
+}
+
 fn toggle_menubar(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
     if let Some(win) = app.get_webview_window("menubar") {
         if win.is_visible().unwrap_or(false) {
@@ -2965,15 +3016,20 @@ pub fn run() {
                 .on_tray_icon_event(|tray, event| {
                     match event {
                         TrayIconEvent::Click {
-                            button: MouseButton::Left | MouseButton::Right,
+                            button,
                             button_state: MouseButtonState::Up,
                             rect,
                             ..
-                        } => {
+                        } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                             // ★ 先收起胶囊的悬停面板，再走原有菜单栏弹窗（page 2：点击胶囊 = 菜单栏弹窗）
                             #[cfg(target_os = "macos")]
                             tps_hover::on_click(tray.app_handle());
-                            toggle_menubar(tray.app_handle(), Some(rect));
+                            // 左键双击 = 打开工作台总览；右键照旧只开 / 收弹窗
+                            if button == MouseButton::Left {
+                                on_tray_left_click(tray.app_handle(), rect);
+                            } else {
+                                toggle_menubar(tray.app_handle(), Some(rect));
+                            }
                         }
                         // 悬停 200 ms 弹面板（只在有 AI 在跑时）；进出判定在 tps_hover 的光标轮询里
                         #[cfg(target_os = "macos")]
@@ -3075,6 +3131,10 @@ pub fn run() {
                 //   每秒都拉一次采样器。复用一个会被别人重置的计数器不会报错,
                 //   只会让频率悄悄错掉一个数量级。
                 let mut sampler_tick = 0u32;
+                // grok 自己每次运行都会写的两个文件（只取 mtime，不打开）。变了 = grok 刚跑过 ⇒ 立刻拉采样器。
+                let grok_marks: Vec<std::path::PathBuf> = std::env::var_os("HOME").map(std::path::PathBuf::from)
+                    .map(|h| vec![h.join(".grok/auth.json"), h.join(".grok/logs/unified.jsonl")]).unwrap_or_default();
+                let mut grok_run_seen: Option<std::time::SystemTime> = None;
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     since_tick += 1;
@@ -3134,6 +3194,17 @@ pub fn run() {
                                 spawn_and_reap(c);
                             }
                         }
+                    }
+                    // ★★ grok 没有 wrapper，App 是唯一拉起方。原来只每 60 s 拉一次、采样器又要求「此刻 grok 在跑」，
+                    //   而 grok 一次只跑 4–42 s ⇒ 10-22 起 12 次运行只抓到 1 次，用户看到「用了 grok 额度也不更新」
+                    //   （2026-10-23）。现在 grok 一落盘（续 token / 写日志）就拉；采样器的门也放宽到「10 分钟内跑过」。
+                    let grok_run = grok_marks.iter()
+                        .filter_map(|f| fs::metadata(f).ok().and_then(|m| m.modified().ok())).max();
+                    let grok_ran = grok_run.is_some() && grok_run_seen.is_some() && grok_run != grok_run_seen;
+                    if grok_run.is_some() {
+                        grok_run_seen = grok_run;
+                    }
+                    if grok_ran || sampler_tick % 60 == 0 {
                         let lock = format!("{}/traffic/grok-quota-ledger/.sampler.lock", data_dir());
                         if !sampler_lock_held(&lock) {
                             let script = format!("{}/grok-quota-sampler", script_dir());

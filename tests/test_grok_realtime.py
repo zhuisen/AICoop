@@ -101,8 +101,17 @@ class TheSamplerDoesNotTouchCredentials(unittest.TestCase):
         self.assertEqual(hits, [], hits)
 
     def test_does_not_open_auth_json(self):
-        hits = [s for s in self.code_strings() if "auth.json" in s]
-        self.assertEqual(hits, [], "采样器自己打开了 auth.json：{}".format(hits))
+        """auth.json 只许出现在 `_grok_marks` 里，且那份路径只交给 `os.stat`（2026-10-23：判「刚跑过」只看 mtime）。"""
+        marks = next(n for n in ast.walk(self.tree) if isinstance(n, ast.FunctionDef) and n.name == "_grok_marks")
+        inside = {id(n) for n in ast.walk(marks)}
+        hits = [n.value for n in ast.walk(self.tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and id(n) not in self.docstrings and id(n) not in inside and "auth.json" in n.value]
+        self.assertEqual(hits, [], "采样器在别处碰了 auth.json：{}".format(hits))
+        users = [n for n in ast.walk(self.tree) if isinstance(n, ast.FunctionDef)
+                 and any(isinstance(c, ast.Call) and getattr(c.func, "id", None) == "_grok_marks" for c in ast.walk(n))]
+        self.assertEqual([u.name for u in users], ["grok_recent"])
+        calls = {ast.unparse(c.func) for c in ast.walk(users[0]) if isinstance(c, ast.Call)}
+        self.assertEqual(calls - {"_grok_marks", "os.stat", "time.time"}, set(), "只 stat，不打开")
 
     def test_does_not_issue_http_itself(self):
         self.assertNotIn("HTTPSConnection", SAMPLER)
@@ -176,6 +185,17 @@ class TheAppBackfillsTheSampler(unittest.TestCase):
         window = rs[max(0, i - 1600):i]
         self.assertIn("sampler_tick % 60", window)
         self.assertNotIn("since_tick % 60", window)
+
+    def test_a_grok_run_spawns_the_sampler_at_once(self):
+        """★★ 用户 2026-10-23「用了 grok 额度也不更新」：只靠 60 s 一次，4 s 的 grok 运行十有八九漏掉。
+        grok 的落盘（续 token / 写日志）一变就拉；只取 mtime。"""
+        rs = rs_no_comments()
+        i = rs.index("grok-quota-sampler")
+        window = rs[max(0, i - 1600):i]
+        self.assertIn("if grok_ran || sampler_tick % 60 == 0 {", window)
+        self.assertIn('h.join(".grok/auth.json"), h.join(".grok/logs/unified.jsonl")', rs)
+        self.assertIn("let grok_ran = grok_run.is_some() && grok_run_seen.is_some() && grok_run != grok_run_seen;", rs,
+                      "首次观测不算「跑过」，否则 App 一启动就拉")
 
 
 class TheSamplerHonoursTheStore(unittest.TestCase):
@@ -292,16 +312,63 @@ class EarlyExitDoesNotLeaveALock(unittest.TestCase):
     def test_absent_grok_leaves_no_lock(self):
         import os
         m = load_sampler()
-        old_alive = m.grok_alive
+        old_alive, old_recent = m.grok_alive, m.grok_recent
         with tempfile.TemporaryDirectory() as tmp:
             m.LEDGER_DIR = Path(tmp)
             m.grok_alive = lambda: False
+            m.grok_recent = lambda now=None: False
             try:
                 self.assertEqual(m.main(), 0)
                 self.assertFalse((Path(tmp) / m.LOCK).exists(),
                                  "grok 没在跑时留下了 .sampler.lock —— App 补拉会被永久挡住")
             finally:
-                m.grok_alive = old_alive
+                m.grok_alive, m.grok_recent = old_alive, old_recent
+
+
+class AShortGrokRunIsStillCaught(unittest.TestCase):
+    """★★ 用户 2026-10-23「在 grok cli 请求了数据也没有同步更新」：grok 一次只跑 4–42 s，App 每 60 s 拉一次采样器，
+    采样器又要求「此刻 grok 在跑」⇒ 10-22 起 12 次运行只抓到 1 次。门改成「在跑，或 `RECENT_SECS` 内写过盘」。"""
+
+    def setUp(self):
+        import os
+        self.m = load_sampler()
+        self.d = Path(tempfile.mkdtemp(prefix="grok-recent-"))
+        self.addCleanup(__import__("shutil").rmtree, self.d, True)
+        self.env = {k: os.environ.get(k) for k in ("GROK_AUTH_PATH", "GROK_LOG_PATH")}
+        os.environ["GROK_AUTH_PATH"] = str(self.d / "auth.json")
+        os.environ["GROK_LOG_PATH"] = str(self.d / "unified.jsonl")
+        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+                                 for k, v in self.env.items()])
+
+    def test_a_fresh_log_counts_as_recent(self):
+        import os
+        (self.d / "unified.jsonl").write_text("x")
+        self.assertTrue(self.m.grok_recent())
+        old = os.stat(self.d / "unified.jsonl").st_mtime - self.m.RECENT_SECS - 5
+        os.utime(self.d / "unified.jsonl", (old, old))
+        self.assertFalse(self.m.grok_recent(), "很久以前写的不算")
+
+    def test_a_token_renewal_counts_too(self):
+        (self.d / "auth.json").write_text("{}")
+        self.assertTrue(self.m.grok_recent(), "grok 续 token 也是它刚跑过的证据（只 stat 不读）")
+
+    def test_missing_files_are_not_recent(self):
+        self.assertFalse(self.m.grok_recent())
+
+    def test_just_ran_counts_as_active_even_when_grok_is_gone(self):
+        self.m.grok_alive = lambda: False
+        self.assertFalse(self.m.grok_active())
+        (self.d / "unified.jsonl").write_text("x")
+        self.assertTrue(self.m.grok_active(), "★ 4 s 的 grok 已经退出 —— 刚跑过也要采")
+
+    def test_the_gate_and_the_idle_exit_both_use_it(self):
+        src = SAMPLER[SAMPLER.index("def main("):]
+        self.assertIn("    if not grok_active():\n        return 0", src)
+        loop = src[src.index("while time.time() - started"):src.index("finally:")]
+        self.assertIn("if grok_active():\n                idle_since = None", loop,
+                      "★ 读成功之后也要判空闲：原来只在读失败时判，读到一次就每 15 s 打 xAI 直到 token 过期")
+        self.assertNotIn("open(", SAMPLER[SAMPLER.index("def grok_recent("):SAMPLER.index("def grok_active(")],
+                         "只 stat，不打开 auth.json")
 
 
 class ProcessMatchIsExact(unittest.TestCase):

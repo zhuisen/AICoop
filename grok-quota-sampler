@@ -205,6 +205,34 @@ def grok_alive():
                for l in out.splitlines())
 
 
+#: grok 刚活过的窗口（秒）。用户 2026-10-23「在 grok cli 请求了数据也没有同步更新」：grok 一次只跑 4–42 s，
+#: App 每 60 s 拉一次采样器、采样器又要求「此刻 grok 在跑」⇒ 实测 10-22 起 12 次运行只抓到 1 次（≈ 4/60）。
+RECENT_SECS = int(os.environ.get("GROK_SAMPLER_RECENT_SECS", "600"))
+
+
+def _grok_marks():
+    """grok 自己落盘、每次运行都会碰的两个文件。**只 stat、不打开**（不读凭证 —— 单一抓取者那条照旧）。"""
+    return (os.environ.get("GROK_AUTH_PATH") or os.path.expanduser("~/.grok/auth.json"),
+            os.environ.get("GROK_LOG_PATH") or os.path.expanduser("~/.grok/logs/unified.jsonl"))
+
+
+def grok_recent(now=None):
+    """grok 在 `RECENT_SECS` 内写过盘（跑过、或续过 token）。"""
+    now = time.time() if now is None else now
+    for f in _grok_marks():
+        try:
+            if now - os.stat(f).st_mtime <= RECENT_SECS:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def grok_active():
+    """此刻在跑，或刚跑过。门与空闲退出都按它判。"""
+    return grok_alive() or grok_recent()
+
+
 # ★★★ **SIGTERM 要跑 `finally`**（2026-09-17）。Python 默认的 SIGTERM 是**直接终止**，
 #   不抛异常、不跑 `finally` ⇒ 下面那句 `lk.unlink()` 根本没机会执行 ⇒ **每次被收都留一个陈锁**。
 #   而 App 退出时正是发 SIGTERM 收子进程（`lib.rs::reap_all_children`），
@@ -231,7 +259,7 @@ def main():
     #    ⇒ `.sampler.lock` 残留，而 Rust 只看「文件在不在」、不接管死 PID
     #    ⇒ 之后再开 grok，补拉永远被挡。agy 有 `bin/agy` wrapper 总能再拉；
     #    grok 没有 wrapper，App 是唯一补拉路径，这条更致命。
-    if not grok_alive():
+    if not grok_active():
         return 0
     if not take_lock(LEDGER_DIR / LOCK):
         return 0
@@ -245,20 +273,19 @@ def main():
             flat = flatten(fetch())
             now = time.time()
             if flat:
-                got_one, idle_since = True, None
+                got_one = True
                 changed = not same(flat, last_flat)
                 stale = now - last_write >= HEARTBEAT_SECS
                 if changed or stale:
                     append(ledger, row(now, flat))
                     last_flat, last_write = flat, now
-            else:
-                if grok_alive():
-                    idle_since = None
-                else:
-                    if idle_since is None:
-                        idle_since = now
-                    elif now - idle_since >= IDLE_SECS:
-                        break
+            # ★ 读到了也照样判空闲（原来只在读失败时判 ⇒ 读成功一次后每 15 s 打一次 xAI，直到 token 过期或 24 h）
+            if grok_active():
+                idle_since = None
+            elif idle_since is None:
+                idle_since = now
+            elif now - idle_since >= IDLE_SECS:
+                break
             nxt = last_flat["reset"] if last_flat else None
             crossed = (isinstance(nxt, (int, float)) and nxt > 0
                        and now >= nxt and last_write < nxt)
