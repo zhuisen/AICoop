@@ -96,7 +96,7 @@ class OneRowOnTheRealBundle(unittest.TestCase):
         for tab in ("codex", "gemini"):
             with self.subTest(tab=tab):
                 r = M[(860, tab)]
-                self.assertEqual(r["layout"], "3")   # AICoop P5_Spec §01：860 也排 3 列
+                self.assertEqual(r["layout"], "3")   # P5_Spec §01「860 最小窗口 3 列」（用户 2026-10-23 再确认）
                 self.assertEqual(len(r["labels"]), 4, "★ 刷新 / 探针 / 定时 / 自动切号一个都不能少：%s" % r["labels"])
                 joined = " ".join(r["labels"])
                 for full in ("刷新全池", "定时", "自动切号"):
@@ -110,7 +110,7 @@ class OneRowOnTheRealBundle(unittest.TestCase):
         for tab in ("codex", "gemini"):
             with self.subTest(tab=tab):
                 r = M[(1200, tab)]
-                self.assertEqual(r["layout"], "4")
+                self.assertEqual(r["layout"], "3")   # 1200 宽：第 4 列要每张 ≥ 320 ⇒ 仍 3 列（一律 245 时是 4）
                 self.assertLessEqual(max(r["mids"]) - min(r["mids"]), 1)
                 joined = " ".join(r["labels"])
                 for full in ("刷新全池", "定时", "自动切号"):
@@ -123,7 +123,7 @@ class OneRowOnTheRealBundle(unittest.TestCase):
         self.assertTrue(all(len(v) == 1 for v in by_w.values()), "★★ 同一宽度给出不同结果（来回翻）：%s" % M["seq"])
         self.assertEqual(by_w[860], {"3"})
         self.assertEqual(by_w[1000], {"3"})
-        self.assertEqual(by_w[1200], {"4"})
+        self.assertEqual(by_w[1200], {"3"})
 
 
 if __name__ == "__main__":

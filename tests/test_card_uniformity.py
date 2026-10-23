@@ -341,12 +341,17 @@ class SelectingACardNeverChangesAnyHeight(_Probed):
         if shutil.which("node") is None:
             self.skipTest("没有 node")
         pure = (SRC / "overview.ts").as_posix()
-        js = ("import('file://%s').then(m => { let worst = 1e9, at = 0; for (let w = 560; w <= 2600; w++) {"
+        # 从**到得了**的最小内容宽起扫：最小窗口 − 侧栏 64 − 内容区左右 16（「最少 2 列」在更窄处会压到 274，那里到不了）
+        lo = json.loads((ROOT / "codexbar" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))["app"]["windows"][0]["minWidth"] - 96
+        js = ("import('file://%s').then(m => { let worst = 1e9, at = 0; for (let w = LO; w <= 2600; w++) {"
               " const c = m.ovLayout(w).cols; const cw = (w - 12 * (c - 1)) / c; if (cw < worst) { worst = cw; at = w; } }"
-              " console.log(JSON.stringify([worst, at])); });" % pure)
+              " console.log(JSON.stringify([worst, at])); });" % pure).replace("LO", str(lo))
         r = subprocess.run(["node", "--experimental-strip-types", "-e", js], capture_output=True, text=True, timeout=60)
         worst, at = json.loads(r.stdout.strip().splitlines()[-1])
-        self.assertGreaterEqual(worst, 245 - 1e-9, f"★★★ 内容区 {at}px 时卡片只有 {worst:.2f}px —— 装不下操作栏")
+        # ★ 期望从 `overview.ts::OV_CARD_MIN` 读，不写死（2026-10-23 同日改过两次：280 → 回到 245 + 第 4 列起 320）
+        want = int(re.search(r"export const OV_CARD_MIN = (\d+);", (SRC / "overview.ts").read_text(encoding="utf-8")).group(1))
+        self.assertGreaterEqual(want, 242, "下限不能低于操作栏实测需要的 242")
+        self.assertGreaterEqual(worst, want - 1e-9, f"★★★ 内容区 {at}px 时卡片只有 {worst:.2f}px —— 低于下限 {want}")
 
     def test_the_overlay_border_is_a_hairline_not_the_accent(self):
         """★★ 用户 2026-09-21：「取消绿色的边框」。

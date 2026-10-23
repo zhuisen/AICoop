@@ -179,12 +179,13 @@ class RelayMatchesBurst(unittest.TestCase):
 @unittest.skipUnless(NODE, "没有 node")
 class LayoutSortAndState(unittest.TestCase):
     def test_breakpoints_are_on_content_width(self):
-        # 列数 = max(2, ⌊(w + 12) / 257⌋)（AICoop P5_Spec §01）；边界 501 / 759 / 1016 / 1273。
-        got = _node("[500, 501, 758, 759, 1015, 1016, 1272, 1273].map(w => m.ovLayout(w).cols)")
-        self.assertEqual(got, [2, 2, 2, 3, 3, 4, 4, 5])
+        # 两个门槛（用户 2026-10-23：最小窗口 3 列、卡 ~245；第 4 列起每张要 ≥ 320，平常宽度不再挤成 4 列）：
+        #   3 列 ≥ 3·245 + 24 = 759；4 列 ≥ 4·320 + 36 = 1316；5 列 ≥ 5·320 + 48 = 1648。
+        got = _node("[500, 758, 759, 1315, 1316, 1647, 1648].map(w => m.ovLayout(w).cols)")
+        self.assertEqual(got, [2, 2, 3, 3, 4, 4, 5])
         # ★ 喂回 ovBand 的档位值必须算出**整个**同一份版面（Overview 存的是档位，不是原始宽度）——
         #   只比列数会漏掉 hero 三栏 / 标签 / Tab 名在 900 / 1100 那几条边界上的错档（四方评审 codex）。
-        ws = [700, 758, 759, 899, 900, 1015, 1016, 1099, 1100, 1196, 1200, 1272, 1273, 1500]
+        ws = [700, 758, 759, 899, 900, 1099, 1100, 1105, 1315, 1316, 1345, 1647, 1648, 1700]
         self.assertEqual(_node("%s.map(w => JSON.stringify(m.ovLayout(m.ovBand(w))) === JSON.stringify(m.ovLayout(w)))" % ws),
                          [True] * len(ws))
         self.assertEqual(_node("[m.ovLayout(1108).wide, m.ovLayout(908).wide, m.ovLayout(768).tabNames]"),
@@ -338,9 +339,9 @@ class CardsAreFixedAndNothingWraps(unittest.TestCase):
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
 class ColumnsFollowTheWidth(unittest.TestCase):
     def test_columns_follow_the_window_width(self):
-        # AICoop P5_Spec §01（2026-10-21）：`max(2, ⌊(内容宽 + 12) / 257⌋)` ⇒ 1440 / 1200 / 1000 / 860 → 5 / 4 / 3 / 3。
-        # 两列要内容宽 < 759（窗口约 < 855），低于最小窗口 860 —— 应用里到不了，只在纯函数闸里验。
-        for w, cols in ((1440, 5), (1200, 4), (1000, 3), (860, 3)):
+        # （用户 2026-10-23：最小窗口 3 列、卡 ~245；第 4 列起每张要 ≥ 320，平常宽度不再挤成 4 列）
+        #   ⇒ 1440 / 1200 / 1000 / 860 → 4 / 3 / 3 / 3（P5_Spec 一律 245 时是 5 / 4 / 3 / 3）。
+        for w, cols in ((1440, 4), (1200, 3), (1000, 3), (860, 3)):
             with self.subTest(w=w):
                 d = _dom("ovplat=codex", w)
                 self.assertEqual((d["cols"], d["gridCols"]), (cols, cols), "★★ %d 宽应 %d 列" % (w, cols))

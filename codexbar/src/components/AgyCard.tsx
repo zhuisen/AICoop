@@ -127,27 +127,31 @@ export default function AgyCard({ t, color, snap, busy, err, disabled, state, ho
     : delta ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--tx3)" }}>{delta}</span>
     : null;
 
+  // ★ 短格式（用户 2026-10-23「话太多了」）：只写数字 + 最短的词，整句进悬停提示
   const lastLine = lastUse && lastUse.last > 0
-    ? `上次用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
-    : rotLoaded ? "24 小时内没启动过它" : "上次用 —";
+    ? `${fmtClock(lastUse.last * 1000)} · ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
+    : rotLoaded ? "24h 未用" : "—";
+  const lastTitle = lastUse && lastUse.last > 0
+    ? `上次用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"} token`
+    : rotLoaded ? "24 小时内没启动过它" : "还没读到使用记录";
   const dyn = state === "inuse" && live && live.sessions > 0 ? (
-    <DynText tone="live" title="Gemini 此刻在跑的会话合计（与托盘 / 刘海同源）">
+    <DynText tone="live" title={`Gemini 此刻在跑：${fmtTps(live.tps)} t/s · ${live.sessions} 个会话 · 今日 ${fmtTokens(live.today)} token（与托盘 / 刘海同源）`}>
       <i style={{ display: "inline-block", verticalAlign: 1, margin: "0 7px 0 3px", width: 6, height: 6, borderRadius: 3,
                   background: "var(--acc)", boxShadow: "0 0 0 3px rgba(45,212,191,.2)" }} />
-      {fmtTps(live.tps)} t/s · {live.sessions} 会话 · 今日 {fmtTokens(live.today)}
+      {fmtTps(live.tps)} t/s · ×{live.sessions} · {fmtTokens(live.today)}
     </DynText>
   ) : tight == null && action ? (
     <AgyActionLink t={t} action={action} fontSize={11.5} />
   ) : state === "cool" ? (
-    <DynText tone="warn">额度见底 · {coolMin ? `约 ${fmtDur(coolMin)} 后回来` : "等它回满"}</DynText>
+    <DynText tone="warn" title={coolMin ? `额度见底，约 ${fmtDur(coolMin)} 后回来` : "额度见底，等它回满"}>见底{coolMin ? ` · ${fmtDur(coolMin)}` : ""}</DynText>
   ) : state === "unprobed" ? (
-    <DynText tone="bad">{busy ? "正在取额度…" : "未读到额度 · 点刷新再取一次"}</DynText>
+    <DynText tone="bad" title={busy ? "正在取额度" : "还没读到额度 · 点刷新再取一次"}>{busy ? "读取中…" : "未读到"}</DynText>
   ) : state === "low" ? (
-    <DynText tone="bad">额度低 · 最紧一格剩 {Math.round(rem ?? 0)}%</DynText>
+    <DynText tone="bad" title="额度低：最紧的一格快见底了">剩 {Math.round(rem ?? 0)}%</DynText>
   ) : state === "readonly" ? (
-    <DynText tone="muted">本机 agy 正在用的号 · 未建池</DynText>
+    <DynText tone="muted" title="本机 agy 正在用的号，还没建账号池（agy-rotate login --current 收编）">未建池</DynText>
   ) : (
-    <DynText tone="muted">{lastLine}</DynText>
+    <DynText tone="muted" title={lastTitle}>{lastLine}</DynText>
   );
 
   // 底栏左：套餐名（P5 §3.1：Gemini 写「Google AI Ultra / Pro」）；读数是旧的就先说是几时的；不知道套餐退回最紧那格的重置日。

@@ -33,11 +33,11 @@ export default function ClaudeCard({ t, color, quota, err, live, hov, busy, onRe
             email="Claude Code · 本机"
             emailTitle="不读 Claude 凭证，所以这里没有邮箱"
             dyn={running ? (
-              <DynText tone="live">{fmtTps(live?.tps)} t/s · {live?.n_sessions} 会话 · 今日 {fmtTokens(live?.tokens_today)}</DynText>
+              <DynText tone="live" title={`此刻在跑：${fmtTps(live?.tps)} t/s · ${live?.n_sessions} 个会话 · 今日 ${fmtTokens(live?.tokens_today)} token`}>{fmtTps(live?.tps)} t/s · ×{live?.n_sessions} · {fmtTokens(live?.tokens_today)}</DynText>
             ) : pct == null ? (
-              <DynText tone="bad" title={err ?? undefined}>额度读不到 · 开一次 Claude Code 让状态栏转写</DynText>
+              <DynText tone="bad" title={`额度读不到 · 开一次 Claude Code 让状态栏转写${err ? `（${err}）` : ""}`}>读不到</DynText>
             ) : (
-              <DynText tone="muted">此刻没有在跑的会话{live ? ` · 今日 ${fmtTokens(live.tokens_today)}` : ""}</DynText>
+              <DynText tone="muted" title={`此刻没有在跑的会话${live ? ` · 今日 ${fmtTokens(live.tokens_today)} token` : ""}`}>空闲{live ? ` · ${fmtTokens(live.tokens_today)}` : ""}</DynText>
             )}
             w5={{ label: "5h", pct: f?.rem ?? null, reset: reset(f), note: f?.idle ? "未启动" : undefined, kind: "5h" }}
             ww={{ label: "周", pct: w?.rem ?? null, reset: reset(w), note: w?.idle ? "未启动" : undefined, kind: "w" }}

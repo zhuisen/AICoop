@@ -73,21 +73,22 @@ export function NowCol({ title, right, pct, color, name, extra, email, line }: {
   );
 }
 
-/** 实时速度行 `● 244 t/s · 2 会话 · 今日 3.8M`（与托盘 / 刘海同源：`read_live`）。读不到写 —。 */
+/** 实时速度行 `● 244 t/s · ×2 · 3.8M`（与托盘 / 刘海同源：`read_live`）。读不到写 —。
+ *  ★ 短格式（用户 2026-10-23「话太多了」），整句进悬停提示；与卡片第二行同一套写法。 */
 export function LiveLineView({ live, liveErr }: { live: LivePlatform | null | undefined; liveErr: boolean }) {
   if (!live) {
     return <span style={{ color: "var(--tx3)" }}>{liveErr ? "实时速度读不到 —" : "—"}</span>;
   }
   if (!live.running || live.n_sessions === 0) {
-    return <span style={{ color: "var(--tx3)" }}>此刻没有在跑的会话 · 今日 {fmtTokens(live.tokens_today)}</span>;
+    return <span style={{ color: "var(--tx3)" }} title={`此刻没有在跑的会话 · 今日 ${fmtTokens(live.tokens_today)} token`}>空闲 · {fmtTokens(live.tokens_today)}</span>;
   }
   return (
-    <>
+    <span title={`此刻在跑：${fmtTps(live.tps)} t/s · ${live.n_sessions} 个会话 · 今日 ${fmtTokens(live.tokens_today)} token`}>
       <i style={{ display: "inline-block", verticalAlign: 1, margin: "0 7px 0 3px", width: 6, height: 6, borderRadius: 3,
                   background: "var(--acc)", boxShadow: "0 0 0 3px rgba(45,212,191,.2)" }} />
       <b style={{ color: "var(--ovNum)" }}>{fmtTps(live.tps)}</b>
-      <span style={{ color: "var(--tx3)" }}> t/s · {live.n_sessions} 会话 · 今日 {fmtTokens(live.tokens_today)}</span>
-    </>
+      <span style={{ color: "var(--tx3)" }}> t/s · ×{live.n_sessions} · {fmtTokens(live.tokens_today)}</span>
+    </span>
   );
 }
 

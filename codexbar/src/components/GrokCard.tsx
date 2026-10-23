@@ -53,8 +53,9 @@ export default function GrokCard({ t, color, snap, privacy, busy, err, disabled,
             </>}
             email={a?.email ? maskId(a.email, privacy) : (busy ? "正在取额度…" : "未探测")}
             dyn={<DynText tone={rem != null && Math.round(rem) < 10 ? "bad" : "muted"}>
-              <span data-grok-inferred={inferred ? "" : undefined} title={inferred ? GROK_INFERRED_NOTE : undefined}>
-                {rem == null ? "额度暂时读不到 · 点刷新再取一次" : inferred ? "本周用量不到 1% · 推断" : "只有周额度 · 单号"}
+              <span data-grok-inferred={inferred ? "" : undefined}
+                    title={rem == null ? "额度暂时读不到 · 点刷新再取一次" : inferred ? GROK_INFERRED_NOTE : "只有周额度 · 单号"}>
+                {rem == null ? "读不到" : inferred ? "<1% · 推断" : "周额度"}
               </span>
             </DynText>}
             w5={{ label: "5h", pct: null, reset: "", kind: "5h", absent: true, title: "xAI 只有周额度，没有 5h 窗口" }}

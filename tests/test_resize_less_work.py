@@ -81,7 +81,7 @@ class TheCodeIsWiredThatWay(unittest.TestCase):
         self.assertRegex(s, r"new ResizeObserver\(\(\) => setCw\(ovBand\(el\.clientWidth\)\)\);[\s\S]{0,160}\}, \[\]\);",
                          "★ 版式 RO 带了依赖 = 每次翻档拆 RO 重建")
         self.assertEqual(len(re.findall(r"setCw\(", s)), 2, "★ 别处直接存原始宽度 —— 拖一路整页每像素重渲染")
-        # AICoop P5（2026-10-21）：列数也按宽度变（卡宽 ≥ 245），所以档 = 断点 ∪ 列数边界，不再只有 0/900/1100 三档
+        # AICoop P5（2026-10-21）：列数也按宽度变（3 列门槛 245、第 4 列起 320，2026-10-23），所以档 = 断点 ∪ 列数边界，不再只有 0/900/1100 三档
         self.assertEqual(node("overview.ts", "[0, 899, 900, 1099, 1100, 2000].map(w => m.ovBand(w) <= w)"), [True] * 6)
         self.assertLessEqual(node("overview.ts", "new Set(Array.from({length: 2001}, (_, w) => m.ovBand(w))).size"), 10,
                              "★ 档必须是少数几个台阶 —— 存成原始宽度就是每像素重渲染")

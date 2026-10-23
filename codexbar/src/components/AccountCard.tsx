@@ -108,25 +108,29 @@ export default function AccountCard({ a, state, isDirect, borrowOff, bestPct, pr
     : delta ? <span title={`比余量最多的号少 ${delta.slice(1)}`} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--tx3)" }}>{delta}</span>
     : null;
 
+  // ★ 短格式（用户 2026-10-23「话太多了」）：只写数字 + 最短的词，整句进悬停提示
   const lastLine = lastUse && lastUse.last > 0
-    ? `上次用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
-    : rotLoaded ? "24 小时内没经代理用过" : "上次用 —";
+    ? `${fmtClock(lastUse.last * 1000)} · ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"}`
+    : rotLoaded ? "24h 未用" : "—";
+  const lastTitle = lastUse && lastUse.last > 0
+    ? `上次经代理用 ${fmtClock(lastUse.last * 1000)} · 今日 ${lastUse.today > 0 ? fmtTokens(lastUse.today) : "0"} token`
+    : rotLoaded ? "24 小时内没经代理用过" : "还没读到轮换记录";
   const dyn = state === "inuse" && live && live.sessions > 0 ? (
-    <DynText tone="live" title="codex 此刻在跑的会话合计（与托盘 / 刘海同源）">
+    <DynText tone="live" title={`codex 此刻在跑：${fmtTps(live.tps)} t/s · ${live.sessions} 个会话 · 今日 ${fmtTokens(live.today)} token（与托盘 / 刘海同源）`}>
       <i style={{ display: "inline-block", verticalAlign: 1, margin: "0 7px 0 3px", width: 6, height: 6, borderRadius: 3,
                   background: "var(--acc)", boxShadow: "0 0 0 3px rgba(45,212,191,.2)" }} />
-      {fmtTps(live.tps)} t/s · {live.sessions} 会话 · 今日 {fmtTokens(live.today)}
+      {fmtTps(live.tps)} t/s · ×{live.sessions} · {fmtTokens(live.today)}
     </DynText>
   ) : state === "cool" ? (
-    <DynText tone="warn">429 冷却 · {fmtDur(a.cooldownSec / 60)} 后恢复</DynText>
+    <DynText tone="warn" title={`撞了 429，冷却中，约 ${fmtDur(a.cooldownSec / 60)} 后恢复`}>冷却 · {fmtDur(a.cooldownSec / 60)}</DynText>
   ) : state === "unprobed" ? (
-    <DynText tone="bad">未探测 · 刷新一次后显示额度</DynText>
+    <DynText tone="bad" title="还没读到额度 · 刷新一次后显示">未探测</DynText>
   ) : state === "low" ? (
-    <DynText tone="bad">额度低 · {a.tightestWin?.label ?? ""} 剩 {Math.round(a.tightest)}%{a.tightestWin?.anchorState === "anchored" && a.tightestWin.reset ? ` · ↻${a.tightestWin.reset}` : ""}</DynText>
+    <DynText tone="bad" title="额度低：最紧的窗口快见底了">{a.tightestWin?.label ?? ""} 剩 {Math.round(a.tightest)}%{a.tightestWin?.anchorState === "anchored" && a.tightestWin.reset ? ` · ↻${a.tightestWin.reset}` : ""}</DynText>
   ) : state === "dead" ? (
-    <DynText tone="bad" title="token 已被服务端判死。重登只用 codex-rotate login（codex login/logout 会 revoke 别的号）">凭证失效 · 终端跑 codex-rotate login 重登</DynText>
+    <DynText tone="bad" title="token 已被服务端判死 · 终端跑 codex-rotate login 重登（只用它；codex login/logout 会 revoke 别的号）">凭证失效</DynText>
   ) : (
-    <DynText tone="muted">{lastLine}</DynText>
+    <DynText tone="muted" title={lastTitle}>{lastLine}</DynText>
   );
 
   const probeHint = `对 ${a.node} 发一次真实补全（问 hi 要求答 ok），证明"真的还能干活"。⚠️ 计费：消耗周额度（实测单次 <1%）`;

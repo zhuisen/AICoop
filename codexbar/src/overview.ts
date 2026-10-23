@@ -37,13 +37,29 @@ export function ovBand(contentW: number): number {
   const bp = contentW >= OV_BP_WIDE ? OV_BP_WIDE : contentW >= OV_BP_MID ? OV_BP_MID : 0;
   const c = ovCols(contentW);
   // 列数边界也算一档：返回值喂回 `ovLayout` 时必须算出同一个列数。
-  return Math.max(bp, c > 2 ? 257 * c - 12 : 0);
+  return Math.max(bp, c > 2 ? ovColsEdge(c) : 0);
 }
 
-/** 卡片列数（AICoop P5_Spec §01）：卡宽 ≥ 245、间距 12 ⇒ `max(2, ⌊(内容宽 + 12) / 257⌋)`。
- *  860 / 1000 / 1200 / 1440 窗口 → 3 / 3 / 4 / 5 列。 */
+/**
+ * 卡片列数的两个门槛（用户 2026-10-23：「最小尺寸的时候显示 3 个卡片，这时候卡片就是 245px；
+ * 正常宽度显示 4 个就太挤了，显示 3 个会更好 —— 小尺寸看得更全，大尺寸看得舒服」）：
+ *   · 前 3 列：卡宽 ≥ `OV_CARD_MIN`（245，P5_Spec §01 原值）⇒ 860 最小窗口排 3 列；
+ *   · 第 4 列起：每张都要 ≥ `OV_CARD_ROOMY`（320）才加列 ⇒ 1000 / 1200 仍 3 列，1440 才 4 列（~327）。
+ * ✗ 取代同日的「一律 ≥ 280」（860 变 2 列，用户说「搞错了」）与 P5 的「一律 ≥ 245」（1200 挤成 4 列）。
+ */
+export const OV_CARD_MIN = 245;
+export const OV_CARD_ROOMY = 320;
+export const OV_CARD_GAP = 12;
+
+/** 排 `c` 列需要的最小内容宽（列数的台阶，`ovBand` 用它对齐档位）。 */
+function ovColsEdge(c: number): number {
+  return (c <= 3 ? OV_CARD_MIN : OV_CARD_ROOMY) * c + OV_CARD_GAP * (c - 1);
+}
+
+/** 860 / 1000 / 1200 / 1440 窗口 → 3 / 3 / 3 / 4 列。最少 2 列（只在比最小窗口还窄的内容区出现）。 */
 export function ovCols(contentW: number): number {
-  return Math.max(2, Math.floor((contentW + 12) / 257));
+  const by = (w: number): number => Math.floor((contentW + OV_CARD_GAP) / (w + OV_CARD_GAP));
+  return Math.max(2, Math.min(by(OV_CARD_MIN), Math.max(3, by(OV_CARD_ROOMY))));
 }
 
 export function ovLayout(contentW: number): OvLayout {
