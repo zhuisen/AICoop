@@ -746,6 +746,37 @@ Fable 评审 40 条 + 四方评审 9 条，全部处理完。17 个 commit 未�
 
 ---------
 
+## v2.1.3 — 2026-10-24
+
+samchen 的反馈（issue #3 / #4 / #5、PR #2）一次修完。
+
+### 新增
+- **`codex-rotate restart-stale`：只重启跑旧代码的常驻服务**（#4 ①，用户选「自动重启跑旧代码的服务」）。`deploy.sh` 与 app 启动时都调它。代理有在途请求就先等（最多 60 s），等满还忙就不重启、照实说。在途请求数 = 代理在监听端口上的 ESTABLISHED 连接（代理每个响应都 `Connection: close`，旧版也一样）；探针用「开一个空连接 ⇒ 1、关掉 ⇒ 0」验过两向。服务进程按 launchd 给的 pid 找，代码根取它命令行里的脚本路径 —— `.dmg` 装法跑的是 `runtime/` 副本，原来按 `STORE/proxy/proxy.py` 去 pgrep 恒报「没有在跑」。闸 `tests/test_restart_stale.py`。
+- **设置「接入账号池」检测 launchd 配置过时 + 一键重装**（#4 ②，用户选「检测 + 设置页一键重装」，不在后台自己修）。`install-launchd.sh --render DIR` 只写 plist 不碰 launchctl；Connector 把装着的 plist 与它按字典逐份比（逐行美化不算漂移，丢了 `CODEX_ROTATE_STORE` 算），并查已退役还装着的 `refreshquota`。有差异 ⇒ 一行琥珀提示点名是哪几个 + 「重装服务」按钮。安装器重装时卸掉退役的 refreshquota。闸 `tests/test_launchd_drift.py`。
+- **`codex-rotate health` 查裸 `codex` 走不走 wrapper**（#4 本机⑤）：PATH 里别的 codex 排在 wrapper 前面 / 装过接管但 wrapper 被 npm 改写回官方版，各给一条修法；可选步没装不报警。闸 `tests/test_codex_wrap_gate.py`。
+- **刘海模式打开卡片时刷新额度**（PR #2，作者 samchen）；Claude.app 的套餐用量读数超过窗口时长标过期。
+- **原来开着「刘海屏版本」的人升级后提示一次**（#5，用户选「保持刘海屏 + 提示一次」）：托盘被藏起来时发一条系统通知说怎么改回；没有通知权限就直接打开设置页。闸 `tests/test_surface_upgrade_notice.py`。
+
+### 修复
+- **冷却判定只有一份**（#4 ④⑤）：`cooling` / `recovered` / `_spent_resets` 搬进零 import 的 `cooling.py`，代理、`codex-rotate`（ensure-live / 选号 / list / next 的 cool_min / ensure）、泳道共用。原来后两处只比 `cooling_until > now`，代理早已重新在用的号界面仍显示冷却；`_patch_slot` 为了用代理的判据持着 state 锁 exec 整个 proxy.py。前端几处仍只比 `cooling_until`，靠写额度时删掉已解冻的标记跟上。闸 `tests/test_cooling_one_judge.py`。
+- **合盖过夜的笔记本 token 永远不续期**（#4 ①）：keepalive 夜里的触发合并到醒来那一次（如 08:15），落在 22:00–08:00 窗口外就静默退出。上一轮已过 20 h 就在窗口外也补跑。闸 `tests/test_keepalive_schedule.py`。
+- **一次手动 Gemini 探针让当天的定时探针记成「done 0/0」**（#4 ②）：改为让路、下一分钟重试；一小时内刚探过且成功的号不再探（不重复花钱）。闸 `test_dawn_schedule_and_tiers.py::AgyDawnYieldsToAManualProbe`。
+- **检查更新失败还怪「网络或凭证」**（#5）：先问 GitHub Releases API（钉死的 python urllib，读系统代理），只有 clone 装法才退回 `git ls-remote`；更新提示按 clone / `.dmg` 分开写。原来 CI 出的安装包 `store_dir()` 落到不存在的目录，git 必败。闸 `tests/test_check_update.py`。
+- **`deploy.sh` 构建号误报**（#4 ⑦）：构建途中 cargo 改写的 `Cargo.lock` 不再算部署失败。
+- **总览排序冻结在上一会话的缓存板子上**（#4 ③）：现读回来之前不冻结（影响 Gemini 档 —— 那里冷却 / 失效来自板子；Codex 档的状态全来自现读的 state）。闸 `tests/test_overview_freeze_waits_for_live.py`。
+- **请求增量漏掉迟到的行**（#4 ⑥）：账本每行记 `upd`（最后写进 / 改动账本的时刻），`--since` 按它筛，界面传上次的 `generated_at`。原来按 `t_end` 筛：OTel span 晚到、估值换实测的行 `t_end` 更早，永远进不了增量。
+- **三处每 1–2 分钟整读两天的账本**（#4 ⑧）：`useReqLedger` 改增量（每 30 分钟整读兜底），菜单栏 / 刘海「今日」只读今天零点之后。本机实测：整读 2.3 MB / 0.34 s，增量 30 KB / 0.34 s（n=2 / n=1）—— 持锁时间一样，省的是传输与解析；「卡住托盘胶囊」没复现出来。
+- **`gemini-3.6-flash` / `gemini-4-argon-d` 没登记颜色**（#4 本机③）：补上；本机的「每个见过的 agy 模型都要登记」闸也一直是红的。
+- **测试互相污染**：一条新测试直接赋值 `cli.subprocess.run`（那就是全局 subprocess 模块），后面所有起子进程的测试拿到空输出（一轮 171 红）。conftest 加了每个测试后的检查，点名并还原。
+
+### 未验证
+- 设置页「重装服务」只在 harness 验过（本机配置与安装器一致，真窗口里不出现这一行）。
+- `.dmg` 安装包上的检查更新与自动重启没在真安装包上跑过。
+- agy 实时解码：本机过、samchen 那边失败，疑是 agy 版本差异，未证。
+- `gemini-3.6-flash` / `gemini-4-argon-d` 没有牌价（显示「价格待核」）。
+
+---------
+
 ## v2.1.2 — 2026-10-24
 
 ### 新增
