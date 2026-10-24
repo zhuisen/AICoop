@@ -471,5 +471,59 @@ class TheBundleRenders(unittest.TestCase):
         self.assertEqual(attr(h3, "data-notch-drip"), ["0"], "展开后不再下垂")
 
 
+
+class TheRustSideSendsTheCursor(unittest.TestCase):
+    """harness 里 `nthov` 只是模仿 Rust 推 `notch-hover`；这条核真的有人推：跟踪线程在展开分支里按窗口坐标发、收起时补 null。"""
+
+    def test_track_emits_notch_hover_while_open(self):
+        rs = code_only((ROOT / "codexbar" / "src-tauri" / "src" / "notch.rs").read_text())
+        body = rs[rs.index("fn track(app: AppHandle)"):]
+        body = body[:body.index("\nfn ")]
+        opened = body[body.index("let inside = hit(&g, true, x, y);"):]
+        self.assertRegex(opened, r'emit_to\(LABEL, "notch-hover", hover\.map')
+        self.assertRegex(opened[:600], r"let hover = inside\.then\(\|\| \{ let \(wx, wy, _, _\) = rect\(&g, true\); \(x - wx, y - wy\) \}\)")
+        closed = body[body.index("if !open {"):]
+        self.assertRegex(closed[:300], r'last_hover\.take\(\)\.is_some\(\)\s*\{\s*let _ = app\.emit_to\(LABEL, "notch-hover", None')
+        self.assertIn('listen<[number, number] | null>("notch-hover"', code_only(TSX.read_text()))
+
+
+class SameAsTheTrayHoverPanel(unittest.TestCase):
+    """刘海卡片与托盘悬停面板同步（用户 2026-10-24「审查差异，同步更新刘海屏版」）。
+    停下的那家：数据 40% 留 3 s → 收起 → 移除（同 `test_tps_hover::test_stopped_row_dims_data_not_logo`）；
+    实时账本读失败：底栏标「⚠ 上次的数」（同悬停面板 `data-hover-stale`）。"""
+
+    def setUp(self):
+        if not _reachable():
+            self.skipTest("harness 不在 127.0.0.1:3304")
+
+    def test_stopped_row_holds_dimmed_then_collapses(self):
+        h = dom("&ntstop=codex&ntat=2400", budget=2500)
+        self.assertEqual(attr(h, "data-notch-phase"), ["held", "live", "live"], "停下的 Codex 先留着，不是立刻消失")
+        block = element(h, 'data-notch-phase="held"')
+        tps = re.search(r'<span class="nh-tps[^"]*" data-notch-tps="[^"]*" style="([^"]*)"', block).group(1)
+        self.assertIn("opacity: 0.4", tps, "停下那一行的数据降到 40%")
+        chain = re.match(r'[\s\S]*?data-notch-logo="codex"[^>]*>', block).group(0)
+        chain = re.sub(r'<span class="nh-chev"[^>]*>(?:<svg[\s\S]*?</svg>)?</span>', "", chain)
+        self.assertNotIn("opacity", chain, "logo 不变暗：它的祖先与它自己都不许带 opacity")
+        col = dom("&ntstop=codex&ntat=4100", budget=4200)
+        self.assertEqual(attr(col, "data-notch-phase")[0], "collapsing")
+        self.assertIn("grid-template-rows: 0fr", element(col, 'data-notch-phase="collapsing"')[:200])
+        gone = dom("&ntstop=codex&ntat=4900", budget=5000)
+        self.assertEqual(attr(gone, "data-notch-row"), ["claude", "agy"])
+
+    def test_rust_cursor_alone_expands_a_multi_session_row(self):
+        """app 在后台时只有 Rust 的 `notch-hover` 这一路（不发鼠标事件），多会话行照样 250 ms 后展开。"""
+        for k, want in (("codex", ["1", "0", "0"]), ("claude", ["0", "1", "0"]), ("agy", ["0", "0", "0"])):
+            h = dom("&nthov=%s&ntat=1500" % k, budget=1600)
+            self.assertIn("nthov →命中 1", body_json(h, "data-nt-clicks"))
+            self.assertEqual(attr(h, "data-notch-open-row"), want, "%s：多会话的那一行展开，单会话不展开" % k)
+
+    def test_live_read_failure_is_marked_stale(self):
+        self.assertEqual(attr(dom(""), "data-notch-stale"), [], "读到了就不标")
+        h = dom("&ntliveerr=1")
+        self.assertEqual(len(attr(h, "data-notch-stale")), 2, "在跑 / 今日两个底栏都标")
+        self.assertIn("⚠ 上次的数", text(h))
+
+
 if __name__ == "__main__":
     unittest.main()

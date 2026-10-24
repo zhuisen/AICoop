@@ -10,7 +10,7 @@ import * as N from "../notchIdle";
  * ★ 恒深色（刘海是黑的）；没有标题栏、底栏、白点；点格子 ⇒ 打开该 AI 总览（Kimi / DeepSeek ⇒ 用量详情）。
  * ★ 出现：.16 s 淡入 + .32 s 弹簧从上方 6.67 pt（画板 10 ÷ 1.5）、96% 落下；收起倒放（先淡出上移，光晕随后再收）。
  */
-export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, onPick }: {
+export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, hov, onHov, onPick }: {
   cells: PanelCell[];
   /** 藏起来的几家（同悬停面板）：底部一行一家，带「撤销」。 */
   snoozed: Snoozed[];
@@ -18,12 +18,15 @@ export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, onP
   warns: IdleWarn[];
   open: boolean;
   reduce: boolean;
+  /** 光标停在哪一格（网页 mouseenter 或 Rust `notch-hover`）：高亮 + 右上角倒计时换成 ×（同悬停面板 B1）。 */
+  hov: string | null;
+  onHov: (key: string | null) => void;
   onPick: (key: string) => void;
 }) {
   const g = N.notchGrid(cells.length, snoozed.length);
   const on = open && (cells.length > 0 || snoozed.length > 0);
   const weekOf = new Map(warns.map((w) => [w.key, w.rem]));
-  const undo = (key: string) => { void emit(IDLE_SNOOZE_EVENT, { key, undo: true }).catch(() => undefined); };
+  const snooze = (key: string, undo = false) => { void emit(IDLE_SNOOZE_EVENT, { key, undo }).catch(() => undefined); };
   const tr = reduce ? "opacity 150ms" : "opacity .16s ease-out, transform .32s cubic-bezier(.2,.9,.25,1)";
   return (
     <div className="ni-panel" data-notch-idle data-notch-idle-h={g.h} data-notch-idle-w={g.w} aria-hidden={!on}
@@ -35,14 +38,20 @@ export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, onP
         const t = tone(c.key);
         const ringC = c.main === null ? "transparent" : c.low ? N.LOW : t.num(true);
         const dash = N.RING_C * (c.main === null ? 0 : c.main / 100);
+        const h = on && hov === c.key;
         return (
           <div key={c.key} className="ni-cell" data-notch-idle-cell={c.key} data-in-bar={c.inBar ? 1 : 0}
                title={`打开 ${NAME[c.key] ?? c.key} ${N.cellTarget(c.key).page === "overview" ? "总览" : "用量详情"}`}
-               onClick={() => onPick(c.key)}
-               style={{ left: p.x, top: p.y, width: g.cw, height: g.ch,
+               onClick={() => onPick(c.key)} onMouseEnter={() => onHov(c.key)}
+               onMouseLeave={() => { if (hov === c.key) onHov(null); }} data-notch-idle-hov={h ? 1 : 0}
+               style={{ filter: h ? "brightness(1.3)" : "none", left: p.x, top: p.y, width: g.cw, height: g.ch,
                         background: t.tint(c.inBar ? 0.16 : 0.09), boxShadow: `inset 0 0 0 1px ${t.tint(c.inBar ? 0.42 : 0.14)}` }}>
             {weekOf.has(c.key) && <span className="ni-wk nh-mono" data-notch-idle-week={weekOf.get(c.key)}>周{Math.round(weekOf.get(c.key)!)}%</span>}
-            {c.reset && <span className="ni-reset nh-mono" data-notch-idle-reset>{weekOf.has(c.key) ? c.reset.replace(/^↻ /, "") : c.reset}</span>}
+            {c.reset && <span className="ni-reset nh-mono" data-notch-idle-reset style={{ opacity: h ? 0 : 1 }}>{weekOf.has(c.key) ? c.reset.replace(/^↻ /, "") : c.reset}</span>}
+            {/* 悬停时右上角倒计时换成 ×，点了藏到重置（同悬停面板 B1；CSS 显隐，不条件渲染） */}
+            <span className="ni-x" data-notch-idle-hide={c.key} title={`隐藏 ${NAME[c.key] ?? c.key}，${c.reset ? c.reset.replace("↻ ", "") + " 后" : "重置后"}自动回来`}
+                  onClick={(e) => { e.stopPropagation(); snooze(c.key); }}
+                  style={{ opacity: h ? 1 : 0, pointerEvents: h ? "auto" : "none" }}>×</span>
             <svg className="ni-ring" width={N.RING} height={N.RING} viewBox={`0 0 ${N.RING} ${N.RING}`}
                  style={{ left: (g.cw - N.RING) / 2, top: N.RING_TOP }} aria-hidden="true">
               <circle cx={N.RING / 2} cy={N.RING / 2} r={N.RING_R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={N.RING_SW} />
@@ -65,7 +74,7 @@ export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, onP
         <div key={z.key} className="ni-note" data-notch-idle-snoozed={z.key}
              style={{ left: N.PAD + 4, right: N.PAD + 4, top: g.noteTop + i * N.NOTE_H, height: N.NOTE_H }}>
           已隐藏 {NAME[z.key] ?? z.key}，{z.reset && z.reset !== "—" ? `↻${z.reset} 后` : "重置后"}自动回来 ·
-          <span className="ni-undo" data-notch-idle-undo={z.key} onClick={(e) => { e.stopPropagation(); undo(z.key); }}>撤销</span>
+          <span className="ni-undo" data-notch-idle-undo={z.key} onClick={(e) => { e.stopPropagation(); snooze(z.key, true); }}>撤销</span>
         </div>
       ))}
     </div>

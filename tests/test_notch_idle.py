@@ -241,5 +241,32 @@ class OnTheRealBundle(unittest.TestCase):
         self.assertNotIn(0, [c["h"] for c in calls], "0 格不报高度")
 
 
+
+class HoverWorksWithTheAppInTheBackground(unittest.TestCase):
+    """刘海与菜单栏同步（用户 2026-10-24）：悬停格子 ⇒ 高亮 + 右上角换成 ×，点 × 藏到重置（同悬停面板 B1）。
+    ★ 刘海窗口不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 悬停只能靠 Rust 推的 `notch-hover`。
+    `nthov` 只推那一帧坐标、不发任何鼠标事件 —— 这条绿 = 后台那一路能用。"""
+
+    def test_rust_cursor_alone_highlights_and_shows_the_hide_button(self):
+        h = dom("&nthov=claude&ntat=1200")
+        self.assertIn("nthov →命中 1", body_json(h, "data-nt-clicks"))
+        hov = dict(re.findall(r'data-notch-idle-cell="(\w+)"[^>]*data-notch-idle-hov="(\d)"', h))
+        self.assertEqual(hov, {"codex": "0", "claude": "1", "agy": "0", "grok": "0"})
+        x = re.search(r'<span class="ni-x" data-notch-idle-hide="claude"[^>]*style="([^"]*)"', h).group(1)
+        self.assertIn("opacity: 1", x)
+        self.assertIn("pointer-events: auto", x)
+        other = re.search(r'<span class="ni-x" data-notch-idle-hide="codex"[^>]*style="([^"]*)"', h).group(1)
+        self.assertIn("pointer-events: none", other, "没悬停的那几格 × 不可点")
+        gone = dom("&nthov=claude&nthovleave=1&ntat=1800")
+        self.assertNotIn('data-notch-idle-hov="1"', gone, "光标离开面板（null）⇒ 清掉悬停")
+
+    def test_hide_button_snoozes_that_platform(self):
+        h = dom("&nthov=claude&nthide=claude&ntat=1500")
+        self.assertIn("nthide →命中 1", body_json(h, "data-nt-clicks"))
+        em = [e["payload"] for e in body_json(h, "data-nt-emit") if e["event"] == "idle-snooze"]
+        self.assertEqual(em, [{"key": "claude", "undo": False}])
+        self.assertNotIn("notch_dismiss={}", body_json(h, "data-nt-calls"), "点 × 不等于点格子：不打开总览、不收起")
+
+
 if __name__ == "__main__":
     unittest.main()

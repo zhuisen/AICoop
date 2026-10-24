@@ -12,7 +12,7 @@ import { fmtEta, maskId, slotToAccount, inUseAid } from "./helpers";
 import { agySegs, codexSegs, type NotchSeg } from "./notchSegs";
 import { platformColor } from "./theme";
 import { bridgeBackground, glowBackground, glowKeys, NO_ACTIVITY, type NotchActivity } from "./notchGlow";
-import { PLATFORM_NAME, fmtTokens, fmtTps, numColor, runningRows, type RunningRow } from "./live";
+import { PLATFORM_NAME, PLATFORM_ORDER, fmtTokens, fmtTps, numColor, runningRows, type RunningRow } from "./live";
 import * as HL from "./tpsHoverLogic";
 import * as C from "./notchCard";
 import PlatformLogo, { logoSrc } from "./components/PlatformLogo";
@@ -93,7 +93,7 @@ export default function NotchHud() {
   const agyPool = useAgyPool(false);
   const { prefs } = usePlatformPrefs();
   const { privacy } = usePrivacy();
-  const { live } = useLive();
+  const { live, error: liveErr } = useLive();
   const { mode: cacheMode } = useCacheMode();
   const [open, setOpen] = useState(false);
   /** 这一轮展开是哪一种（Rust `notch-mode`，展开前一刻推）：空闲额度格子 / 4e 卡片。收起后保留上一轮的，直到下次展开。 */
@@ -277,6 +277,21 @@ export default function NotchHud() {
   const nRun = rows.length;
   const view = C.effectiveView(chosen, nRun);
   const isRunV = view === "run";
+  // ★ 停下的行先留 3 s（40% 透明）再收起，与托盘悬停面板同一套（`HL.reconcile`）。
+  //   直接从列表删掉 ⇒ 那一行瞬间消失、下面的行跳上来（刘海与菜单栏同步审查 2026-10-24 #11）。
+  const [shown, setShown] = useState<HL.Shown<RunningRow>[]>([]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const recon = useCallback(() => {
+    setShown((prev) => HL.reconcile(prev, rowsRef.current.map((r) => ({ key: r.key, row: r })), Date.now(), PLATFORM_ORDER));
+  }, []);
+  useEffect(recon, [rows, recon]);
+  useEffect(() => {
+    const at = HL.nextPhaseAt(shown);
+    if (at == null) return;
+    const id = window.setTimeout(recon, Math.max(0, at - Date.now()) + 5);
+    return () => window.clearTimeout(id);
+  }, [shown, recon]);
 
   const lines = useMemo<C.QLine[]>(() => {
     const out: C.QLine[] = [];
@@ -320,7 +335,8 @@ export default function NotchHud() {
   const perAll = today ? today.per.filter((p) => p.tok > 0) : [];
   const per = perAll.slice(0, C.todayRowCap(!!alert, lines.length));
 
-  const blocks: C.RunRowIn[] = rows.map((r) => ({ multi: isMulti(r), open: isMulti(r) && !!ex.open[r.key], nSess: r.sessions.length }));
+  // 正在收起的行不占高度（同悬停面板 `blockHeight` 的 collapsed）
+  const blocks: C.RunRowIn[] = shown.filter((s) => s.phase !== "collapsing").map(({ row: r }) => ({ multi: isMulti(r), open: isMulti(r) && !!ex.open[r.key], nSess: r.sessions.length }));
   const lay = C.layoutCard({ alert: !!alert, view, run: blocks, todayRows: per.length, quotaRows: lines.length });
 
   // ── 展开 / 收起 ──────────────────────────────────────────────────────────
@@ -417,7 +433,29 @@ export default function NotchHud() {
   }, [cardOpen, view]);
 
   // 会话展开 / 折叠：悬停 250 ms 展开、离开这一行 250 ms 折叠（与悬停面板同一份规则，`tpsHoverLogic.ts`）
-  const multiKeys = rows.filter(isMulti).map((r) => r.key).join(",");
+  const multiKeys = shown.filter((s) => isMulti(s.row)).map((s) => s.key).join(",");
+  // 光标停在哪一行 / 哪一格：网页 mouseenter 与 Rust 光标（`notch-hover`）两路，同悬停面板 `setHit`。
+  //   ★ app 不在前台时刘海窗口收不到鼠标移动，只剩 Rust 那一路（刘海与菜单栏同步审查 2026-10-24 #5）
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const hitRef = useRef<string | null>(null);
+  const setHit = useCallback((next: string | null) => {
+    const multi = (k: string) => { const x = shownRef.current.find((s) => s.key === k); return !!x && isMulti(x.row); };
+    for (const e of HL.hitEvents(hitRef.current, next, multi, Date.now())) dispatch(e);
+    hitRef.current = next;
+  }, []);
+  const [idleHov, setIdleHov] = useState<string | null>(null);
+  useEffect(() => {
+    const un = listen<[number, number] | null>("notch-hover", (e) => {
+      const pt = e.payload;
+      const el = pt ? document.elementFromPoint(pt[0], pt[1]) : null;
+      setHit(el?.closest("[data-notch-row]")?.getAttribute("data-notch-row") ?? null);
+      setIdleHov(el?.closest("[data-notch-idle-cell]")?.getAttribute("data-notch-idle-cell") ?? null);
+    });
+    return () => { void un.then((f) => f()).catch(() => undefined); };
+  }, [setHit]);
+  // 每次展开先清：光标此刻在刘海上，不在任何一格 / 一行上
+  useEffect(() => { if (open) { setIdleHov(null); hitRef.current = null; } }, [open]);
   useEffect(() => { dispatch({ t: "prune", multi: multiKeys ? multiKeys.split(",") : [] }); }, [multiKeys]);
   useEffect(() => {
     const at = HL.nextDue(ex);
@@ -566,11 +604,14 @@ export default function NotchHud() {
               </div>
 
               {/* 在跑 Tab：同 page 2 的行（logo · 名 · ×N · t/s · Token），多会话行停 250 ms 展开 */}
-              <div className={rows.some(isMulti) ? "nh-fold" : "nh-fold nh-nochev"} data-notch-run style={{ gridTemplateRows: isRunV ? "1fr" : "0fr", transition: `grid-template-rows ${vT}` }}>
+              <div className={shown.some((s) => isMulti(s.row)) ? "nh-fold" : "nh-fold nh-nochev"} data-notch-run style={{ gridTemplateRows: isRunV ? "1fr" : "0fr", transition: `grid-template-rows ${vT}` }}>
                 <div className="nh-clip">
                   <div style={{ opacity: isRunV ? 1 : 0, transition: `opacity ${reduce ? fade : `200ms ease-out ${isRunV ? "120ms" : "0ms"}`}` }}>
-                    {rows.map((r, i) => {
+                    {shown.map((s, i) => {
+                      const r = s.row;
                       const k = r.key;
+                      // 停下那一行只把数据降到 40%，logo 不变暗（同悬停面板）
+                      const dOp = (isOpen ? 1 : 0) * (s.phase !== "live" ? 0.4 : 1);
                       const multi = isMulti(r);
                       const o = multi && !!ex.open[k];
                       const sx = C.side(k) * 16;
@@ -580,11 +621,15 @@ export default function NotchHud() {
                       const rT = reduce ? "0ms" : o ? `340ms ${SP}` : `300ms ${SP} 100ms`;
                       const tps = fmtTps(r.tps);
                       return (
-                        <div key={k} data-notch-row={k} data-notch-open-row={o ? "1" : "0"}
-                             onMouseEnter={() => dispatch({ t: "enter", key: k, multi, now: Date.now() })}
-                             onMouseLeave={() => dispatch({ t: "leave", key: k, now: Date.now() })}>
+                        <div key={k} className="nh-fold" data-notch-phase={s.phase}
+                             style={{ gridTemplateRows: s.phase === "collapsing" ? "0fr" : "1fr",
+                                      transition: reduce ? "none" : `grid-template-rows 300ms ${SP} 100ms` }}>
+                        <div className="nh-clip">
+                        <div data-notch-row={k} data-notch-open-row={o ? "1" : "0"}
+                             onMouseEnter={() => setHit(k)}
+                             onMouseLeave={() => { if (hitRef.current === k) setHit(null); }}>
                           <div className="nh-row" style={{ background: ex.hov === k ? "rgba(255,255,255,.06)" : "transparent" }}>
-                            <span className="nh-chev" style={{ opacity: multi && isOpen ? 1 : 0, transform: `rotate(${o ? 90 : 0}deg)`, transition: `transform ${rT}` }}>
+                            <span className="nh-chev" style={{ opacity: multi ? dOp : 0, transform: `rotate(${o ? 90 : 0}deg)`, transition: `transform ${rT}` }}>
                               {multi && (
                                 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style={{ display: "block" }}>
                                   <path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -594,16 +639,16 @@ export default function NotchHud() {
                             <span className="nh-logo" data-notch-logo={k} style={{ visibility: flying.has(k) ? "hidden" : "visible" }}>
                               <PlatformLogo platform={k} isDark size={18} />
                             </span>
-                            <span className="nh-name" style={{ opacity: isOpen ? 1 : 0, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
+                            <span className="nh-name" style={{ opacity: dOp, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
                               <b>{PLATFORM_NAME[k]}</b>
                               {multi && <span className="nh-chip nh-mono" data-notch-n>×{r.nSessions}</span>}
                             </span>
                             <span className="nh-tps nh-mono" data-notch-tps={tps}
                                   style={{ color: r.tps == null ? "#798390" : hot.has(k) ? "#ff8a73" : numColor(k, "dark"),
-                                           opacity: isOpen ? 1 : 0, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
+                                           opacity: dOp, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
                               {tps}<span className="nh-unit"> t/s</span>
                             </span>
-                            <span className="nh-tok nh-mono" style={{ opacity: isOpen ? 1 : 0, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
+                            <span className="nh-tok nh-mono" style={{ opacity: dOp, transform: `translateX(${dX}px)`, transition: `opacity ${dt}, transform ${dt2}` }}>
                               {fmtTokens(r.tokens)}
                             </span>
                           </div>
@@ -625,12 +670,14 @@ export default function NotchHud() {
                             </div>
                           )}
                         </div>
+                        </div>
+                        </div>
                       );
                     })}
                     <div className="nh-foot" data-notch-runfoot style={{ height: 36, opacity: isOpen ? 1 : 0, transition: `opacity ${hT}` }}>
                       {/* ★ 今日总量与 Tab 标签、今日 Tab 同一个数（`todayView`，与菜单栏今日 Tab 同源）—— 同一张卡片里两个「今日」不能不一样；
                           快照还没读到才退回实时账本那份。均速 = 请求账本（与悬停面板同源）。 */}
-                      <span>今日 <b>{today ? fmtTok(today.totalTok) : live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
+                      <span>{liveErr && live && <span className="nh-stale" data-notch-stale title={`实时速度这次没读到：${liveErr}`}>⚠ 上次的数 · </span>}今日 <b>{today ? fmtTok(today.totalTok) : live ? fmtTokens(live.today.tokens) : "—"}</b>{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
                       <a href="#" className="nh-link" data-notch-link="requests" onClick={go("requests")}>请求页 →</a>
                     </div>
                   </div>
@@ -689,7 +736,7 @@ export default function NotchHud() {
                       );
                     })}
                     <div className="nh-foot" data-notch-todayfoot style={{ height: 32 }}>
-                      <span>今日 <b>{live ? fmtCount(live.today.n) : "—"}</b> 次请求{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
+                      <span>{liveErr && live && <span className="nh-stale" data-notch-stale title={`实时速度这次没读到：${liveErr}`}>⚠ 上次的数 · </span>}今日 <b>{live ? fmtCount(live.today.n) : "—"}</b> 次请求{live?.today.avg_tps != null && <> · 均 <b>{HL.fmtAvg(live.today.avg_tps)}</b> t/s</>}</span>
                       <a href="#" className="nh-link" data-notch-link="traffic" onClick={go("traffic")}>Token 消耗 →</a>
                     </div>
                   </div>
@@ -732,7 +779,7 @@ export default function NotchHud() {
           </div>
         </div>
 
-        <NotchIdleGrid cells={idleCells} snoozed={idleSnoozed} warns={idleData?.warns ?? []} open={idleOpen} reduce={reduce} onPick={pickIdle} />
+        <NotchIdleGrid cells={idleCells} snoozed={idleSnoozed} warns={idleData?.warns ?? []} open={idleOpen} reduce={reduce} hov={idleHov} onHov={setIdleHov} onPick={pickIdle} />
 
         <div className="nh-island" />
         <div className="nh-drip" data-notch-drip={drip.on ? drip.h.toFixed(1) : "0"}

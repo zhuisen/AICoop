@@ -1813,6 +1813,8 @@ function relayEntry() {
   //   `?ntclose=1&ntreopen=1` 收起后 2200 ms 再展开 · `?ntreduce=1` 减弱动态效果 · `?ntclick=requests|traffic|overview` 1200 ms 点链接 · `?ntclose=1` 1600 ms 收起
   //   `?nt=I` 空闲 + 刘海屏版额度格子（AICoop P11 `P11_NotchHover`）：`?ntcells=1|4|8|ok|none`（同托盘面板那份；`ok` = 没有低额度）·
   //   `?ntempty=1` 1000 ms 格子变空 · `?ntnear=1` 200 ms 推 `notch-near`（配 `ntopen=0` 拍「靠近」光晕）· `?ntpick=<key>` 1200 ms 点那一格
+  //   `?nthov=<key>` 1000 ms 推 Rust 光标 `notch-hover` · `?nthovleave=1` 1600 ms 推 null · `?nthide=<key>` 1300 ms 点 ×
+  //   `?ntstop=<key>` 1100 ms 那家停下 · `?ntliveerr=1` 900 ms 实时账本读失败
   //   `?ntbg=desk` 画一块桌面 + 32 高菜单栏底（截图看得见透明窗）。刘海与卡片恒黑，浅色主题无关。
   //   `?ntat=<ms>`（默认 1800）起把卡片实量 / logo 落点 / IPC / emit 写进 <body data-nt-*>（dump-dom 读）。
   if (location.pathname.indexOf('harness-notch') >= 0) {
@@ -1855,6 +1857,31 @@ function relayEntry() {
         clicks.push('ntexpand →命中 ' + (el ? 1 : 0));
         if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }));
       }, 1000);
+      // `?nthov=<key>` 1000 ms 模仿 Rust 推一帧 `notch-hover`（那一格 / 那一行中心的窗口坐标；不发鼠标事件）·
+      // `?nthovleave=1` 1600 ms 再推 null · `?nthide=<key>` 1300 ms 点那一格的 ×
+      if (p.get('nthov')) setTimeout(function () {
+        var k = p.get('nthov');
+        // ★ 先找在跑行：在跑场景里空闲格子也在 DOM 里（透明），取它的中心会落到别的行上
+        var el = document.querySelector('[data-notch-row="' + k + '"]') || document.querySelector('[data-notch-idle-cell="' + k + '"]');
+        clicks.push('nthov →命中 ' + (el ? 1 : 0));
+        if (el) { var r = el.getBoundingClientRect(); fire('notch-hover', [r.left + r.width / 2, r.top + r.height / 2]); }
+      }, 1000);
+      if (p.get('nthovleave') === '1') setTimeout(function () { fire('notch-hover', null); }, 1600);
+      if (p.get('nthide')) setTimeout(function () {
+        var x = document.querySelector('[data-notch-idle-hide="' + p.get('nthide') + '"]');
+        clicks.push('nthide →命中 ' + (x ? 1 : 0));
+        if (x) x.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }, 1300);
+      // `?ntstop=<key>` 1100 ms 推一份 tps-live，那家停下（应 40% 留 3 s 再收起，同悬停面板 `hvstop`）
+      if (p.get('ntstop')) setTimeout(function () {
+        window.__TAURI_INTERNALS__.invoke('read_live', {}).then(function (txt) {
+          var o = JSON.parse(txt);
+          o.platforms[p.get('ntstop')] = { running: false, n_sessions: 0, tps: null, tokens_today: 0, sessions: [] };
+          fire('tps-live', JSON.stringify(o));
+        });
+      }, 1100);
+      // `?ntliveerr=1` 900 ms 推 `tps-live-error`（实时账本这次没读到 ⇒ 底栏「⚠ 上次的数」）
+      if (p.get('ntliveerr') === '1') setTimeout(function () { fire('tps-live-error', 'requests-ledger 被占用'); }, 900);
       if (p.get('ntclick')) setTimeout(function () {
         var a = document.querySelector('[data-notch-link="' + p.get('ntclick') + '"]');
         clicks.push('ntclick →命中 ' + (a ? 1 : 0));

@@ -417,6 +417,8 @@ fn track(app: AppHandle) {
         //   不挡的话点完格子（格子上沿在靠近区里）光晕会从 55% 反跳到 100%（三方评审 2026-10-21）
         let mut was_open = false;
         let mut near_block = false;
+        // 展开时面板内的光标坐标（窗口坐标），变了才推；收起时补一帧 null
+        let mut last_hover: Option<(f64, f64)> = None;
         loop {
             std::thread::sleep(TRACK_TICK);
             if ENABLE_GEN.load(Ordering::SeqCst) != gen || !ENABLED.load(Ordering::SeqCst) { break; }
@@ -449,6 +451,7 @@ fn track(app: AppHandle) {
             }
 
             if !open {
+                if last_hover.take().is_some() { let _ = app.emit_to(LABEL, "notch-hover", None::<[f64; 2]>); }
                 let on = on_notch(&g, x, y);
                 if on { dwell_from.get_or_insert_with(Instant::now); } else { dwell_from = None; }
                 // 不在停留区时 `touch` 必为假（碰触区是停留区的子集）、`dwell` 为空 ⇒ 不用读活动
@@ -467,6 +470,13 @@ fn track(app: AppHandle) {
                 continue;
             }
             let inside = hit(&g, true, x, y);
+            // ★ 光标坐标交给网页做命中（格子悬停出 ×、在跑行展开会话）：app 不在前台时 WKWebView 收不到鼠标移动
+            //   （同托盘悬停面板 `tpshover-cursor`；刘海与菜单栏同步审查 2026-10-24 #5）
+            let hover = inside.then(|| { let (wx, wy, _, _) = rect(&g, true); (x - wx, y - wy) });
+            if hover != last_hover {
+                last_hover = hover;
+                let _ = app.emit_to(LABEL, "notch-hover", hover.map(|(a, b)| [a, b]));
+            }
             if inside != accepting {
                 accepting = inside;
                 pass_clicks_soon(&app, !inside);

@@ -392,7 +392,8 @@ class NotchIdleShowsHiddenAndWarnings(unittest.TestCase):
         self.assertIn("data-notch-idle-snoozed", s)
         self.assertIn("data-notch-idle-undo", s)
         self.assertIn("data-notch-idle-week", s)
-        self.assertIn("emit(IDLE_SNOOZE_EVENT, { key, undo: true })", s)
+        self.assertIn("emit(IDLE_SNOOZE_EVENT, { key, undo })", s)
+        self.assertIn("snooze(z.key, true)", s, "撤销 = undo: true（2026-10-24 起与 × 共用 `snooze`）")
 
     def test_hud_passes_them_and_does_not_dismiss_while_notes_remain(self):
         s = code(SRC / "NotchHud.tsx")
