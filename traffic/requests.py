@@ -103,7 +103,7 @@ PLATFORMS = ("codex", "claude", "agy", "grok")      # 固定顺序 Codex → Cla
 #: ★★ 落盘白名单 —— 账本 / 窗口快照里**只能**出现这些键。加字段必须改这里，且不得是正文。
 KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "session_title",
         "account", "input", "cached", "cache_write", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
-        "tool_ms", "tps", "est", "session_req_n")
+        "tool_ms", "tps", "est", "session_req_n", "upd")
 
 MIN_GEN_S = 0.3              # 生成段短于它就不当分母（毫秒级的段除出来是噪音）
 AGY_STREAM_SHARE = 0.5       # agy：streaming 至少占模型时间这一比例才算实测（见模块 docstring agy 那条）
@@ -1277,6 +1277,7 @@ def update(now, days, rt=None, join=False):
     for k, r in fresh.items():
         m = _merge(recs.get(k), r)
         if m != recs.get(k):
+            m["upd"] = int(now)       # ★ 这行最后一次写进/改动账本的时刻 —— 增量按它筛（见 `build_json`）
             recs[k] = m
             changed[k] = m
     recs = {k: v for k, v in recs.items() if (v.get("t_end") or 0) >= horizon}
@@ -1284,6 +1285,7 @@ def update(now, days, rt=None, join=False):
         for fn in (_join_codex, _join_agy):
             try:
                 for r in fn(recs, rt, now, horizon):
+                    r["upd"] = int(now)
                     changed[r["key"]] = r
             except Exception:                         # noqa: BLE001 —— 账号是附加信息：join 坏了不影响列表
                 pass
@@ -1483,7 +1485,11 @@ def build_json(now, days=2, rt=None, since=None):
     #   界面按 key 合并、按 `window_start` 剪掉滑出窗口的旧行。`partial` 让界面分得清「这是一段」还是「这是全部」。
     out = {"v": V, "generated_at": int(now), **_meta(cur), "days": days_out,
            "window_start": _local_midnight(now, max(1, days) - 1), "partial": since is not None}
-    out["requests"] = rows if since is None else [r for r in rows if (r["t_end"] or 0) >= since - SINCE_MARGIN]
+    # ★ `since` = 界面上一次读到的 `generated_at`；按「这行最后一次写进账本的时刻」（`upd`）筛（samchen #4 ⑥）。
+    #   原来按 `t_end` 筛：迟到的行（agy 会话库晚落盘、OTel span 晚到、估值换实测）`t_end` 早于界面手里最新那行，
+    #   永远进不了增量。没有 `upd` 的旧行（这一版之前写的、之后没再改过）退回 `t_end`。
+    out["requests"] = rows if since is None else [
+        r for r in rows if (r.get("upd") or r["t_end"] or 0) >= since - SINCE_MARGIN]
     return out
 
 
@@ -1609,7 +1615,7 @@ def main(argv=None):
     g.add_argument("--json", action="store_true")
     g.add_argument("--live", action="store_true")
     ap.add_argument("--days", type=int, default=2)
-    ap.add_argument("--since", type=float, default=None, help="只回 t_end ≥ since − %d s 的行（增量）" % 600)
+    ap.add_argument("--since", type=float, default=None, help="只回 since − %d s 之后写进/改过账本的行（增量）" % 600)
     # `--active-secs` 是旧名（2026-10-19 前它是「N 秒没写 = 停了」）；现在两个名字都是兜底窗口。
     ap.add_argument("--fallback-secs", "--active-secs", dest="fallback_secs", type=float, default=FALLBACK_SECS)
     a = ap.parse_args(argv)

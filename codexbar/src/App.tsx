@@ -89,7 +89,7 @@ export default function App() {
   // ★ 启用条件必须与**渲染条件**一致（`provider === "codex"`）。此前只看 page ⇒
   //   停在总览的 Gemini/Grok 档时，这条 codex 专属查询照样每次事件都 spawn 一个 python，
   //   而画面上一个像素都不会用到它（codex 评审 2026-09-21 指出）。
-  const { board, err: boardErr } = useRotationBoard(page === "overview" && provider === "codex");
+  const { board, err: boardErr, live: boardLive } = useRotationBoard(page === "overview" && provider === "codex");
   useEffect(() => { savePoolKey(provider); }, [provider]);
 
   const [drill, setDrill] = useState<string | null>(null);   // 平台详情:null = 停在总览
@@ -195,7 +195,7 @@ export default function App() {
   const agyPool = useAgyPool(page === "overview" && provider === "gemini");
   // ★ 与 codex 档同一块续航条、同一个板子形状；数据走只读 IPC `read_agy_board`。
   //   `dep` = 池数据：置顶 / 切号 / 停用之后据此重读（agy 那边没有 `state-changed`）。
-  const { board: agyBoard, err: agyBoardErr } = useRotationBoard(
+  const { board: agyBoard, err: agyBoardErr, live: agyBoardLive } = useRotationBoard(
     page === "overview" && provider === "gemini", { source: "agy", dep: agyPool.accounts });
 
   // 代理轮换页的泳道顺序 = 池顺序（AICoop P7「顺序固定」），胶囊上的账号数也用它。
@@ -377,8 +377,8 @@ export default function App() {
               state={state} accounts={accounts} inUseNode={inUseNode} currentNode={currentNode}
               lastRefreshAt={lastRefreshAt} freshness={freshness} loadingAction={loadingAction} run={run} showToast={showToast} pendingDel={pendingDel} deferDelete={deferDelete}
               integration={integration} onConnect={() => setPage("settings")}
-              board={board} boardErr={boardErr}
-              agyPool={agyPool} agyBoard={agyBoard} agyBoardErr={agyBoardErr}
+              board={board} boardErr={boardErr} boardLive={boardLive}
+              agyPool={agyPool} agyBoard={agyBoard} agyBoardErr={agyBoardErr} agyBoardLive={agyBoardLive}
               agySnap={agySnap} agyBusy={agyBusy} agyErr={agyErr} refreshAgy={refreshAgy}
               grokSnap={grokSnap} grokBusy={grokBusy} grokErr={grokErr} refreshGrok={refreshGrok} grokLast={grokLast}
               claudeQuota={claudeQuota} claudeErr={claudeErr} refreshClaude={refreshClaude}

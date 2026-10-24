@@ -21,7 +21,7 @@ import { parseClaudeQuota, isStale, type ClaudeQuota, type ClaudeWin } from "./m
 import { grokLastGoodRemPct, grokQuotaVisible, grokRemPct, type GrokSnapshot } from "./grok";
 import { applyCacheMode, applyPlatformPrefs, colorOf, fmtTok, todayView, type TrafficData } from "./traffic";
 import { fmtUSD } from "./rates";
-import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER as REQ_ORDER } from "./requests";
+import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER as REQ_ORDER, todayStartSec } from "./requests";
 import { claudeRem, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
 import * as NI from "./notchIdle";
 import NotchIdleGrid from "./components/NotchIdleGrid";
@@ -425,7 +425,7 @@ export default function NotchHud() {
     if (now - reqAt.current <= REFETCH_MS) return;
     reqAt.current = now;
     let alive = true;
-    invoke<string>("read_requests").then((raw) => {
+    invoke<string>("read_requests", { since: todayStartSec(Date.now()) }).then((raw) => {
       const p = parsePayload(raw);
       if (!alive || (!p.ok && !p.requests.length)) return;   // 这次没读到 ≠ 今天没有请求：保留上一份
       const rowsT = rowsForDay(p.requests, dayKeys(p, Date.now()).today);

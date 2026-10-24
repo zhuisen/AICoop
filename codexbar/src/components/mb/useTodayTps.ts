@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER } from "../../requests";
+import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, todayStartSec, PLATFORM_ORDER } from "../../requests";
 
 /**
  * 「今日」Tab 各家均速：今天这家所有请求 t/s 的平均（`requests.ts::dayMetrics`，与请求页同一个算法）。
@@ -16,7 +16,7 @@ export function useTodayTps(enabled: boolean): Record<string, number | null> {
     let alive = true;
     const load = async () => {
       try {
-        const p = parsePayload(await invoke<string>("read_requests"));
+        const p = parsePayload(await invoke<string>("read_requests", { since: todayStartSec(Date.now()) }));
         if (!alive || (!p.ok && !p.requests.length)) return;
         const today = dayKeys(p, Date.now()).today;
         const rows = rowsForDay(p.requests, today);

@@ -69,7 +69,9 @@ export interface OverviewProps {
   pendingDel: ReadonlySet<string>; deferDelete: (key: string, label: string, commit: () => Promise<boolean>) => void;
   integration: Integration | null; onConnect: () => void;
   board: Board | null; boardErr: string | null;
-  agyPool: AgyPoolApi; agyBoard: Board | null; agyBoardErr: string | null;
+  /** 板子现读回来过吗（`false` = 还只是上一会话的 localStorage 种子）。缺省当作回来过。 */
+  boardLive?: boolean;
+  agyPool: AgyPoolApi; agyBoard: Board | null; agyBoardErr: string | null; agyBoardLive?: boolean;
   agySnap: AgySnapshot | null; agyBusy: boolean; agyErr: string | null; refreshAgy: () => void;
   grokSnap: GrokSnapshot | null; grokBusy: boolean; grokErr: string | null; refreshGrok: () => Promise<boolean>;
   /** 最近一次取回的 grok 快照（刷新后 toast 按它说原因）。缺省 = 当前 `grokSnap`。 */
@@ -152,7 +154,10 @@ export default function Overview(p: OverviewProps) {
     });
     return () => { void un.then((f) => f()).catch(() => {}); };
   }, []);
-  const freeze = <T,>(key: string, list: T[], id: (x: T) => string): T[] => {
+  // ★ 现读回来之前不冻结（samchen #4 ③）：冷启动第一帧的板子是上一会话的 localStorage 种子，在用 / 下一个都可能是旧的；
+  //   照它冻住，窗口一直有焦点就一直错着。空列表（state 还没读回来）也不记。
+  const freeze = <T,>(key: string, list: T[], id: (x: T) => string, ready: boolean): T[] => {
+    if (!ready || !list.length) return list;
     const out = stableOrder(frozen.current[key], list, id);
     frozen.current[key] = out.map(id);
     return out;
@@ -208,7 +213,7 @@ export default function Overview(p: OverviewProps) {
   // 置顶区（P5 §1.2）：按置顶先后；「其余」按排序。拖拽只排「其余」。
   const codexPinned = codexShown.filter((a) => a.pinRank !== null).sort((x, y) => (x.pinRank ?? 0) - (y.pinRank ?? 0));
   const codexRest0 = codexShown.filter((a) => a.pinRank === null);
-  const codexRest = codexMode === "auto" && !p.preview ? freeze("codex", codexRest0, (a) => a.aid) : codexRest0;
+  const codexRest = codexMode === "auto" && !p.preview ? freeze("codex", codexRest0, (a) => a.aid, p.boardLive !== false) : codexRest0;
   const cBest = cMain.filter((a) => a.rotates && a.cooldownSec <= 0 && a.windows.length).reduce<number | null>((m, a) => (m == null || a.tightest > m ? a.tightest : m), null);
 
   // ── Gemini 档 ──
@@ -225,7 +230,7 @@ export default function Overview(p: OverviewProps) {
   const gPin = (a: AgyPoolAccount) => { const e = agyEnt.get(a.sub); return e?.pin == null ? null : e.pin - 1; };
   const agyPinned = agyShownList.filter((a) => gPin(a) !== null).sort((x, y) => (gPin(x) ?? 0) - (gPin(y) ?? 0));
   const agyRest0 = agyShownList.filter((a) => gPin(a) === null);
-  const agyRest = agyMode === "auto" && !p.preview ? freeze("gemini", agyRest0, (a) => a.sub) : agyRest0;
+  const agyRest = agyMode === "auto" && !p.preview ? freeze("gemini", agyRest0, (a) => a.sub, p.agyBoardLive !== false) : agyRest0;
   // 失效号的读数是作废前的旧值，不能当「最好的余量」（2026-10-22 评审核实：gMain 只滤用户藏起来的）
   const gBest = gMain.filter((a) => !a.rotate_off && gState(a) !== "cool" && gState(a) !== "dead").reduce<number | null>((m, a) => { const v = gTight(a); return v == null ? m : m == null || v > m ? v : m; }, null);
 

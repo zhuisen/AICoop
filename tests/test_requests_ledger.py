@@ -32,7 +32,7 @@ NOW = time.time()
 #:   往白名单里混一个内部键照样绿（变异实测）。改契约 = 两边一起改，并通知前端。
 CONTRACT_KEYS = ("key", "platform", "t_start", "t_end", "model", "source", "session", "session_title",
                  "account", "input", "cached", "cache_write", "output", "reasoning", "ttft_ms", "gen_ms", "total_ms",
-                 "tool_ms", "tps", "est", "session_req_n")
+                 "tool_ms", "tps", "est", "session_req_n", "upd")
 N_FIXTURE = 9           # codex 2 + claude 4（主会话 2 + 子 agent 2）+ agy 2 + grok 1
 T0 = NOW - 900          # 夹具全部落在「15 分钟前」附近：一定在 2 天窗口内
 
@@ -919,15 +919,30 @@ class SinceReturnsOnlyTheTail(Base):
         full = self.run_json()
         self.assertGreaterEqual(len(full["requests"]), 2, "已知阳性：夹具里得有不止一行")
         self.assertIs(full["partial"], False)
-        newest = max(r["t_end"] for r in full["requests"])
-        tail = RQ.build_json(time.time(), 2, since=newest + RQ.SINCE_MARGIN + 1)
+        gen = full["generated_at"]
+        tail = RQ.build_json(gen + RQ.SINCE_MARGIN + 5, 2, since=gen + RQ.SINCE_MARGIN + 1)
         self.assertIs(tail["partial"], True)
-        self.assertEqual(tail["requests"], [], "★ since 之后没有新行 ⇒ 一行都不回")
+        self.assertEqual(tail["requests"], [], "★ 上次读到之后账本没改过 ⇒ 一行都不回")
         self.assertEqual(tail["days"], full["days"], "★ 汇总按全量算，不随 since 变")
         self.assertEqual(tail["window_start"], full["window_start"])
-        near = RQ.build_json(time.time(), 2, since=newest)
-        self.assertIn(newest, [r["t_end"] for r in near["requests"]], "since 那一刻的行（含余量）要回")
-        self.assertLess(len(near["requests"]) + 0, len(full["requests"]) + 1)
+        near = RQ.build_json(time.time(), 2, since=gen)
+        self.assertEqual(len(near["requests"]), len(full["requests"]), "since 那一刻写进来的行（含余量）要回")
+
+    def test_a_late_row_with_an_old_t_end_reaches_the_increment(self):
+        """★★ samchen #4 ⑥：迟到的行 `t_end` 比界面手里最新那行还早；按 `t_end` 筛就永远进不了增量。"""
+        t1 = time.time()
+        full = RQ.build_json(t1, 2)
+        newest = max(r["t_end"] for r in full["requests"])
+        key = next(k for k, r in self.by_key(full).items() if r["platform"] == "claude" and r.get("est"))
+        rid = key.split(":")[-1]
+        late = time.time() + RQ.SINCE_MARGIN + 30          # 过了余量之后 span 才到
+        with open(self.tmp / "otel" / time.strftime("%Y-%m.jsonl"), "a") as fh:
+            fh.write(otel_span(rid, self.csid, T0 + 1, T0 + 2, 300, 900, 50))
+        inc = RQ.build_json(late, 2, since=late - RQ.SINCE_MARGIN - 10)
+        got = {r["key"]: r for r in inc["requests"]}
+        self.assertLess(got.get(key, {}).get("t_end", 0) if key in got else 0, newest + 1)
+        self.assertIn(key, got, "★★ span 晚到、估值换成实测的那一行没进增量 —— 界面上一直是旧的「估」")
+        self.assertFalse(got[key]["est"], "换成实测")
 
 
 if __name__ == "__main__":

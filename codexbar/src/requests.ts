@@ -143,12 +143,21 @@ export function mergePayload(prev: ReqPayload | null, next: ReqPayload): ReqPayl
   return { ...next, requests: rows, partial: false };
 }
 
-/** 下一次增量从哪儿读：手里最新一行的 `t_end`，**单位秒**（后端 `--since` 按秒）。null = 手里没有 ⇒ 读全部。 */
+/** 下一次增量从哪儿读，**单位秒**（后端 `--since` 按秒）。null = 手里没有 ⇒ 读全部。
+ *  ★ 用后端上次给的 `generated_at`（「我上次读到这一刻为止的改动」），不用手里最新一行的 `t_end`（samchen #4 ⑥）：
+ *    后端按每行最后写进账本的时刻筛，迟到的行（`t_end` 更早）也能进增量。老后端没给 `generated_at` 才退回 `t_end`。 */
 export function sinceOf(p: ReqPayload | null): number | null {
   if (!p || p.requests.length === 0) return null;
+  if (p.generated_at != null && p.generated_at > 0) return p.generated_at;
   let m = 0;
   for (const r of p.requests) m = Math.max(m, toMs(r.t_end));
   return m > 0 ? m / 1000 : null;
+}
+
+/** 本地今天零点（秒）：今日用的几处只要今天的行，`since` 给零点就不必整读两天的账本（samchen #4 ⑧）。 */
+export function todayStartSec(nowMs: number): number {
+  const d = new Date(nowMs); d.setHours(0, 0, 0, 0);
+  return d.getTime() / 1000;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");

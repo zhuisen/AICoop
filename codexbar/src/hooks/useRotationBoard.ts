@@ -68,7 +68,7 @@ export interface Board {
  */
 export function useRotationBoard(enabled: boolean, opts?: {
   source?: "codex" | "agy"; dep?: unknown;
-}): { board: Board | null; err: string | null } {
+}): { board: Board | null; err: string | null; live: boolean } {
   const source = opts?.source ?? "codex";
   // ★ 先画上次的板子（用户 2026-10-23「有没有缓存」）：冷启动 / 窗口重载后置顶区、在用、下一个不再先空着、
   //   等子进程回来再跳一次。只是种子 —— 首次 `load()` 回来就整份换掉；读失败照旧不清空（下面 catch）。
@@ -77,6 +77,8 @@ export function useRotationBoard(enabled: boolean, opts?: {
     try { const raw = localStorage.getItem(cacheKey); return raw ? (JSON.parse(raw) as Board) : null; } catch { return null; }
   });
   const [err, setErr] = useState<string | null>(null);
+  /** 现读回来过吗。`false` = `board` 还只是上一会话的种子 —— 总览不能拿它去冻结排序（samchen #4 ③）。 */
+  const [live, setLive] = useState(false);
   /** 在途请求数（只许 1 个）+ 期间来过新事件吗。见下面 `load` 的注释。 */
   const inflight = useRef(false);
   const pending = useRef(false);
@@ -101,6 +103,7 @@ export function useRotationBoard(enabled: boolean, opts?: {
         //   两个 webview 一起闪）。闸：`tests/test_no_event_feedback_loop.py`。
         const raw = await invoke<string>(source === "agy" ? "read_agy_board" : "read_rotation_board");
         setBoard(JSON.parse(raw) as Board);
+        setLive(true);
         try { localStorage.setItem(cacheKey, raw); } catch { /* 无痕 / 配额满：只是少了种子 */ }
         setErr(null);
       } catch (e: unknown) {
@@ -135,5 +138,5 @@ export function useRotationBoard(enabled: boolean, opts?: {
     load();
   }, [opts?.dep, load]);
 
-  return { board, err };
+  return { board, err, live };
 }

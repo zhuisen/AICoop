@@ -47,9 +47,34 @@ class MergeByKey(unittest.TestCase):
         rows, _ = self.merge(_pay([_row("a", 1100), _row("b", 1200)], False), _pay([_row("c", 1300)], False))
         self.assertEqual([k for k, _ in rows], ["c"], "整读 = 全部，以它为准")
 
-    def test_since_is_the_newest_row_in_seconds(self):
-        self.assertEqual(_run("m.sinceOf(P(%s))" % json.dumps(_pay([_row("a", 1100), _row("b", 1250.5)], False))), 1250.5)
+    def test_since_is_the_backend_time_of_the_last_read(self):
+        pay = dict(_pay([_row("a", 1100), _row("b", 1250.5)], False), generated_at=1400)
+        self.assertEqual(_run("m.sinceOf(P(%s))" % json.dumps(pay)), 1400,
+                         "★ 用上次读到的 generated_at —— 用最新 t_end 会漏掉 t_end 更早的迟到行（samchen #4 ⑥）")
+        self.assertEqual(_run("m.sinceOf(P(%s))" % json.dumps(_pay([_row("a", 1100), _row("b", 1250.5)], False))), 1250.5,
+                         "老后端没给 generated_at ⇒ 退回最新 t_end")
         self.assertIsNone(_run("m.sinceOf(P(%s))" % json.dumps(_pay([], False))), "手里没有 ⇒ 读全部")
+
+
+class NoConsumerReadsTheWholeLedgerEveryTick(unittest.TestCase):
+    """samchen #4 ⑧：`useReqLedger`（每 2 分钟）、菜单栏「今日」、刘海「今日」原来都不带 since，每次整读两天（本机 2.3 MB）。"""
+
+    def test_every_call_passes_since(self):
+        src = Path(TS).parent
+        hits = {}
+        for f in src.rglob("*.ts*"):
+            code = "\n".join(l for l in f.read_text(encoding="utf-8").split("\n")
+                             if not l.lstrip().startswith(("//", "*", "/*")))
+            for m in __import__("re").finditer(r'invoke<string>\("read_requests"([^)]*)\)', code):
+                hits.setdefault(f.relative_to(src).as_posix(), []).append(m.group(1))
+        self.assertGreaterEqual(len(hits), 4, f"★ 前提：四处调用都找到了 {sorted(hits)}")
+        bare = {f: a for f, a in hits.items() if any("since" not in x for x in a)}
+        self.assertEqual(bare, {}, "★★ 有调用不带 since —— 每次整读两天的账本")
+
+    def test_the_ledger_hook_merges_increments(self):
+        code = (Path(TS).parent / "hooks" / "useReqLedger.ts").read_text(encoding="utf-8")
+        self.assertIn("held.current = mergePayload(held.current, pl);", code)
+        self.assertIn("sinceOf(held.current)", code)
 
 
 class TheHookUsesTheIncrementalPath(unittest.TestCase):

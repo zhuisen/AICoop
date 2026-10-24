@@ -166,8 +166,11 @@ export const MODEL_COLORS: Record<string, string> = {
   "gemini-3.7-flash":        "#7cb8ff",
   // Gemini 4 Argon：新一代、价是 Flash 的 2.7 倍，另起色相（橙）让它在 Flash 的蓝里一眼可见。
   "gemini-4-argon":          "#fb923c",
+  "gemini-4-argon-d":        "#fdba74",   // 2026-10-24 本机库里出现：同橙色系浅一档
   "gemini-3.7-flash-tiered": "#2f7fd6",
   "gemini-3.6-flash-tiered": "#1f5c9e",
+  // 2026-10-24 本机库里出现（samchen #4 本机③；闸 test_p2_last_batch 本机也红过）：同色系里偏灰的一档，与 3.6-tiered 深浅分开。
+  "gemini-3.6-flash":        "#6c8fc7",
   // ★ pro 系另起一个色相（青绿），别用紫 —— 紫是 grok 家族的。
   "gemini-pro-c":            "#3fd0c9",
   "gemini-3.1-pro-low":      "#1d8f8a",
