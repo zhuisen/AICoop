@@ -144,9 +144,10 @@ export default function AccountCard({ a, state, isDirect, borrowOff, bestPct, pr
   );
   const actions = (
     <ActGroup>
-      {state === "dead" ? null : state === "inuse" ? (
-        <Ab current data="inuse" title="当前正在用这个号（代理此刻挑的是它）">在用</Ab>
-      ) : isDirect ? (
+      {/* ★ 「在用」不再占掉切换按钮（用户 2026-10-24「无法手动换号」：只剩两个活号，一个「直连」一个「在用」，两张都没有切换）。
+          「在用」= 代理最后挑过它；「切换」改的是 auth.json（直连号）—— 两件事无关，代理正在用的号恰恰最该能切成直连。
+          只有 auth.json 里已经是它（直连）时切换才是空操作。「在用」这个事实由名字旁的标签说，不必占这个位置。 */}
+      {state === "dead" ? null : isDirect ? (
         <Ab current data="inuse" title="auth.json 里就是它（不走代理直接跑 codex 时用的号）—— 切到它是空操作">直连</Ab>
       ) : (
         <Ab primary onClick={onSwitch} data="switch"

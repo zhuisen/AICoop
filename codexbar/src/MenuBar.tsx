@@ -671,8 +671,9 @@ export default function MenuBar() {
           <AccountRow key={a.aid} a={a} isCurrent={a.aid === inUseNode}
             isBest={mbBoard?.next?.aid === a.aid && a.aid !== inUseNode}
             bestPct={bestPct} isDark={isDark} onSelect={() => openOverview("codex")}
-            // 当前号 / 在用的号不给按钮（交接包：在用的号只提亮不出按钮；切到自己是空操作）。
-            onSwitch={a.aid === currentNode || a.aid === inUseNode ? undefined
+            // 只有直连号（auth.json 里就是它）不给按钮 —— 切到自己是空操作。★ 代理在用的号**照样能切**（用户 2026-10-24「无法手动换号」：
+            //   原来「在用」也不给，只剩一个直连 + 一个在用时两行都没按钮）。偏离交接包「在用只提亮不出按钮」，原因同上。
+            onSwitch={a.aid === currentNode ? undefined
               : () => run(`switch-${a.aid}`, ["switch", a.node], `已切到 ${a.node}`)}
             switching={loadingAction === `switch-${a.aid}`} />
         ))}
