@@ -72,6 +72,10 @@ export interface NotchStatus { active: boolean; reason?: string | null }
 
 export const NOTCH_DESC = "选刘海屏：有 AI 在跑时刘海四周亮起它的颜色；鼠标靠近刘海展开卡片：在跑 / 今日 / 额度。菜单栏图标藏起来。只在刘海屏上显示，外接屏、合盖时菜单栏图标照常显示";
 
+/** 升级后托盘第一次被藏起来时的那条通知（只发一次，见 App.tsx）。 */
+export const SURFACE_NOTICE_TITLE = "AICoop 现在只显示在刘海";
+export const SURFACE_NOTICE_BODY = "菜单栏图标已藏起来。鼠标移到刘海就能打开。要改回菜单栏：设置 → 菜单栏与刘海 → 显示位置。";
+
 /** 设置「显示位置」的说明行（菜单栏 / 刘海屏二选一，用户 2026-10-24）。 */
 export function surfaceDesc(notch: boolean): string {
   return notch ? "只在刘海显示，菜单栏图标藏起来；没有刘海屏时图标自动回来" : "AI 状态显示在菜单栏图标上";

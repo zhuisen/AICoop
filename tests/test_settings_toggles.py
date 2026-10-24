@@ -79,7 +79,7 @@ class TheThreeRowsExistWithTheirDefaults(unittest.TestCase):
                       "存过的值盖默认值 ⇒ 旧设置里没有 tpsTray 时按默认开，有 notchHud 时沿用")
         row = block(self.s, 'label="显示位置"', "</OneLineRow>")
         self.assertIn('invoke<NotchStatus>("set_notch_hud", { on: next })', row)
-        self.assertIn("update({ notchHud: next })", row)
+        self.assertIn("update({ notchHud: next, surfaceNoticed: true })", row, "自己选的 ⇒ 不再发升级提示")
 
 
 class TheTogglesDriveRust(unittest.TestCase):
@@ -96,7 +96,7 @@ class TheTogglesDriveRust(unittest.TestCase):
         eff = block(self.app, "const st = getSettings();", "}, []);")
         self.assertIn('invoke("set_tps_tray", { enabled: st.tpsTray })', eff,
                       "★★ Rust 默认关 —— 不重发，开关显示开、托盘永远不出胶囊")
-        self.assertIn('if (st.notchHud) invoke("set_notch_hud", { on: true })', eff)
+        self.assertIn('if (st.notchHud) invoke<{ active?: boolean }>("set_notch_hud", { on: true })', eff)
         self.assertIn('invoke("set_tray_style"', eff, "同一处、同一个时机")
 
     def test_rust_side_exists_and_restores_the_title(self):

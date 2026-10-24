@@ -63,6 +63,8 @@ interface Settings {
   intro: boolean;
   /** 数字滚动（用户 2026-10-24 单独一个开关，放在入场动效下面）：KPI 数字从 0 滚到实际值、菜单栏在跑时 t/s 逐位滚动。 */
   numberRoll: boolean;
+  /** 「显示位置 = 刘海屏、托盘已藏」这件事说过了没有（升级提示只说一次，samchen #5 ③）。 */
+  surfaceNoticed: boolean;
   autoRefresh: boolean;
   /** 空闲托盘（AICoop P11 §7）：空闲时菜单栏画 AI 图标（true）还是原来的文字标题（false）。 */
   idleIcons: boolean;
@@ -94,6 +96,7 @@ const DEFAULTS: Settings = {
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
   numberRoll: true,          // 数字滚动默认开（v2.0.0 改版前一直在滚，那次重写把它弄丢了）
+  surfaceNoticed: false,
   autoRefresh: true,         // 后台自动保鲜默认**开**(现有行为)。关掉只停后台心跳,
                              // 「打开页面/弹出托盘就刷新」照旧 —— 见 useTraffic 的 autoRefreshEnabled()
   idleIcons: true,           // P11 §7 默认「AI 图标」；文字标题四档仍在（选它时 `trayStyle` 生效）
@@ -473,7 +476,7 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
                     label={(v) => (v === "notch" ? "刘海屏" : "菜单栏")} on={(v) => {
             const next = v === "notch";
             if (next === s.notchHud) return;
-            update({ notchHud: next });
+            update({ notchHud: next, surfaceNoticed: true });   // 自己在这里选的，不用再提示
             setNotchErr(null);
             invoke<NotchStatus>("set_notch_hud", { on: next })
               .then((st) => setNotchSt(st ?? null))

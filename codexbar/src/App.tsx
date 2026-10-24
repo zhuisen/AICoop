@@ -29,6 +29,8 @@ import { useCardOrder } from "./hooks/useCardOrder";
 import { useCardDrag } from "./hooks/useCardDrag";
 import { useRotationBoard } from "./hooks/useRotationBoard";
 import { landingProvider, loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
+import { notify } from "./hooks/useNotify";
+import { SURFACE_NOTICE_BODY, SURFACE_NOTICE_TITLE } from "./notchSegs";
 import { useAgyPool } from "./hooks/useAgyPool";
 import Overview from "./components/ov/Overview";
 import { useLive } from "./hooks/useLive";
@@ -105,7 +107,16 @@ export default function App() {
     const st = getSettings();
     invoke("set_dock_visible", { on: st.dockVisible }).catch(() => {});
     // 刘海额度条同理（默认关；关着时这句什么都不建）。
-    if (st.notchHud) invoke("set_notch_hud", { on: true }).catch(() => {});
+    // ★ 升级提示（samchen #5 ③，用户选「保持刘海屏 + 提示一次」）：v2.1.2 起「刘海屏」= 托盘藏起来，
+    //   原来开着「刘海屏版本」的人升级后图标会直接消失。刘海真的显示出来（`active`）且没说过 ⇒ 发一次系统通知；
+    //   没有通知权限发不出去 ⇒ 打开主窗口停在设置页，当面说（不然图标没了、也没人告诉他去哪找）。
+    if (st.notchHud) invoke<{ active?: boolean }>("set_notch_hud", { on: true }).then((r) => {
+      if (!r?.active || st.surfaceNoticed) return;
+      patchSettings({ surfaceNoticed: true });
+      void notify(SURFACE_NOTICE_TITLE, SURFACE_NOTICE_BODY).then((sent) => {
+        if (!sent) { setPage("settings"); void invoke("set_main_visible", { show: true }); }
+      });
+    }).catch(() => {});
     // 「在跑时显示 t/s」同理：Rust 的 `tray_pill::ENABLED` 默认关、进程内 atomic，默认开要靠这一句。
     invoke("set_tps_tray", { enabled: st.tpsTray }).catch(() => {});
     // 「数字滚动」同理：Rust 默认开，关掉的人重启后要再告诉它一次

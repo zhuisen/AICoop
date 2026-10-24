@@ -186,7 +186,7 @@ class DefaultsAndColour(unittest.TestCase):
 
     def test_startup_only_turns_it_on_when_enabled(self):
         app = APP_TSX.read_text(encoding="utf-8")
-        self.assertRegex(app, r"if \(st\.notchHud\) invoke\(\"set_notch_hud\"",
+        self.assertRegex(app, r"if \(st\.notchHud\) invoke(<[^>]*>)?\(\"set_notch_hud\"",
                          "启动时只在开着的情况下调用；无条件调用会让关着的用户也建一次窗口")
 
     def test_uses_the_tray_colour_rule(self):
@@ -411,7 +411,7 @@ class PushNotPoll(unittest.TestCase):
         code = _code(TSX)
         self.assertNotIn("run_traffic", code, "刘海不许自己起扫描（会起 python）")
         i = code.index('emit("notch-shown")')
-        guard = code.rfind("if (open) {", 0, i)
+        guard = code.rfind("if (cardOpen) {", 0, i)   # v2.1.2 起变量叫 cardOpen（samchen #5）
         self.assertNotEqual(guard, -1, "`notch-shown` 只在卡片展开时发")
         self.assertLess(i - guard, 1500, "`notch-shown` 离展开分支太远，可能不在同一个分支里")
         mb = _code(APP / "src" / "MenuBar.tsx")

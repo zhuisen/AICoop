@@ -2,7 +2,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 
 let permitted: boolean | null = null;
 
-export async function notify(title: string, body: string) {
+/** 发系统通知。返回是否真的发出去了（没有通知权限 ⇒ false，调用方可以换别的方式说）。 */
+export async function notify(title: string, body: string): Promise<boolean> {
   if (permitted === null) {
     permitted = await isPermissionGranted();
     if (!permitted) {
@@ -13,4 +14,5 @@ export async function notify(title: string, body: string) {
   if (permitted) {
     sendNotification({ title, body });
   }
+  return permitted;
 }
