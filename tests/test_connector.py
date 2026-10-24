@@ -75,6 +75,10 @@ class Sandbox(unittest.TestCase):
         self._svc = connector._svc_loaded
         connector._svc_loaded = lambda name: False
         self.addCleanup(lambda: setattr(connector, "_svc_loaded", self._svc))
+        # plist 内容比对单独测（tests/test_launchd_drift.py）；这里当它一致，免得它真去跑安装器
+        self._drift = connector._launchd_drift
+        connector._launchd_drift = lambda script, store: {"stale": [], "retired": []}
+        self.addCleanup(lambda: setattr(connector, "_launchd_drift", self._drift))
 
     def _restore(self):
         for k, v in self._env.items():

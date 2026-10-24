@@ -28,6 +28,7 @@ except ModuleNotFoundError:            # Windows —— 语义等价的 LockFile
 import http.client
 import json
 import os
+import re
 import ssl
 import subprocess
 import shutil
@@ -3382,6 +3383,143 @@ DAEMON_SOURCES = {
 }
 
 
+DAEMON_SCRIPTS = {"proxy": "proxy/proxy.py", "quotad": "daemon/quota_daemon.py"}
+DAEMON_LABEL = "com.doushutangmu.codex-rotate."
+
+
+def _daemon_proc(svc):
+    """-> (pid 或 None, 它加载代码的根目录)。pid 为 None = 没在跑。探测本身失败就抛。
+
+    ★ 先问 launchd 这个服务的 pid，再从进程自己的命令行取它跑的是**哪一份**脚本。
+      原来按 `STORE/proxy/proxy.py` 去 pgrep：`.dmg` 装法里服务跑的是 `<store>/runtime/` 那份副本，
+      那条路径永远找不到 ⇒ 恒报「没有在跑」；而自动重启（samchen #4）照这个判断会每次启动都重启服务。
+    """
+    rel = DAEMON_SCRIPTS[svc]
+    pid = None
+    try:
+        out = subprocess.run(["launchctl", "print", "gui/%d/%s%s" % (os.getuid(), DAEMON_LABEL, svc)],
+                             capture_output=True, text=True, timeout=5).stdout
+        m = re.search(r"^\s*pid = (\d+)\s*$", out, re.M)
+        pid = m.group(1) if m else None
+    except (OSError, subprocess.SubprocessError):
+        pid = None
+    if pid is None:
+        out = subprocess.run(["pgrep", "-f", str(_CODE_ROOT / rel)],
+                             capture_output=True, text=True, timeout=5).stdout.split()
+        pid = out[0] if out else None
+    root = _CODE_ROOT
+    if pid is not None:
+        try:
+            args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                                  capture_output=True, text=True, timeout=5).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            args = []
+        for a in args:
+            if a.endswith("/" + rel):
+                root = Path(a[: -len(rel) - 1])
+                break
+    return pid, root
+
+
+def _daemon_staleness():
+    """-> (stale [(svc, 原因, pid 或 None)], unknown [(svc, 原因)])。`stale_daemon_gate` 与 `restart-stale` 共用。"""
+    stale, unknown = [], []
+    for svc, srcs in DAEMON_SOURCES.items():
+        try:
+            pid, root = _daemon_proc(svc)
+        except Exception:
+            unknown.append((svc, "查不了进程"))
+            continue
+        if pid is None:
+            stale.append((svc, "**没有在跑**", None))
+            continue
+        started = _proc_start_epoch(pid)
+        if started is None:
+            unknown.append((svc, "算不出启动时刻"))
+            continue
+        newest, newest_f = 0.0, None
+        for f in srcs:
+            fp = root / f
+            if fp.exists() and fp.stat().st_mtime > newest:
+                newest, newest_f = fp.stat().st_mtime, f
+        if newest and started < newest:
+            age = (newest - started) / 3600
+            stale.append((svc, "跑的是 %.1fh 前的代码(%s 已更新)" % (age, newest_f), pid))
+    return stale, unknown
+
+
+def _proxy_inflight(pid):
+    """代理手上的在途请求数；查不了 ⇒ `None`（不是 0）。
+
+    ★ 代理每个响应都回 `Connection: close`（proxy.py `_proxy`），所以它在监听端口上的
+      ESTABLISHED 连接 = 正在处理的请求。旧版代理也是这样 —— 要重启的恰恰是旧版，不能靠新加的接口问它。
+    """
+    try:
+        r = subprocess.run(["lsof", "-nP", "-a", "-p", str(pid), "-iTCP:%d" % _proxy_port(),
+                            "-sTCP:ESTABLISHED", "-Fn"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode not in (0, 1):
+        return None
+    if r.returncode == 1 and r.stderr.strip():
+        return None
+    return sum(1 for ln in r.stdout.splitlines()
+               if ln.startswith("n") and (":%d->" % _proxy_port()) in ln)
+
+
+def restart_stale_daemons(wait_secs=60, poll=1.0, sleep=time.sleep, now=time.time):
+    """重启跑旧代码的常驻服务（用户 2026-10-24 选「自动重启跑旧代码的服务」，samchen #4）。
+
+    -> {"restarted": [svc], "skipped": [(svc, 原因)], "unknown": [(svc, 原因)]}
+    ★ 代理有在途请求就先等（最多 `wait_secs`）；等不到空闲就**不重启**、说明原因 —— 掐断一条
+      正在生成的回答比晚一点生效更糟，下次启动 / 部署会再判一次。
+    ★ 没在跑的服务也 kickstart：它已装好却没进程，拉起来正是想要的；没装的 kickstart 会失败，如实报。
+    """
+    stale, unknown = _daemon_staleness()
+    done, skipped = [], []
+    for svc, _why, pid in stale:
+        if svc == "proxy" and pid is not None:
+            deadline = now() + wait_secs
+            busy = _proxy_inflight(pid)
+            while busy and now() < deadline:
+                sleep(poll)
+                busy = _proxy_inflight(pid)
+            if busy is None:
+                skipped.append((svc, "查不了在途请求，没敢重启"))
+                continue
+            if busy:
+                skipped.append((svc, "等了 %ds 仍有 %d 个请求在跑，没重启" % (wait_secs, busy)))
+                continue
+        r = subprocess.run(["launchctl", "kickstart", "-k", "gui/%d/%s%s" % (os.getuid(), DAEMON_LABEL, svc)],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            done.append(svc)
+        else:
+            skipped.append((svc, "kickstart 失败（exit %d）：%s —— 服务可能没装，去「设置 → 账号池接入」重装"
+                            % (r.returncode, (r.stderr or r.stdout).strip()[-200:])))
+    return {"restarted": done, "skipped": skipped, "unknown": unknown}
+
+
+def cmd_restart_stale(args):
+    """restart-stale [--wait SECS] [--json] —— 只重启**跑旧代码**的 proxy / quotad；都是新的就什么都不做。"""
+    wait = 60
+    if "--wait" in args:
+        wait = int(args[args.index("--wait") + 1])
+    res = restart_stale_daemons(wait_secs=wait)
+    if "--json" in args:
+        print(json.dumps(res, ensure_ascii=False))
+    else:
+        for svc in res["restarted"]:
+            print("  ↻ %s 已重启（原来跑的是旧代码）" % svc)
+        for svc, why in res["skipped"]:
+            print("  ⚠️  %s %s" % (svc, why))
+        for svc, why in res["unknown"]:
+            print("  ?  %s 判定不了：%s" % (svc, why))
+        if not (res["restarted"] or res["skipped"] or res["unknown"]):
+            print("  常驻服务代码 ✓ 均为最新")
+    sys.exit(1 if res["skipped"] else 0)
+
+
 def stale_daemon_gate():
     """★★ **常驻进程是不是还在跑旧代码**。-> {level, detail, lines}
 
@@ -3399,31 +3537,8 @@ def stale_daemon_gate():
       unknown  —— 拿不到 PID 或算不出启动时刻。**不能算 ok** ——
                   「查不到」和「确实是新的」返回同一个值,正是本仓库的头号铁律禁止的事。
     """
-    stale, unknown = [], []
-    for svc, srcs in DAEMON_SOURCES.items():
-        script = "proxy/proxy.py" if svc == "proxy" else "daemon/quota_daemon.py"
-        try:
-            out = subprocess.run(["pgrep", "-f", str(STORE / script)],
-                                 capture_output=True, text=True, timeout=5).stdout.split()
-        except Exception:
-            unknown.append((svc, "pgrep 失败"))
-            continue
-        if not out:
-            stale.append((svc, "**没有在跑**"))
-            continue
-        started = _proc_start_epoch(out[0])
-        if started is None:
-            unknown.append((svc, "算不出启动时刻"))
-            continue
-        newest, newest_f = 0.0, None
-        for f in srcs:
-            fp = STORE / f
-            if fp.exists() and fp.stat().st_mtime > newest:
-                newest, newest_f = fp.stat().st_mtime, f
-        if newest and started < newest:
-            age = (newest - started) / 3600
-            stale.append((svc, "跑的是 %.1fh 前的代码(%s 已更新)" % (age, newest_f)))
-
+    stale, unknown = _daemon_staleness()
+    stale = [(svc, why) for svc, why, _pid in stale]
     if stale:
         lines = ["⚠️  常驻服务在跑**旧代码** —— 已发布的修复在本机不会生效:"]
         for svc, why in stale:
@@ -4492,7 +4607,7 @@ CMDS = {"add": cmd_add, "login": cmd_login, "list": cmd_list, "switch": cmd_swit
         "dawn-probe": cmd_dawn_probe, "rotate": cmd_rotate,
         "tokens": cmd_tokens, "integration": cmd_integration,
         "priority": cmd_priority, "pin": cmd_pin, "next": cmd_next,
-        "borrow": cmd_borrow}
+        "borrow": cmd_borrow, "restart-stale": cmd_restart_stale}
 
 
 # Disk-only commands run their whole load→mutate→save under the cross-process state mutex (lost-update
@@ -4512,7 +4627,7 @@ def main():
               "dawn-probe [--status|--enable|--disable|--time HH:MM|--tick|--force]|"
               "integration [--json]|next [--json]|pin <label> [--add|--remove|--toggle|--clear]|"
               "priority [--set|--clear]|borrow [--status|--on|--off] [--json]|"
-              "tokens [--days N] [--json]|ensure|current}")
+              "tokens [--days N] [--json]|restart-stale [--wait S] [--json]|ensure|current}")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd in STATE_LOCKED:

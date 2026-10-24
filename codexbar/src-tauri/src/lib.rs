@@ -1843,48 +1843,90 @@ fn read_traffic_snapshot_days(days: u32) -> Result<Option<String>, String> {
     read_sidecar(&snapshot_name(days))
 }
 
-/// 查远端最新的 `vX.Y.Z` tag。
-///
-/// ★ **走 `git ls-remote` 而不是 GitHub Releases API**:这个仓库是私有的,匿名调
-/// `/repos/…/releases/latest` 一律返回 404(GitHub 对无权限私仓统一报 404 而非 403,防探测),
-/// 所以 API 那条路在当前可见性下**永远查不出结果**。`git ls-remote` 复用本机 git 已有的凭证
-/// (keychain / gh auth),对仓库所有者和已接受邀请的协作者都能用;仓库将来转公开也照样能用。
-///
-/// **只在用户点按钮时才跑**,没有任何定时器 —— 这是本 app 除探针外唯一会主动联网的动作。
-#[tauri::command]
-async fn check_update() -> Result<String, String> {
-    let store = store_dir();   // ★ 第三种概念:git 要的是**仓库**,既不是脚本目录也不是数据目录
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        spawn_cmd("git")
-            .args(["-C", &store, "ls-remote", "--tags", "--refs", "origin"])
-            .output()
-    })
-    .await
-    .map_err(|e| format!("join: {}", e))?
-    .map_err(|e| format!("git 起不来: {}", e))?;
-    if !out.status.success() {
-        return Err(format!(
-            "git ls-remote 失败(网络或凭证): {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    // 每行形如 "<sha>\trefs/tags/v0.8.0"。按 (major, minor, patch) 数值比较,
-    // **不能按字符串排** —— 那样 v0.10.0 会排在 v0.9.0 前面。
+/// GitHub 上的仓库（2026-10-23 起公开）。
+const REPO_SLUG: &str = "zhuisen/AICoop";
+
+/// 从一串 tag 里挑数值最大的 `vX.Y.Z`（预发布 `vX.Y.Z-beta.1` 不算）。
+/// **按 (major, minor, patch) 数值比**，字符串排会把 v0.10.0 排在 v0.9.0 前面。
+fn best_semver_tag<'a>(tags: impl Iterator<Item = &'a str>) -> Option<String> {
     let mut best: Option<(u32, u32, u32, String)> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Some(tag) = line.rsplit('/').next() else { continue };
+    for tag in tags {
+        let tag = tag.trim();
         let Some(rest) = tag.strip_prefix('v') else { continue };
         let mut it = rest.split('.');
-        let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else { continue };
-        let (Ok(a), Ok(b), Ok(c)) = (a.parse::<u32>(), b.parse::<u32>(), c.parse::<u32>()) else {
-            continue;
-        };
+        let (Some(a), Some(b), Some(c), None) = (it.next(), it.next(), it.next(), it.next()) else { continue };
+        let (Ok(a), Ok(b), Ok(c)) = (a.parse::<u32>(), b.parse::<u32>(), c.parse::<u32>()) else { continue };
         if best.as_ref().map_or(true, |(x, y, z, _)| (a, b, c) > (*x, *y, *z)) {
             best = Some((a, b, c, tag.to_string()));
         }
     }
     best.map(|(_, _, _, t)| t)
-        .ok_or_else(|| "远端没有 vX.Y.Z 形态的 tag".to_string())
+}
+
+/// 查最新发布的版本。-> JSON `{"tag": "vX.Y.Z", "via": "api"|"git", "clone": bool}`
+///
+/// ★ 先问 **GitHub Releases API**（`releases/latest`：不含草稿与预发布）。仓库 2026-10-23 起公开，匿名可读。
+///   原来只走 `git -C <store_dir> ls-remote`（仓库私有时代的做法）：CI 出的安装包没有烧录的仓库路径，
+///   `store_dir()` 落到一个不存在的 `~/Projects/tools/…`，git 当然失败，界面却说「网络或凭证」（samchen #5）。
+/// ★ 用钉死的 python 的 `urllib` 发请求：它读 macOS 的系统代理设置；`curl` / git 不读，需要代理才上得了
+///   GitHub 的网络里会直接失败。
+/// ★ 只有 clone 装法（数据目录里有 `codexbar/scripts/deploy.sh`）才退回 `git ls-remote`；`clone` 字段决定
+///   界面教用户「git pull + deploy.sh」还是「下载新的安装包」。
+///
+/// **只在用户点按钮时才跑**，没有任何定时器 —— 这是本 app 除探针外唯一会主动联网的动作。
+#[tauri::command]
+async fn check_update() -> Result<String, String> {
+    let store = store_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clone = std::path::Path::new(&store).join("codexbar/scripts/deploy.sh").is_file();
+        let url = format!("https://api.github.com/repos/{}/releases/latest", REPO_SLUG);
+        let script = "import json,sys,urllib.request,urllib.error\n\
+r=urllib.request.Request(sys.argv[1],headers={'Accept':'application/vnd.github+json','User-Agent':'AICoop'})\n\
+try:\n    print(json.load(urllib.request.urlopen(r,timeout=10)).get('tag_name',''))\n\
+except urllib.error.HTTPError as e:\n    sys.exit('GitHub 回 HTTP %d' % e.code)\n\
+except Exception as e:\n    sys.exit('连不上 GitHub（%s）' % (str(getattr(e,'reason',e)) or type(e).__name__)[:120])\n";
+        let api_err = match py_cmd().args(["-I", "-c", script, &url]).output() {
+            Ok(o) if o.status.success() => {
+                let out = String::from_utf8_lossy(&o.stdout).to_string();
+                match best_semver_tag(std::iter::once(out.as_str())) {
+                    Some(tag) => return Ok(serde_json::json!({"tag": tag, "via": "api", "clone": clone}).to_string()),
+                    None => format!("GitHub 回的版本号不是 vX.Y.Z：{}", out.trim()),
+                }
+            }
+            Ok(o) => String::from_utf8_lossy(&o.stderr).trim().to_string(),
+            Err(e) => format!("python 起不来：{}", e),
+        };
+        if !clone {
+            return Err(format!("{} —— 检查网络或代理", api_err));
+        }
+        let o = spawn_cmd("git")
+            .args(["-C", &store, "ls-remote", "--tags", "--refs", "origin"])
+            .output()
+            .map_err(|e| format!("{}；git 起不来：{}", api_err, e))?;
+        if !o.status.success() {
+            return Err(format!("{}；git ls-remote 也失败：{}", api_err,
+                               String::from_utf8_lossy(&o.stderr).trim()));
+        }
+        let text = String::from_utf8_lossy(&o.stdout).to_string();
+        best_semver_tag(text.lines().filter_map(|l| l.rsplit('/').next()))
+            .map(|tag| serde_json::json!({"tag": tag, "via": "git", "clone": clone}).to_string())
+            .ok_or_else(|| format!("{}；远端没有 vX.Y.Z 形态的 tag", api_err))
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}
+
+#[cfg(test)]
+mod update_tag_tests {
+    use super::best_semver_tag;
+
+    #[test]
+    fn numeric_order_and_no_prereleases() {
+        let tags = ["v0.9.0", "v0.10.0", "v2.1.2", "v2.1.10", "v3.0.0-beta.1", "latest", "v1.2"];
+        assert_eq!(best_semver_tag(tags.iter().copied()).as_deref(), Some("v2.1.10"));
+        assert_eq!(best_semver_tag(["v2.1.2\n"].iter().copied()).as_deref(), Some("v2.1.2"));
+        assert_eq!(best_semver_tag(["", "nope"].iter().copied()), None);
+    }
 }
 
 /// 在系统浏览器里打开一个 http(s) 外链。
@@ -3095,6 +3137,18 @@ pub fn run() {
             // ---- startup: refresh every account from the official usage API (GET, zero quota) ----
             // Safe to run on every launch/login again: refresh-all no longer sends a billed
             // POST /codex/responses — it reads GET /backend-api/codex/usage, which costs no quota.
+            // ★ 启动时重启**跑旧代码**的 proxy / quotad（samchen #4 ①，用户 2026-10-24 选「自动重启」）。
+            //   单独一个任务：代理忙时它最多等 60s，不能拖住下面的额度刷新。判据与 `codex-rotate health` 同一个真源。
+            #[cfg(target_os = "macos")]
+            {
+                let rot = format!("{}/codex-rotate", script_dir());
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        py_cmd().arg(&rot).arg("restart-stale").arg("--wait").arg("60").output()
+                    }).await;
+                });
+            }
             let store_startup = script_dir();
             let handle_startup = handle.clone();
             tauri::async_runtime::spawn(async move {

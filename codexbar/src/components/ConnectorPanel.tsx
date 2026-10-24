@@ -50,6 +50,8 @@ interface Plan {
   port: number;
   codex_home: string;
   local_bin: string;
+  /** 已装的服务与安装器此刻会生成的不一致（samchen #4 ②）。`null` = 一致或判不了。 */
+  services_drift?: { stale: string[]; retired: string[]; missing: string[] } | null;
 }
 
 const TONE: Record<Step["state"], { c: string; label: string }> = {
@@ -109,7 +111,9 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
    *   所以"要不要接管 codex"这个决定仍然由用户做，只是不必先读懂六步再做。
    */
   const todoIds = (withWrapper: boolean) => plan
-    ? plan.steps.filter((s) => s.state === "todo" && (withWrapper || !s.optional)).map((s) => s.id)
+    ? plan.steps.filter((s) => s.state === "todo" && (withWrapper || !s.optional)
+        // 服务只是过时（一个不缺）⇒ 由上面那行「重装服务」负责，一键区不再重复报一项
+        && !(s.id === "services" && plan.services_drift && !plan.services_drift.missing.length)).map((s) => s.id)
     : [];
   const needCount = todoIds(false).length;
   const wrapperStep = plan?.steps.find((s) => s.optional) ?? null;
@@ -201,6 +205,28 @@ export default function ConnectorPanel({ t, embedded }: { t: Theme; embedded?: b
               **根本没得选**（不装就是不能用），只有最后一步是真的取舍。
               所以：把"没得选的五步"合成一个主按钮，把"真的取舍"单独做成第二个按钮。
               ★ 用户在三个方案里选的就是**两个按钮并排**，不是让一键默默接管 `codex`。 */}
+          {/* ★ 服务配置过时（用户 2026-10-24 选「检测 + 设置页一键重装」）：服务照样在跑，所以「一键接入」
+              说不清这是什么事 —— 单独一行说出是哪几个、按钮直接叫「重装服务」。不在后台自己修。 */}
+          {!plan.blocked && plan.services_drift && (
+            <div data-services-drift
+                 style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10.5, color: t.text2,
+                          border: "1px solid rgba(224,144,28,.45)", background: "rgba(224,144,28,.08)",
+                          borderRadius: 8, padding: "7px 10px", marginBottom: 10 }}>
+              <span style={{ flex: 1, minWidth: 0, lineHeight: 1.5 }}>
+                常驻服务的配置过时了
+                {plan.services_drift.stale.length > 0 && <>：<b>{plan.services_drift.stale.join("、")}</b> 与当前版本不一致</>}
+                {plan.services_drift.retired.length > 0 && <>{plan.services_drift.stale.length ? "；" : "："}已退役的 <b>{plan.services_drift.retired.join("、")}</b> 还装着</>}
+                。重装后按当前版本运行。
+              </span>
+              <span data-services-reinstall onClick={() => void runApply(["services"], "svc")}
+                    style={{ flexShrink: 0, fontSize: 11.5, fontWeight: 700, padding: "6px 12px", borderRadius: 8,
+                             cursor: busy ? "default" : "pointer", color: t.accentText, background: t.accent,
+                             border: `1px solid ${t.accent}`, opacity: busy ? .6 : 1, whiteSpace: "nowrap" }}>
+                {running === "svc" ? <ShimText text="重装中…" lift={false} /> : "重装服务"}
+              </span>
+            </div>
+          )}
+
           {!plan.blocked && (needCount > 0 || wrapperTodo) && (
             <div style={{ display: "flex", gap: 10, alignItems: "center",
                           flexWrap: "wrap", marginBottom: 12 }}>

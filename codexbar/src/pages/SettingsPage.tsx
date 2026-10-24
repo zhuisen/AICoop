@@ -957,7 +957,7 @@ type UpdateState =
   | { k: "idle" }
   | { k: "busy" }
   | { k: "latest"; v: string }
-  | { k: "new"; v: string }
+  | { k: "new"; v: string; clone: boolean }
   | { k: "err"; msg: string };
 
 function About({ t }: { t: Theme }) {
@@ -970,8 +970,9 @@ function About({ t }: { t: Theme }) {
     if (up.k === "busy") return;
     setUp({ k: "busy" });
     try {
-      const tag = await invoke<string>("check_update");
-      setUp(isNewer(tag, ver) ? { k: "new", v: tag } : { k: "latest", v: tag });
+      // `{tag, via, clone}`：clone 装法教「git pull + deploy.sh」，安装包装法教「下载新版」（samchen #5）
+      const r = JSON.parse(await invoke<string>("check_update")) as { tag: string; clone: boolean };
+      setUp(isNewer(r.tag, ver) ? { k: "new", v: r.tag, clone: !!r.clone } : { k: "latest", v: r.tag });
     } catch (e: unknown) {
       setUp({ k: "err", msg: String(e).slice(0, 120) });
     }
@@ -1000,13 +1001,15 @@ function About({ t }: { t: Theme }) {
           </div>
           {up.k === "new" && (
             <div style={{ fontSize: 12, color: t.muted, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              更新：<code>git pull && bash codexbar/scripts/deploy.sh</code>
+              {up.clone
+                ? <>更新：<code>git pull && bash codexbar/scripts/deploy.sh</code></>
+                : <>更新：在更新说明页下载新的 .dmg，拖进「应用程序」替换</>}
             </div>
           )}
         </div>
         <span style={{ flex: 1 }} />
         <SBtn t={t} onClick={() => { void check(); }} disabled={up.k === "busy"} attrs={{ "data-act": "check-update" }}
-              title="向远端查最新 tag(私有仓库走 git 凭证)。这是本页唯一联网的动作">
+              title="向 GitHub 查最新发布的版本。这是本页唯一联网的动作">
           {up.k === "busy" ? "检查中…" : "检查更新"}
         </SBtn>
       </div>

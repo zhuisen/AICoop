@@ -18,6 +18,14 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
+# `--render DIR`：只把 plist 写进 DIR，不碰 launchctl、不动 ~/Library/LaunchAgents。
+#   给 `connector.py` 比对「装着的」与「本脚本会生成的」是否一致（samchen #4 ②：keepalive 还是旧的 04:30 版、
+#   agydawn / otel 没装、已退役的 refreshquota 还在）。判据是内容，不是「有没有加载」。
+RENDER=""
+if [ "${1:-}" = "--render" ]; then
+    RENDER="${2:?--render 需要一个目录}"
+fi
+
 # ★★★ **数据目录必须显式写进每一份 plist**（2026-09-10 四方评审抓到 critical）。
 #
 #    launchd 起的进程**不继承你的 shell 环境**,所以"用户 export 一下"在这里是无效的 ——
@@ -40,7 +48,7 @@ if [ ! -d "$STORE" ]; then
 fi
 echo "==> 数据目录: $STORE"
 
-AGENTS="$HOME/Library/LaunchAgents"
+AGENTS="${RENDER:-$HOME/Library/LaunchAgents}"
 PREFIX="com.doushutangmu.codex-rotate"
 UID_NUM="$(id -u)"
 
@@ -107,6 +115,7 @@ emit() {  # emit <name> <body-xml> <arg…>
         echo '</dict></plist>'
     } > "$out" || return 1
     plutil -lint "$out" >/dev/null || return 1
+    [ -n "$RENDER" ] && return 0
 
     # ★★ **`bootout` 是异步的** —— 它返回时任务往往还挂在 domain 里，紧跟的
     #    `bootstrap` 就撞上 `Bootstrap failed: 5: Input/output error`。
@@ -210,6 +219,19 @@ emit otel \
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>' \
     "$REPO/traffic/otel_receiver.py" --port 4318 --dir "$STORE/traffic/otel-ledger" || FAILED="$FAILED otel"
+
+[ -n "$RENDER" ] && exit 0
+
+# ★ 已退役的任务（不再生成）若还装着，卸掉 —— 只认这份清单里的 label。
+#   refreshquota 2026-08-29 取消（见上）；老机器上它还在每天 07:00 跑（samchen #4 ②）。
+#   清单与 `connector.py::RETIRED_SERVICES` 一致（闸 tests/test_launchd_drift.py）。
+for n in refreshquota; do
+    if launchctl print "gui/$UID_NUM/$PREFIX.$n" >/dev/null 2>&1 || [ -f "$AGENTS/$PREFIX.$n.plist" ]; then
+        launchctl bootout "gui/$UID_NUM/$PREFIX.$n" 2>/dev/null || true
+        rm -f "$AGENTS/$PREFIX.$n.plist"
+        echo "  ✗ 已卸掉退役的 $n"
+    fi
+done
 
 echo
 echo "==> loaded:"

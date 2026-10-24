@@ -37,10 +37,12 @@ launchd 与 symlink 全部指向那份拷贝。App 没了，轮换照常。
 """
 import json
 import os
+import plistlib
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 MARK_BEGIN = "# >>> codexbar-connector managed — 本区由 CodexBar 写入,标记之外的内容原样保留 >>>"
@@ -83,6 +85,8 @@ STEP_WRAPPER = "wrapper"
 
 #: `install-launchd.sh` 装的全部常驻服务（闸从安装器现解析核对，别只改一边）。
 SERVICES = ["autosync", "keepalive", "quotad", "proxy", "dawnprobe", "agydawn", "otel"]
+#: 已退役、安装器不再生成的服务。老机器上可能还装着（samchen #4 ②：refreshquota 每天 07:00 仍在跑）。
+RETIRED_SERVICES = ["refreshquota"]
 
 
 # ── 小工具 ────────────────────────────────────────────────────────────────────
@@ -362,6 +366,43 @@ def _svc_loaded(name):
     return f"com.doushutangmu.codex-rotate.{name}" in (r.stdout or "")
 
 
+def _launchd_drift(script, store):
+    """装着的 plist 与安装器**此刻会生成的**是否一致。-> {"stale": [名], "retired": [名]}；判不了 ⇒ `None`。
+
+    ★ 判据是**内容**（plist 解析后的字典相等），不是「有没有加载」—— 同 `runtime_drift`（B77）。
+      samchen #4 ②：keepalive 还是 2026-08 的 04:30 日历版、退役的 refreshquota 还在跑，
+      而「7 个服务都在跑」照样报「已装」。按字典比，所以别的工具把 plist 改成逐行美化也不算漂移；
+      多出一个空的 `EnvironmentVariables`（丢了 `CODEX_ROTATE_STORE`）则算 —— 那是真的变了。
+    """
+    if not Path(script).exists():
+        return None
+    agents = _launch_agents()
+    label = "com.doushutangmu.codex-rotate."
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            r = subprocess.run(["bash", str(script), "--render", d], capture_output=True, text=True,
+                               errors="replace", timeout=60, env=dict(os.environ, CODEX_ROTATE_STORE=str(store)))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0:
+            return None
+        stale = []
+        for n in SERVICES:
+            try:
+                want = plistlib.loads((Path(d) / f"{label}{n}.plist").read_bytes())
+            except (OSError, plistlib.InvalidFileException, ValueError):
+                return None
+            try:
+                have = plistlib.loads((agents / f"{label}{n}.plist").read_bytes())
+            except (OSError, plistlib.InvalidFileException, ValueError):
+                have = None
+            if have != want:
+                stale.append(n)
+    retired = [n for n in RETIRED_SERVICES
+               if (agents / f"{label}{n}.plist").exists() or _svc_loaded(n)]
+    return {"stale": stale, "retired": retired}
+
+
 def plan(src, store):
     src = Path(src).resolve()
     store = Path(store).resolve()
@@ -482,6 +523,7 @@ def plan(src, store):
 
     # ⑤ 常驻服务
     names = SERVICES
+    svc_drift = None
     loaded = {n: _svc_loaded(n) for n in names}
     # ★★ 运行时要重新复制时，服务**必须重装**：quotad 把 codex-rotate 整份载进内存，
     #    只换磁盘上的文件 = 磁盘是新的、跑着的还是旧的。
@@ -490,11 +532,22 @@ def plan(src, store):
     elif any(v is None for v in loaded.values()):
         st = "todo"
         det = "查不了 launchctl —— 状态未知（这不等于没装）"
-    elif all(loaded.values()):
-        st, det = "done", f"{len(names)} 个服务都在跑"
     else:
-        st = "todo"
-        det = "缺：" + "、".join(n for n in names if not loaded[n])
+        miss = [n for n in names if not loaded[n]]
+        drift = None if sys.platform.startswith("win") else _launchd_drift(
+            runtime / "scripts" / "install-launchd.sh", store)
+        stale = [n for n in (drift or {}).get("stale", []) if n not in miss]
+        retired = (drift or {}).get("retired", [])
+        parts = (["缺：" + "、".join(miss)] if miss else []) \
+            + (["过时（与安装器生成的不一致）：" + "、".join(stale)] if stale else []) \
+            + (["已退役还装着：" + "、".join(retired)] if retired else [])
+        if stale or retired:
+            svc_drift = {"stale": stale, "retired": retired, "missing": miss}
+        if parts:
+            st, det = "todo", " · ".join(parts) + " —— 点「接入」重装服务"
+        else:
+            st, det = "done", f"{len(names)} 个服务都在跑" + (
+                "（plist 内容核对不了）" if drift is None and not sys.platform.startswith("win") else "，配置与安装器一致")
     # ★ Windows 上常驻服务走 `install-windows.ps1`(schtasks),而 `apply` 目前只调
     #   `install-launchd.sh`。**如实说装不了**,别让步骤名写着 launchd 却在 Windows 上跑 ——
     #   那样失败信息会指不到真因。本仓 Windows 侧整体仍是未验证的 beta。
@@ -528,7 +581,7 @@ def plan(src, store):
     ready = all(s["state"] in ("done", "external") for s in steps if not s["optional"])
     blocked = any(s["state"] == "blocked" for s in steps)
     return {"steps": steps, "runtime": str(runtime), "inplace": inplace,
-            "ready": ready, "blocked": blocked, "port": PROXY_PORT,
+            "ready": ready, "blocked": blocked, "port": PROXY_PORT, "services_drift": svc_drift,
             "codex_home": str(_codex_home()), "local_bin": str(bin_)}
 
 

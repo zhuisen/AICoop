@@ -27,6 +27,9 @@ fi
 #   （发版后本地就是 release ⇒ B=0 ⇒ 显示纯 `vX.Y.Z`；改过才有 `+B`）。
 #   见 CLAUDE.md §3.7。这里刻意什么都不做，别把计数器加回来。
 
+# ★ 构建前的脏文件清单：`tauri build` 会让 cargo 改写受跟踪的 `Cargo.lock`（samchen #4 ⑦）——
+#   构建后重算的 B 因此多 1，而烤进二进制的是构建前那一刻的 B。下面据此把「构建自己弄脏的」与「真对不上」分开。
+_dirty_pre="$(git status --porcelain 2>/dev/null || true)"
 echo "==> building…"
 # ★ 每次部署都让 build.rs 重跑（全方面评审 §11）：它原来只在 `.git/HEAD` / `refs` 变时重跑 ——
 #   干净时构建过一次（B=0 进了缓存），之后改文件再构建，cargo 只重编 crate、不重跑 build.rs，产物照样报 B=0。
@@ -113,6 +116,12 @@ fi
 echo "==> launching"
 open "$APP"
 
+# ★ 常驻服务（proxy / quotad）不随 app 重装 —— 改过 `proxy.py` / `quota_daemon.py` / `codex-rotate` 后
+#   它们还在跑旧代码（samchen #4 ①；2026-08-31 那次事故同形）。只重启**跑旧代码**的那几个；
+#   代理有在途请求就先等（最多 60s），等不到空闲就不动它、照实说。失败不挡部署。
+echo "==> restarting services that run old code"
+"$ROOT/../codex-rotate" restart-stale --wait 60 || true
+
 # ★★★ **核实跑起来的真的是刚装的这一份**（2026-09-21 补，事故驱动）。
 #
 #   本机有 **3 个 bundle 共用 `com.doushutangmu.codexbar`**：/Applications、构建树
@@ -180,8 +189,18 @@ done
 if [ -z "$_baked_f" ]; then
     echo "⚠️  找不到 build.rs 写的 build_number，核不了二进制里的 B"
 elif [ "$(cat "$_baked_f")" != "$B" ]; then
-    echo "🛑 二进制里烤的 B=$(cat "$_baked_f")，工作区现算 B=${B} —— build.rs 没重跑（界面上的版本是旧的），或构建途中改了文件（常见：\`Cargo.lock\`）"
-    _verify_fail=1
+    # 构建途中新变脏的文件（构建前就脏的不算）
+    _new_dirty="$(comm -13 <(printf '%s\n' "$_dirty_pre" | sort) <(git status --porcelain 2>/dev/null | sort) | sed 's/^...//')"
+    _b_pre=$(( B - 1 ))
+    [ -n "$_dirty_pre" ] && _b_pre=$B
+    if [ "$_new_dirty" = "codexbar/src-tauri/Cargo.lock" ] && [ "$(cat "$_baked_f")" = "$_b_pre" ]; then
+        echo "⚠️  构建途中 cargo 改写了 \`Cargo.lock\`（未提交）⇒ 工作区现算 B=${B}，二进制里是构建前的 B=${_b_pre}。装上的就是这份，不算失败。"
+        echo "    要消掉这条：提交 \`codexbar/src-tauri/Cargo.lock\`。"
+        B=$_b_pre
+    else
+        echo "🛑 二进制里烤的 B=$(cat "$_baked_f")，工作区现算 B=${B} —— build.rs 没重跑（界面上的版本是旧的），或构建途中改了文件：${_new_dirty:-（无新增脏文件）}"
+        _verify_fail=1
+    fi
 fi
 if [ "$B" = "0" ]; then
     echo "✓ deployed — v${VER}（B=0：你跑的这份**就是** release）"

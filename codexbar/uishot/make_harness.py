@@ -1185,11 +1185,21 @@ function relayEntry() {
         else if (_c === 'ready') body = { steps: st('done','done','done','done','done','done'), ready: true };
         else if (_c === 'blocked') body = { steps: st('blocked','todo','todo','todo','todo','todo'),
                                             ready: false, blocked: true };
+        else if (_c === 'drift') {   // 服务都在跑、但配置过时（samchen #4 ②）
+          body = { steps: st('done','done','done','done','todo','external'), ready: false,
+                   services_drift: { stale: ['keepalive'], retired: ['refreshquota'], missing: [] } };
+          body.steps[4].detail = '过时（与安装器生成的不一致）：keepalive · 已退役还装着：refreshquota —— 点「接入」重装服务';
+        }
         else body = { steps: st('done','external','todo','done','done','external'), ready: false };
         body.runtime = '~/Library/Application Support/com.doushutangmu.codexbar/runtime';
         body.inplace = false; body.port = 8011; body.blocked = !!body.blocked;
         body.codex_home = '~/.codex'; body.local_bin = '~/.local/bin';
         return Promise.resolve(JSON.stringify(body));
+      }
+      case 'check_update': {   // ?upd=clone|dmg|latest|err
+        var _u = p.get('upd') || 'latest';
+        if (_u === 'err') return Promise.reject('连不上 GitHub（timed out） —— 检查网络或代理');
+        return Promise.resolve(JSON.stringify({ tag: _u === 'latest' ? 'v0.0.1' : 'v99.0.0', via: 'api', clone: _u === 'clone' }));
       }
       case 'connector_apply':
       case 'connector_remove':

@@ -156,7 +156,7 @@ class AccordionDoesNotAnimateRowHeight(unittest.TestCase):
 
 class ShimmerIsWired(unittest.TestCase):
     def test_busy_labels_use_it(self):
-        for f, n in (("pages/SettingsPage.tsx", 2), ("components/ConnectorPanel.tsx", 4)):
+        for f, n in (("pages/SettingsPage.tsx", 2), ("components/ConnectorPanel.tsx", 5)):   # 2026-10-24 +1：「重装服务…」
             with self.subTest(f=f):
                 code = re.sub(r"\{/\*.*?\*/\}|/\*.*?\*/|//[^\n]*", "", (SRC / f).read_text(encoding="utf-8"), flags=re.S)
                 self.assertEqual(len(re.findall(r"<ShimText text=", code)), n)
