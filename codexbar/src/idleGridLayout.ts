@@ -80,6 +80,20 @@ export function panelWidth(n: number, hasNote: boolean): number {
   return Math.round(Math.max(w, hasNote ? NOTE_MIN_W : 0) * 2) / 2;
 }
 
+/** 空闲面板的整份版面（托盘悬停面板与刘海屏格子**共用这一份**，用户 2026-10-24「刘海屏版本与菜单栏同步」）：
+ *  宽跟格子数走（`panelWidth`）、比格子宽时格子居中、底部「已隐藏」行的起点与面板总高。
+ *  ★ 原来刘海那边自己写了一份固定 435 的（`notchIdle.ts::notchGrid`），托盘修了「藏一家后留空白」它没跟上 —— 这里只留一份。 */
+export interface PanelBox extends GridLayout { w: number; noteTop: number }
+export function panelBox(n: number, notes: number): PanelBox {
+  const w = panelWidth(n, notes > 0);
+  const g0 = gridLayout(n);
+  const ox = (w - panelWidth(n, false)) / 2;
+  const pos = ox ? g0.pos.map((q) => ({ x: Math.round((q.x + ox) * 2) / 2, y: q.y })) : g0.pos;
+  const noteTop = n ? g0.h - PAD + 2 : PAD - 2;
+  const h = notes ? noteTop + notes * NOTE_H + PAD - 2 : g0.h;
+  return { ...g0, pos, w, h, noteTop };
+}
+
 export function cellDelay(k: number): number { return 80 + k * 45; }
 
 /** Rust `tpshover-open` 给的版面（`mode: "idle"` 那份）。只取这里要的几样。 */

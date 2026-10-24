@@ -704,7 +704,7 @@ fn notch_activity() -> Option<Value> {
 #[tauri::command]
 fn notch_panel_height(app: AppHandle, h: f64) {
     #[cfg(target_os = "macos")]
-    notch::set_panel_height(&app, h, false);
+    notch::set_panel_height(&app, h, false, None);
     #[cfg(not(target_os = "macos"))]
     let _ = (app, h);
 }
@@ -713,11 +713,11 @@ fn notch_panel_height(app: AppHandle, h: f64) {
 /// 新名字给 F4 的卡片用 —— 窗口按它加上 10 pt 空隙与阴影边摆。
 /// ★ `mode = "idle"` ⇒ 空闲格子那份高度（两种展开各存一份，见 `notch::set_panel_height`）。
 #[tauri::command]
-fn notch_card_resize(app: AppHandle, h: f64, mode: Option<String>) {
+fn notch_card_resize(app: AppHandle, h: f64, mode: Option<String>, w: Option<f64>) {
     #[cfg(target_os = "macos")]
-    notch::set_panel_height(&app, h, mode.as_deref() == Some("idle"));
+    notch::set_panel_height(&app, h, mode.as_deref() == Some("idle"), w);
     #[cfg(not(target_os = "macos"))]
-    let _ = (app, h, mode);
+    let _ = (app, h, mode, w);
 }
 
 /// 点了刘海里的空闲额度格子：收起（网页自己发 `open-main-page`）。

@@ -444,8 +444,10 @@ export default function NotchHud() {
   //   格子面板没有高度动画 ⇒ 立刻报；还没收到格子（0 格）不报 —— 报上去会被钳成 80，是一块看不见的命中区。
   const idleCells = idleData?.cells ?? [];
   const idleSnoozed = idleData?.snoozed ?? [];
-  const idleH = NI.notchGrid(idleCells.length, idleSnoozed.length).h;
-  useEffect(() => { if (idleH > 0) invoke("notch_card_resize", { h: idleH, mode: "idle" }).catch(noop); }, [idleH]);
+  const idleBox = NI.notchGrid(idleCells.length, idleSnoozed.length);
+  const idleH = idleBox.h, idleW = idleBox.w;
+  // ★ 宽也报（用户 2026-10-24）：藏了几家面板就收窄，Rust 的窗口与命中区跟着收，不再留一块空白
+  useEffect(() => { if (idleH > 0) invoke("notch_card_resize", { h: idleH, w: idleW, mode: "idle" }).catch(noop); }, [idleH, idleW]);
   // 展开着格子变空（设置改成「只看菜单栏」、数据刷新）⇒ 收起，不留一块空白展开态
   useEffect(() => { if (open && mode === "idle" && idleData && !idleCells.length && !idleSnoozed.length) invoke("notch_dismiss").catch(noop); },
             [open, mode, idleData, idleCells.length, idleSnoozed.length]);

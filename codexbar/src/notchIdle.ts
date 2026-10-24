@@ -1,6 +1,6 @@
 /**
  * 刘海屏版空闲额度格子（AICoop 交接包 2026-10-21 · `11_idle/P11_NotchHover`；画板 1.5× 画、刘海 270×48，这里一律 ÷1.5）。
- * ★ 零 import：测试用 `node --experimental-strip-types` 直接加载（CLAUDE.md §4）。
+ * ★ 零 npm import（只 import 同为零依赖的 `./idleGridLayout.ts`）：测试用 `node --experimental-strip-types` 直接加载（CLAUDE.md §4）。
  *
  * 画板（1.5×）→ 这里（1×）：
  *   面板宽 450 → 300（= 4e 卡片宽 `CARD_W`，Rust 命中区直接复用）· 顶 63 → 42（刘海 32 + 10 pt 光桥）
@@ -14,6 +14,8 @@
  *   外加一团椭圆（370 × 70，顶 30，blur 6 → 246.67 × 46.67，顶 20，blur 4）；
  *   有一家剩余 < 10% ⇒ 右肩叠珊瑚红一团（`70 4 18 1 / .55` → `46.67 2.67 12 .67`）+ 小红点（10 → 7，刘海右沿外 11 → 7、顶 18 → 12）。
  */
+
+import { panelBox } from "./idleGridLayout.ts";
 
 // ★ 用户 2026-10-21「刘海屏版本也要改」（选「和托盘一样 1.5×」）：格子面板改成与托盘悬停面板**同一套**尺寸
 //   （`idleGridLayout.ts`：P11 2× 画板 × 0.75），取代上面那组 ÷1.5 的面板 / 格子 / 环 / 字（光晕、光桥仍按刘海画板 ÷1.5）。
@@ -44,18 +46,14 @@ export const OPEN_GLOW = 0.55;
 export const GLOW_IN_MS = 200;
 export const GLOW_OUT_DELAY_MS = 300;
 
-export interface NotchGrid { cw: number; ch: number; h: number; pos: { x: number; y: number }[] }
+export interface NotchGrid { cw: number; ch: number; h: number; w: number; pos: { x: number; y: number }[] }
 
-/** n 格的版面（面板内坐标）。没有格子 ⇒ 高度 0。 */
+/** n 格的版面（面板内坐标）。没有格子 ⇒ 高度 0。
+ *  ★ 直接用托盘悬停面板那一份（`idleGridLayout.ts::panelBox`，用户 2026-10-24「刘海屏版本与菜单栏同步」）：
+ *    宽跟格子数走、藏了几家就收窄居中 —— 原来这里固定 435，藏一家后右边留一格空白。
+ *  「已隐藏」行（全方面评审 §9：刘海原来不画，藏了的那家在刘海上没有撤销入口）全藏了也照画。 */
 export function notchGrid(n: number, notes = 0): NotchGrid & { noteTop: number } {
-  const cw = (PANEL_W - 2 * PAD - GAP * (COLS - 1)) / COLS;
-  const rows = Math.ceil(n / COLS);
-  const pos = Array.from({ length: n }, (_, k) => ({ x: PAD + (k % COLS) * (cw + GAP), y: PAD + Math.floor(k / COLS) * (CELL_H + GAP) }));
-  const gh = rows ? PAD + rows * CELL_H + (rows - 1) * GAP + PAD : 0;
-  // ★ 「已隐藏」行（全方面评审 §9：刘海原来不画，藏了的那家在刘海上没有撤销入口）。全藏了也照画
-  const noteTop = rows ? gh - PAD + 2 : PAD - 2;
-  const h = notes ? noteTop + notes * NOTE_H + PAD - 2 : gh;
-  return { cw, ch: CELL_H, h, pos, noteTop };
+  return panelBox(n, notes);
 }
 
 const WHITE_SH = "0 2.67px 17.33px 4px rgba(233,237,243,.30), 0 0 0 1px rgba(233,237,243,.18)";

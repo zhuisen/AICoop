@@ -40,7 +40,8 @@ class TheGridMatchesTheTrayPanel(unittest.TestCase):
     def test_four_cells_in_one_row_of_a_435_panel(self):
         g = node("m.notchGrid(4)")
         self.assertAlmostEqual(g["cw"], 100.25, places=6, msg="(435 − 2×8 − 3×6) / 4")
-        self.assertEqual([p["x"] for p in g["pos"]], [8, 114.25, 220.5, 326.75])
+        # 2026-10-24 起与托盘面板同一份版面：格子左上角吸到 0.5 px（Retina 整物理像素）
+        self.assertEqual([p["x"] for p in g["pos"]], [8, 114.5, 220.5, 327])
         self.assertEqual(g["h"], 8 + 100.5 + 8)
 
     def test_eight_cells_make_two_rows_and_none_make_no_panel(self):
@@ -58,9 +59,32 @@ class TheGridMatchesTheTrayPanel(unittest.TestCase):
         """★ Rust 命中区宽按 `card_w()`：空闲格子 = `tps_hover::IDLE_PANEL_W`。两边不一致 = 面板的一侧点不到 / 移出去不收。"""
         self.assertEqual(node("m.PANEL_W"), 435)
         rs = (ROOT / "codexbar" / "src-tauri" / "src" / "notch.rs").read_text(encoding="utf-8")
-        self.assertRegex(rs, r"if OPEN_IDLE\.load\(Ordering::SeqCst\) \{ crate::tps_hover::IDLE_PANEL_W \} else \{ CARD_W \}")
+        # 2026-10-24：空闲格子宽改由网页报（藏了几家就收窄），默认仍是 435
+        self.assertRegex(rs, r"if OPEN_IDLE\.load\(Ordering::SeqCst\) \{ \*PANEL_W_IDLE\.lock\(\)\.unwrap\(\) \} else \{ CARD_W \}")
+        self.assertIn("static PANEL_W_IDLE: Mutex<f64> = Mutex::new(crate::tps_hover::IDLE_PANEL_W);", rs)
         css = (ROOT / "codexbar" / "src" / "notch.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.ni-panel \{[^}]*left: calc\(50% - 217\.5px\); width: 435px;", "CSS 面板宽与 PANEL_W 不一致")
+
+
+class HidingACellNarrowsTheNotchPanel(unittest.TestCase):
+    """用户 2026-10-24「删掉一个悬浮窗界面要改避免多余的空白，没有修复刘海屏版」：刘海格子与托盘面板用同一份
+    `idleGridLayout.ts::panelBox`，藏了几家就收窄、格子居中；宽报给 Rust，窗口与命中区跟着收。"""
+
+    def test_the_notch_uses_the_tray_panel_box(self):
+        for n, notes in ((4, 0), (3, 0), (3, 1), (1, 0), (0, 1), (8, 0)):
+            with self.subTest(n=n, notes=notes):
+                self.assertEqual(node("m.notchGrid(%d, %d)" % (n, notes)),
+                                 node("m.panelBox(%d, %d)" % (n, notes), mod="idleGridLayout.ts"), "★ 两边版面又分叉了")
+        self.assertLess(node("m.notchGrid(3).w"), 435, "★ 藏了一家（3 格）面板要收窄，不再固定 435")
+        self.assertEqual(node("m.notchGrid(4).w"), 435)
+
+    def test_the_width_reaches_rust(self):
+        hud = (ROOT / "codexbar" / "src" / "NotchHud.tsx").read_text(encoding="utf-8")
+        self.assertIn('invoke("notch_card_resize", { h: idleH, w: idleW, mode: "idle" })', hud)
+        lib = (ROOT / "codexbar" / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+        self.assertIn('notch::set_panel_height(&app, h, mode.as_deref() == Some("idle"), w);', lib)
+        rs = (ROOT / "codexbar" / "src-tauri" / "src" / "notch.rs").read_text(encoding="utf-8")
+        self.assertRegex(rs, r"\*PANEL_W_IDLE\.lock\(\)\.unwrap\(\) = w\.clamp\(")
 
 
 class TheNeutralGlow(unittest.TestCase):
@@ -141,6 +165,13 @@ def body_json(h, name):
 
 @unittest.skipUnless(_harness_up(), "harness 3304 没起 / 没有 Chrome —— 这是 skip 不是绿")
 class OnTheRealBundle(unittest.TestCase):
+    def test_hiding_one_platform_narrows_and_centres_the_drawn_panel(self):
+        i = body_json(dom("&hvsnoozed=1"), "data-nt-idle")
+        w3 = node("m.panelBox(3, 1).w", mod="idleGridLayout.ts")
+        self.assertEqual([c["k"] for c in i["cells"]], ["codex", "claude", "agy"], "已知阳性：grok 藏起来了")
+        self.assertEqual(i["w"], w3, "★ 画出来的面板跟着收窄，不再是 435 留一格空白")
+        self.assertAlmostEqual(i["x"], (179 - w3) / 2, places=3, msg="★ 收窄后仍居中在刘海下")
+
     def test_idle_open_shows_the_grid_not_the_4e_card(self):
         h = dom("")
         i = body_json(h, "data-nt-idle")
@@ -205,7 +236,7 @@ class OnTheRealBundle(unittest.TestCase):
 
     def test_each_kind_reports_its_own_height(self):
         calls = [json.loads(c.split("=", 1)[1]) for c in body_json(dom(""), "data-nt-calls") if c.startswith("notch_card_resize=")]
-        self.assertIn({"h": 116.5, "mode": "idle"}, calls)
+        self.assertIn({"h": 116.5, "w": 435, "mode": "idle"}, calls, "空闲那份连宽一起报（2026-10-24）")
         self.assertTrue(any(c.get("mode") == "run" for c in calls), "4e 那份也照报（Rust 各存一份）")
         self.assertNotIn(0, [c["h"] for c in calls], "0 格不报高度")
 

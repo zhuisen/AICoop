@@ -26,8 +26,8 @@ export default function NotchIdleGrid({ cells, snoozed, warns, open, reduce, onP
   const undo = (key: string) => { void emit(IDLE_SNOOZE_EVENT, { key, undo: true }).catch(() => undefined); };
   const tr = reduce ? "opacity 150ms" : "opacity .16s ease-out, transform .32s cubic-bezier(.2,.9,.25,1)";
   return (
-    <div className="ni-panel" data-notch-idle data-notch-idle-h={g.h} aria-hidden={!on}
-         style={{ height: g.h, opacity: on ? 1 : 0, pointerEvents: on ? "auto" : "none",
+    <div className="ni-panel" data-notch-idle data-notch-idle-h={g.h} data-notch-idle-w={g.w} aria-hidden={!on}
+         style={{ height: g.h, width: g.w, left: `calc(50% - ${g.w / 2}px)`, opacity: on ? 1 : 0, pointerEvents: on ? "auto" : "none",
                   transform: on || reduce ? "none" : "translateY(-6.67px) scale(.96)", transition: tr }}>
       <i className="ni-bridge" aria-hidden="true" />
       {cells.map((c, k) => {

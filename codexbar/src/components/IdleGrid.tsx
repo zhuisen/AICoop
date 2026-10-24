@@ -54,12 +54,9 @@ export default function IdleGrid({ mode, active, flyBack, layout, isDark, reduce
   // ★ 全藏了也照画（全方面评审 §8，三方一致）：原来 0 格时连「已隐藏 · 撤销」也不画、面板不弹 ⇒ 撤销入口跟着消失。
   const snoozed = data?.snoozed ?? [];
   // 面板宽跟格子数走；比格子宽（只有「已隐藏」行撑着）时格子居中
-  const panelW = G.panelWidth(cells.length, snoozed.length > 0);
-  const g0 = G.gridLayout(cells.length);
-  const ox = (panelW - G.panelWidth(cells.length, false)) / 2;
-  const g = ox ? { ...g0, pos: g0.pos.map((p) => ({ x: Math.round((p.x + ox) * 2) / 2, y: p.y })) } : g0;
-  const noteTop = cells.length ? g.h - G.PAD + 2 : G.PAD - 2;
-  const panelH = snoozed.length ? noteTop + snoozed.length * G.NOTE_H + G.PAD - 2 : g.h;
+  // ★ 版面与刘海屏格子同一份（`G.panelBox`）
+  const g = G.panelBox(cells.length, snoozed.length);
+  const panelW = g.w, noteTop = g.noteTop, panelH = g.h;
   const hov = hovKey === null ? -1 : cells.findIndex((c) => c.key === hovKey);
 
   // 高度上报：Rust 按它摆窗口（与在跑面板同一条命令）。只有这一轮是空闲面板时才报 —— 两个面板共用一个窗口高度

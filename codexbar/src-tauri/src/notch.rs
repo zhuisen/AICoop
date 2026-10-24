@@ -118,6 +118,8 @@ static GEOM: Mutex<Option<(Option<Notch>, Instant)>> = Mutex::new(None);
 /// 先用上一种的高度，要等网页收到 `notch-mode`、再一次 IPC 来回才更正（三方评审 2026-10-21）。
 static PANEL_H: Mutex<f64> = Mutex::new(420.0);
 static PANEL_H_IDLE: Mutex<f64> = Mutex::new(116.5);
+/// 空闲格子面板当前宽（网页报上来，同托盘 `tps_hover::IDLE_W`）：格子少于一行时收窄，不留空白（用户 2026-10-24）。
+static PANEL_W_IDLE: Mutex<f64> = Mutex::new(crate::tps_hover::IDLE_PANEL_W);
 /// 两个监听器对象（`Retained::into_raw` 出来的指针）。`Retained` 不是 Send，只能这样存。
 static MONITORS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -195,9 +197,10 @@ fn cached() -> Option<Notch> {
     GEOM.lock().unwrap().and_then(|(v, _)| v)
 }
 
-/// 这一轮展开的面板宽：空闲额度格子 = 托盘悬停面板同宽（用户 2026-10-21「刘海屏版本也要改」⇒ 同一套 1.5×），4e 卡片 = `CARD_W`。
+/// 这一轮展开的面板宽：空闲额度格子 = 网页报上来的宽（与托盘悬停面板同一个 `panelWidth`：满一行 435，
+/// 藏了几家就收窄 —— 用户 2026-10-24「删掉一个之后多余的空白，刘海屏版没修」），4e 卡片 = `CARD_W`。
 fn card_w() -> f64 {
-    if OPEN_IDLE.load(Ordering::SeqCst) { crate::tps_hover::IDLE_PANEL_W } else { CARD_W }
+    if OPEN_IDLE.load(Ordering::SeqCst) { *PANEL_W_IDLE.lock().unwrap() } else { CARD_W }
 }
 
 fn card_h() -> f64 {
@@ -676,7 +679,12 @@ const IDLE_H_MIN: f64 = 32.0;
 
 /// 前端量出面板的自然高度后告诉这里。`idle` = 空闲格子那份，否则 4e 卡片（随 Tab / 会话展开 / 告警行变）。
 /// 只有这一轮展开正是这一种时才重摆窗口。
-pub fn set_panel_height(app: &AppHandle, h: f64, idle: bool) {
+pub fn set_panel_height(app: &AppHandle, h: f64, idle: bool, w: Option<f64>) {
+    if idle {
+        if let Some(w) = w.filter(|w| w.is_finite()) {
+            *PANEL_W_IDLE.lock().unwrap() = w.clamp(100.0, crate::tps_hover::IDLE_PANEL_W);
+        }
+    }
     let slot = if idle { &PANEL_H_IDLE } else { &PANEL_H };
     // ★ 空闲那份全藏了只剩「已隐藏 · 撤销」行时只有 34 pt；下限仍按 4e 卡的 80 会在下面留一块透明吃点击区（阶段 D 评审 gemini）
     *slot.lock().unwrap() = h.clamp(if idle { IDLE_H_MIN } else { 80.0 }, CARD_H_MAX);
@@ -796,7 +804,9 @@ mod tests {
         *PANEL_H_IDLE.lock().unwrap() = 86.5;
         OPEN_IDLE.store(true, Ordering::SeqCst);
         assert_eq!(card_h(), 86.5);
-        assert_eq!(card_w(), crate::tps_hover::IDLE_PANEL_W, "★ 刘海格子与托盘面板同宽（用户「刘海屏版本也要改」）");
+        *PANEL_W_IDLE.lock().unwrap() = 222.0;
+        assert_eq!(card_w(), 222.0, "★ 空闲格子按网页报的宽（藏了几家就收窄），不是写死 435");
+        *PANEL_W_IDLE.lock().unwrap() = crate::tps_hover::IDLE_PANEL_W;
         OPEN_IDLE.store(false, Ordering::SeqCst);
         assert_eq!(card_h(), 400.0);
         assert_eq!(card_w(), CARD_W);
