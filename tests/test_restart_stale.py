@@ -15,6 +15,7 @@ import importlib.machinery
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,8 +40,15 @@ class RestartStale(unittest.TestCase):
         def run(cmd, *a, **k):
             self.calls.append(cmd)
             return R()
-        self.cli.subprocess.run = run
+        # ★ `cli.subprocess` 就是全局的 subprocess 模块 —— 直接赋值会把整个 pytest 进程的 subprocess.run 换掉且不还原，
+        #   排在后面的每条起子进程的测试都拿到空输出（2026-10-24 实测：一次 171 红）。一律 mock.patch + 自动还原。
+        self._patch_run(run)
         self.clock = [0.0]
+
+    def _patch_run(self, fn):
+        pt = mock.patch.object(self.cli.subprocess, "run", fn)
+        pt.start()
+        self.addCleanup(pt.stop)
 
     def _go(self, stale, inflight, wait=60):
         self.cli._daemon_staleness = lambda: (stale, [])
@@ -87,7 +95,7 @@ class RestartStale(unittest.TestCase):
 
     def test_a_failed_kickstart_is_reported(self):
         self.cli._daemon_staleness = lambda: ([("quotad", "旧", "11")], [])
-        self.cli.subprocess.run = lambda *a, **k: R(rc=113, err="Could not find service")
+        self._patch_run(lambda *a, **k: R(rc=113, err="Could not find service"))
         r = self.cli.restart_stale_daemons()
         self.assertEqual(r["restarted"], [])
         self.assertIn("重装", r["skipped"][0][1])
@@ -103,15 +111,16 @@ class TheProcessIsFoundWhereItReallyRuns(unittest.TestCase):
             if cmd[0] == "ps":
                 return R("/opt/homebrew/bin/python3 /Users/x/store/runtime/proxy/proxy.py\n")
             return R()
-        cli.subprocess.run = run
-        pid, root = cli._daemon_proc("proxy")
+        with mock.patch.object(cli.subprocess, "run", run):
+            pid, root = cli._daemon_proc("proxy")
         self.assertEqual(pid, "4242", "pid 要取 launchd 给的")
         self.assertEqual(root, Path("/Users/x/store/runtime"), "★ .dmg 装法跑的是 runtime/ 副本，代码根要从命令行取")
 
     def test_no_pid_from_launchd_and_none_from_pgrep_means_not_running(self):
         cli = load_cli()
-        cli.subprocess.run = lambda cmd, *a, **k: R("\tstate = not running\n" if cmd[0] == "launchctl" else "")
-        self.assertEqual(cli._daemon_proc("quotad")[0], None)
+        with mock.patch.object(cli.subprocess, "run",
+                               lambda cmd, *a, **k: R("\tstate = not running\n" if cmd[0] == "launchctl" else "")):
+            self.assertEqual(cli._daemon_proc("quotad")[0], None)
 
 
 if __name__ == "__main__":

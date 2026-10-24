@@ -113,6 +113,33 @@ def _real_data_canary(request, _baseline):
         )
 
 
+import subprocess as _subprocess   # noqa: E402
+
+#: ★ 不比 PATH：`tests/_isolation.py` 在各测试模块 import 时有意前置 PATH（claude 桩），基线会被它判成「被改了」。
+_REAL_PROCESS = {"subprocess.run": _subprocess.run, "subprocess.Popen": _subprocess.Popen}
+
+
+def _process_now():
+    return {"subprocess.run": _subprocess.run, "subprocess.Popen": _subprocess.Popen}
+
+
+@pytest.fixture(autouse=True)
+def _process_globals_restored(request):
+    """★ 测试结束时全局的 `subprocess.run` / `Popen` 必须原样还原（2026-10-24）。
+
+    `cli.subprocess` 就是全局的 subprocess 模块：一个测试写了 `self.cli.subprocess.run = stub` 而不还原，
+    排在它**后面**的每条起子进程的测试都拿到空输出 —— 那次一轮 171 红、20 错，看起来像「环境抽风」，
+    当场失败才能直接点名是哪个测试。还原完再报，免得一个测试拖垮后面整轮。"""
+    yield
+    now = _process_now()
+    bad = [k for k, v in _REAL_PROCESS.items() if now[k] is not v]
+    if bad:
+        _subprocess.run, _subprocess.Popen = _REAL_PROCESS["subprocess.run"], _REAL_PROCESS["subprocess.Popen"]
+        pytest.fail("★★ 这个测试换掉了进程级全局且没还原：" + "、".join(bad)
+                    + "\n   测试：" + request.node.nodeid
+                    + "\n   用 mock.patch / mock.patch.object（自动还原），别直接赋值 `x.subprocess.run = …`。")
+
+
 #: UI 闸在 CI 上**不许 skip**（2026-10-23，用户「CI 跑 UI 闸」）。设了 `CODEXBAR_REQUIRE_HARNESS=1`
 #: 的 job 已经起了 harness 与 Chrome；这时还因为「harness / Chrome / playwright 不在」而 skip，
 #: 就是那一步坏了 —— 而 skip 在汇总行里和绿一样不刺眼（本仓的规矩：skip 不是绿）。
