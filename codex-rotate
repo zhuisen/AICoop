@@ -261,20 +261,31 @@ def _patch_slot(st, aid, patch):
     sl = st.get("slots", {}).get(aid)
     if sl is not None:
         sl.update(patch)
-        # ★ 新额度证明号已回来 ⇒ 直接删冷却（判据只有 `proxy.recovered` 一份；用户 2026-10-23「官方重置也不解冻」）
-        if "quota" in patch and (sl.get("cooling_until") or 0) > time.time() and _px().recovered(sl, time.time()):
+        # ★ 新额度证明号已回来（或窗口已重置）⇒ 直接删冷却，让 UI 里各处只比 `cooling_until` 的判断也跟上
+        #   （用户 2026-10-23「官方重置也不解冻」）。判据只有 `cooling.py` 一份。
+        now = time.time()
+        if "quota" in patch and (sl.get("cooling_until") or 0) > now and not _cool().cooling(sl, now):
             sl.pop("cooling_until", None)
             sl.pop("cooled_at", None)
 
 
-def _px():
-    """按需加载 `proxy/proxy.py`（冷却判据的唯一一份）。每次现读、不缓存：quotad 常驻，缓存住就是旧代码，
-    而放在顶层 import 又得进 `DAEMON_SOURCES`（同 `_dawn_sched`）。只在号正冷却时才走到，成本可忽略。"""
+def _cool():
+    """按路径加载 `cooling.py`（冷却判据的唯一一份，与代理共用）。
+
+    ★ 原来加载的是整个 `proxy/proxy.py`，而且是在 `_mutate_state` 持着 state 锁的时候（samchen #4 ⑤）：
+      锁多持一次大模块的 exec，proxy.py 正在被改写时还会在锁里抛错、整次写入作废。`cooling.py` 零 import。
+    ★ 每次现读、不缓存：quotad 常驻，缓存住就是旧代码。"""
     import importlib.util as _il
-    spec = _il.spec_from_file_location("_px_cool", Path(__file__).resolve().parent / "proxy" / "proxy.py")
+    spec = _il.spec_from_file_location("_cooling", Path(__file__).resolve().parent / "cooling.py")
     m = _il.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
+
+
+def _is_cooling(sl, now=None):
+    """这个号是否仍在冷却 —— 与代理选号**同一个判据**（窗口已重置 / 冷却后读到新额度 ⇒ 不算）。"""
+    now = time.time() if now is None else now
+    return (sl.get("cooling_until") or 0) > now and _cool().cooling(sl, now)
 
 
 def _restamp_from_file(aid, slot):
@@ -657,7 +668,7 @@ def _pick_next(s):
     for aid in order:
         if aid == active:
             continue
-        if s["slots"][aid].get("cooling_until", 0) > now:
+        if _is_cooling(s["slots"][aid], now):
             continue
         if s["slots"][aid].get("auth_dead"):
             continue  # never hand the live auth to an account the server already rejected
@@ -1054,7 +1065,7 @@ def cmd_list(args):
         if aid == active:
             flags.append("ACTIVE")
         cool = slot.get("cooling_until", 0)
-        if cool > now:
+        if _is_cooling(slot, now):
             flags.append(f"cooling {int((cool - now) / 60)}m")
         who = slot.get("email") or _mask(aid)
         # A dead account's quota is a FROZEN snapshot from before it was revoked — printing it bare made
@@ -1119,7 +1130,7 @@ def _pick_best(s):
     """
     cands = []
     for aid, sl in (s.get("slots") or {}).items():
-        if sl.get("auth_dead") or (sl.get("cooling_until") or 0) > time.time():
+        if sl.get("auth_dead") or _is_cooling(sl):
             continue
         if paused(sl):
             continue   # 暂停 = 不可调用;挑中它就等于把 live auth 交给一个用户已停用的号
@@ -1545,8 +1556,7 @@ def _is_bare_codex_line(line, pid_first=True):
 
 def _can_go_live(slot):
     """ensure-live 能不能把这个号换进 auth.json:没暂停(`paused()` 的约定)、没判死、不在冷却。"""
-    return not (paused(slot) or slot.get("auth_dead")
-                or (slot.get("cooling_until") or 0) > time.time())
+    return not (paused(slot) or slot.get("auth_dead") or _is_cooling(slot))
 
 
 def _ensure_live_healthy(s, *, force=False, quiet=False):
@@ -1631,6 +1641,33 @@ def cmd_ensure_live(args):
     print(f"ensure-live: {msg}")
 
 
+KEEPALIVE_MARK = ".keepalive.last"     # 上一轮完整跑完的时刻（mtime）；在 STORE 下，gitignored
+KEEPALIVE_OVERDUE_S = 20 * 3600
+
+
+def _keepalive_due(now=None):
+    """`--idle-window` 下这一次该不该跑：在空闲时段 ⇒ 跑；不在、但上一轮完整的跑已过 20h（或从没跑过）⇒ 也跑。
+
+    ★ 只看标记文件的 mtime，不读 state：白天每小时一次的空跑仍然几乎零成本。
+    ★ 20h 而不是 24h：夜里开着机时最后一轮在 07:xx，第二天白天每小时的触发都在 20h 内 ⇒ 不会白天多跑。
+    """
+    t = time.time() if now is None else now
+    if _in_idle(t):
+        return True
+    try:
+        last = (STORE / KEEPALIVE_MARK).stat().st_mtime
+    except OSError:
+        return True
+    return t - last >= KEEPALIVE_OVERDUE_S
+
+
+def _keepalive_mark():
+    try:
+        (STORE / KEEPALIVE_MARK).touch()
+    except OSError as e:
+        print(f"keepalive: 记不下这一轮的时刻（{e}）—— 下次窗口外仍会补跑", file=sys.stderr)
+
+
 def cmd_keepalive(args):
     """Keep idle accounts' tokens alive via OAuth refresh — cheap, no quota, no auth.json swap.
     Refreshes NON-active accounts whose access token expires within N hours (default 48 — wider than
@@ -1640,7 +1677,9 @@ def cmd_keepalive(args):
     last_refresh while tokens stayed healthy, so that gate never fired."""
     dry = "--dry-run" in args
     # ★ `--idle-window`（launchd 每小时拉起时带它，2026-10-22）：不在用户空闲时段就什么都不做、不读 state、不联网。
-    if "--idle-window" in args and not _in_idle():
+    #   ★ 例外：上一轮完整的跑已过 `KEEPALIVE_OVERDUE_S`（或从没跑过）⇒ 照跑（samchen #4 ①）。合盖睡一整夜的
+    #   笔记本，夜里的触发全被合并成醒来那一次（如 08:15），落在窗口外 ⇒ 原来每天都静默退出，号永远不续期。
+    if "--idle-window" in args and not _keepalive_due():
         return
     pos = [a for a in args if not a.startswith("--")]
     thresh_h = float(pos[0]) if pos else 48.0
@@ -1670,6 +1709,8 @@ def cmd_keepalive(args):
                 _restamp_from_file(aid, slot)
             skipped.append(f"{label}:{msg}")  # 'still valid' / 'skip-active' are NO-OPS — not refreshes
     print(f"keepalive refreshed=[{', '.join(refreshed) or 'none'}] skipped=[{', '.join(skipped)}]")
+    if not dry:
+        _keepalive_mark()
     # 选项②(2026-07-16):keepalive 尾部保活 ~/.codex/auth.json——非活跃号已刷新鲜,这里把最新鲜的
     # 服务端健康号轮进 auth.json,让裸 codex / omc ask codex 也一直有活号。重读 state 拿 _mutate_state
     # 刚落盘的 last_refresh,避免 _ensure_live_healthy 的 _save_state 回滚 keepalive 的更新。
@@ -3311,6 +3352,65 @@ def cmd_current(args):
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
+def codex_wrap_gate(path=None):
+    """★ 裸 `codex` 走不走轮换 wrapper。-> {level, detail, lines}（samchen #4 本机⑤）
+
+    那台机器上 `which codex` 是官方 npm 版：交互式 zsh 有 alias 兜着，脚本 / 非交互 shell / 别的工具调 `codex`
+    就绕过代理。两种成因，修法不同，所以分开说：
+      ① wrapper 在、但 PATH 里别的 codex 排在它前面 ⇒ 调 PATH 顺序；
+      ② `~/.local/bin/codex` 本身成了 npm 的 —— npm 全局前缀是 `~/.local` 时，`npm i -g @openai/codex`
+         每次都会把它改写回去 ⇒ 重装那一步，或把 npm 前缀挪走。
+    「连 codex 一起接管」是可选的一步：从没装过（没有备份文件）只说一句现状，不报警。
+    只在用户的 shell 里有意义（GUI 进程拿不到 `.zshrc` 的 PATH），同 `agy_wrap_gate`。
+    """
+    try:
+        return _codex_wrap_gate_inner(path)
+    except Exception as e:
+        return {"level": "unknown", "detail": f"{type(e).__name__}: {e}",
+                "lines": [f"?  裸 codex：检查本身失败（{type(e).__name__}），状态未知"]}
+
+
+def _is_codex_wrapper(p):
+    try:
+        return b"codex-profile-scope.sh" in Path(p).read_bytes()[:65536]
+    except OSError:
+        return False
+
+
+def _codex_wrap_gate_inner(path=None):
+    lb = Path(os.environ.get("CODEXBAR_LOCAL_BIN") or (Path.home() / ".local" / "bin"))
+    w = lb / "codex"
+    first = shutil.which("codex", path=path)
+    if not first:
+        return {"level": "ok", "detail": "PATH 里没有 codex", "lines": []}
+    if _is_codex_wrapper(first):
+        return {"level": "ok", "detail": f"wrapper 生效 ({first})",
+                "lines": [f"✓ 裸 codex：走轮换 wrapper ({first})"]}
+    if _is_codex_wrapper(w):
+        return {"level": "warn", "detail": f"被排在前面的 {first} 绕过",
+                "lines": ["⚠️  裸 codex **不走轮换**：PATH 里",
+                          f"      {first}",
+                          f"    排在 wrapper {w} 前面 —— 脚本、非交互 shell 和别的工具调 codex 会绕过代理。",
+                          f'    修：~/.zshrc 最后加一行 export PATH="{lb}:$PATH"（放在 npm / nvm 那几行之后），再开新终端'],
+                }
+    installed_once = (lb / "codex.before-codexbar").exists()
+    npm_shim = "node_modules" in str(Path(first).resolve())
+    lines = [f"ℹ️  裸 codex 是官方版（{first}），不走轮换；cxp 照常轮换。"]
+    if installed_once and npm_shim and Path(first).resolve() == w.resolve():
+        lines = ["⚠️  裸 codex **不走轮换**：wrapper 被 npm 改写回了官方版",
+                 f"      {w} → {Path(first).resolve()}",
+                 "    npm 的全局前缀是 ~/.local 时，每次 `npm i -g @openai/codex` 都会这样。",
+                 "    修：设置 → 接入账号池 → 「连 codex 一起接管」重装；",
+                 "        要一劳永逸：npm config set prefix ~/.local/npm-global（npm 装的命令从此进 ~/.local/npm-global/bin）"]
+        return {"level": "warn", "detail": "wrapper 被 npm 改写", "lines": lines}
+    if installed_once:
+        lines = ["⚠️  裸 codex **不走轮换**：装过「连 codex 一起接管」，现在第一个 codex 是",
+                 f"      {first}",
+                 "    修：设置 → 接入账号池 → 「连 codex 一起接管」重装"]
+        return {"level": "warn", "detail": "wrapper 不见了", "lines": lines}
+    return {"level": "ok", "detail": "没装可选的接管", "lines": lines}
+
+
 def agy_wrap_gate():
     """★ agy 用量采集的 wrapper 还在不在 PATH 前面。-> {level, detail, lines}
 
@@ -3378,7 +3478,7 @@ def _proc_start_epoch(pid):
 # 每个常驻服务**实际会加载的源文件**。quotad 用 SourceFileLoader 把 codex-rotate 整个载进内存,
 # 所以改 codex-rotate 也必须重启 quotad —— 这一条正是 2026-08-31 那次事故的成因。
 DAEMON_SOURCES = {
-    "proxy":  ["proxy/proxy.py", "portalock.py"],
+    "proxy":  ["proxy/proxy.py", "portalock.py", "cooling.py"],
     "quotad": ["daemon/quota_daemon.py", "codex-rotate", "portalock.py"],
 }
 
@@ -4107,7 +4207,7 @@ def cmd_next(args):
                 "eta5h": _eta5h(events, aid, five["used_percent"]) if five else None,
                 "plan": sl.get("plan"), "pin": (pinned.index(aid) + 1) if aid in pinned else None,
                 "off": bool(sl.get("rotate_off")), "dead": bool(sl.get("auth_dead")),
-                "cool_min": max(0, int((sl.get("cooling_until", 0) - now) / 60)),
+                "cool_min": max(0, int((sl.get("cooling_until", 0) - now) / 60)) if _is_cooling(sl, now) else 0,
                 "wins": ws, "tightest": min([w["rem"] for w in ws], default=None),
                 "weekly": next((w["rem"] for w in ws if w["label"] == "周"), None)}
 
@@ -4478,6 +4578,7 @@ def cmd_health(args):
     #   告警印在**最前面**（眼睛先落的地方）；正常时只在最后印一行，不挤占账号列表。
     gate = proxy_env_gate()
     agate = agy_wrap_gate()
+    cgate = codex_wrap_gate()
     dgate = stale_daemon_gate()
     rgate = relay_route_gate()
     pgate = dawn_probe_gate()
@@ -4511,6 +4612,10 @@ def cmd_health(args):
         for _l in agate["lines"]:
             print(_l)
         print()
+    if cgate["level"] != "ok":
+        for _l in cgate["lines"]:
+            print(_l)
+        print()
 
     s = _state()
     if not s["slots"]:
@@ -4526,6 +4631,9 @@ def cmd_health(args):
                 print(_l)
         if agate["level"] == "ok":
             for _l in agate["lines"]:
+                print(_l)
+        if cgate["level"] == "ok":
+            for _l in cgate["lines"]:
                 print(_l)
         if dgate["level"] == "ok":
             for _l in dgate["lines"]:
@@ -4573,6 +4681,9 @@ def cmd_health(args):
     if agate["level"] == "ok":
         for _l in agate["lines"]:
             print(_l)
+    if cgate["level"] == "ok":
+        for _l in cgate["lines"]:
+            print(_l)
     if dgate["level"] == "ok":
         for _l in dgate["lines"]:
             print(_l)
@@ -4583,7 +4694,7 @@ def cmd_ensure(args):
     s = _state()
     _autosync_live(s)
     aid = s.get("active")
-    if not aid or s["slots"].get(aid, {}).get("cooling_until", 0) <= time.time():
+    if not aid or not _is_cooling(s["slots"].get(aid, {})):
         return  # active is fine — silent no-op
     _syncback(s)
     target = _pick_next(s)

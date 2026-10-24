@@ -38,7 +38,9 @@ export function dawnDesc(d: DawnStatus | null, kind: DawnKind): string {
   if (!d.enabled) return `关闭中。开启后每天 ${win} 之间随机给 ${who}${cost}，把 5h 窗口启动起来（会花钱）`;
   if (!d.date) return `已开启（${win}），${who}，但**还没有任何一次运行记录** —— 若明天此处仍是空的，说明定时没生效`;
   const when = d.at ? new Date(d.at * 1000).toLocaleString() : d.date;
-  const res = d.state === "failed" ? "上次运行出错" : d.ok == null ? "进行中/未完成" : `${d.ok}/${d.total} 可用`;
+  const res = d.state === "failed" ? "上次运行出错"
+    : d.state === "deferred" ? "给手动探针让路，稍后重试"
+    : d.ok == null ? "进行中/未完成" : `${d.ok}/${d.total} 可用`;
   const st = kind === "agy" && d.started != null ? ` · 5h 启动 ${d.started} 个` : "";
   return `已开启（${win}），${who}。上次运行 ${when} · ${res}${st}`;
 }

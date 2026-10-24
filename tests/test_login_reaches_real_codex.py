@@ -87,9 +87,11 @@ class LoginNeverResolvesToOurOwnWrapper(unittest.TestCase):
         #   **实现识别不出 wrapper，而这条前提断言也看不出来**。两个都读浅了，
         #   于是"前提成立"本身是假的。判据的读取范围必须覆盖被判的那个特征。
         head = Path(first).read_bytes()[:65536]
-        self.assertIn(WRAPPER_MARK.encode(), head,
-                     f"★ 本机 PATH 上第一个 codex 不是 wrapper（{first}）—— "
-                     "前提不成立，下面那条闸此刻没有判别力")
+        # ★ 「连 codex 一起接管」是可选步：别的机器上第一个 codex 是官方版很正常（samchen #4 本机⑤）。
+        #   那是**环境**不是代码缺陷 —— 说清楚、skip，不判红；该不该装由 `codex-rotate health` 的 `codex_wrap_gate` 告诉用户。
+        if WRAPPER_MARK.encode() not in head:
+            self.skipTest(f"本机 PATH 上第一个 codex 不是 wrapper（{first}）—— 前提不成立；"
+                          "下面那条闸用自己造的 PATH，不受影响。看 `codex-rotate health`")
 
     def test_it_skips_the_wrapper_and_finds_the_real_binary(self):
         """★★ 造一个 PATH：wrapper 在前、真二进制在后。必须拿到后者。"""

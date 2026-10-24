@@ -289,6 +289,39 @@ class AgyDawn(_AgyBase):
         self.assertEqual((r["time"], r["window"], r["targets_today"]), ("21:30", "21:30–21:33", ["A", "C"]))
 
 
+class AgyDawnYieldsToAManualProbe(_AgyBase):
+    """samchen #4 ②：手动探针占着全局探针锁时 `cmd_probe` 回 None —— 原来记成今天 `done 0/0`，整池今天不再定时探。"""
+
+    def test_a_busy_probe_lock_defers_and_the_next_tick_runs(self):
+        self.put({**json.loads(json.dumps(POOL3)), "dawn_probe": {"enabled": True}})
+        self.run_cli(-1, probe=lambda subs: None)
+        d = P.load()["dawn_probe"]
+        self.assertNotEqual(d.get("date"), time.strftime("%Y-%m-%d"), "★★ 让路之后今天就被占死了")
+        self.assertEqual(d["state"], "deferred")
+        self.run_cli(-1)
+        self.assertEqual(len(self.calls), 2, "下一分钟的 tick 要重试")
+        self.assertEqual(P.load()["dawn_probe"]["state"], "done")
+
+    def test_accounts_probed_ok_within_the_hour_are_not_billed_again(self):
+        pool = json.loads(json.dumps(POOL3))
+        pool["accounts"]["a"]["last_probe"] = {"at": int(time.time()) - 600, "ok": True}
+        pool["accounts"]["c"]["last_probe"] = {"at": int(time.time()) - 7200, "ok": True}
+        pool["dawn_probe"] = {"enabled": True}
+        self.put(pool)
+        self.run_cli(-1)
+        self.assertEqual(self.calls[0][0], ["c"], "★★ 十分钟前刚探过的号又被探了一次（花钱）")
+        d = P.load()["dawn_probe"]
+        self.assertEqual((d["ok"], d["total"]), (2, 2), "跳过的号算进可用")
+
+    def test_a_failed_recent_probe_does_not_count(self):
+        pool = json.loads(json.dumps(POOL3))
+        pool["accounts"]["a"]["last_probe"] = {"at": int(time.time()) - 60, "ok": False}
+        pool["dawn_probe"] = {"enabled": True}
+        self.put(pool)
+        self.run_cli(-1)
+        self.assertEqual(sorted(self.calls[0][0]), ["a", "c"], "失败的那次没启动窗口，不能跳过")
+
+
 class AgyDawnConcurrency(unittest.TestCase):
     """真进程并发：3 个同时起，只有 1 个进得了探针。`cmd_probe` 在子进程里打桩（不花钱）。"""
 

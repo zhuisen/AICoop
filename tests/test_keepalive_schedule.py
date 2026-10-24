@@ -2,6 +2,7 @@
 
 launchd 每小时拉起 `keepalive 48 --idle-window`：
 ① 不在空闲时段（本机 22:00–08:00）⇒ 一拉起就退出，**不读 state、不刷任何号**；
+   例外：上一轮完整的跑已过 20h（或从没跑过）⇒ 照跑（samchen #4 ①：合盖睡一整夜，触发合并到醒来的 08:15，原来永远不续期）；
 ② 在空闲时段 ⇒ 只刷非活跃、没判死的号（活跃号永不刷 —— codex 自己的刷新器持有它）。
 全部打桩：`_state` / `_refresh_slot` / `_ensure_live_healthy` / `_mutate_state` 换成夹具，不联网、不碰真 state.json。
 """
@@ -13,7 +14,10 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import os
 import re
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -43,6 +47,13 @@ class KeepaliveRunsOnlyWhenIdle(unittest.TestCase):
         self.m._ensure_live_healthy = lambda s, **kw: "live healthy (no rotation)"
         self.m._slot_access_left_h = lambda slot: 100.0     # 读的是号的 auth 文件；夹具里没有
         self.m._mutate_state = lambda f: None
+        self.m.STORE = Path(tempfile.mkdtemp())
+        self.mark = self.m.STORE / self.m.KEEPALIVE_MARK
+        self.mark.touch()                                   # 默认：刚跑过一轮
+
+    def age_mark(self, hours):
+        t = time.time() - hours * 3600
+        os.utime(self.mark, (t, t))
 
     def run_ka(self, idle, *args):
         self.m._in_idle = lambda *a, **k: idle
@@ -53,6 +64,22 @@ class KeepaliveRunsOnlyWhenIdle(unittest.TestCase):
     def test_outside_the_idle_window_it_does_nothing_at_all(self):
         self.assertEqual(self.run_ka(False, "48", "--idle-window"), "")
         self.assertEqual(self.calls, [], "白天被拉起时读了 state 或刷了号")
+
+    def test_outside_the_window_an_overdue_pass_still_runs(self):
+        self.age_mark(21)
+        self.run_ka(False, "48", "--idle-window")
+        self.assertIn("refresh:B", self.calls, "★★ 上一轮已过 20h 却仍按窗口退出 —— 合盖过夜的机器永远不续期")
+        self.assertLess(time.time() - self.mark.stat().st_mtime, 60, "跑完要记下这一轮的时刻")
+
+    def test_outside_the_window_a_recent_pass_is_not_repeated(self):
+        self.age_mark(19)
+        self.assertEqual(self.run_ka(False, "48", "--idle-window"), "")
+        self.assertEqual(self.calls, [], "白天每小时都补跑了一次")
+
+    def test_never_ran_counts_as_overdue(self):
+        self.mark.unlink()
+        self.run_ka(False, "48", "--idle-window")
+        self.assertIn("refresh:B", self.calls)
 
     def test_inside_the_window_it_refreshes_inactive_live_slots_only(self):
         self.run_ka(True, "48", "--idle-window")

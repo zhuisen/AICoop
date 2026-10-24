@@ -736,12 +736,25 @@ def _switches(segs):
 
 
 def _cooling_until(slot, now):
-    """proxy `_cool` 写的 `cooling_until`。只有**晚于现在**才算在冷却；读不到 / 已过 ⇒ None。"""
+    """proxy `_cool` 写的 `cooling_until`。**仍在冷却**才给（判据同代理，`cooling.py`）；读不到 / 已过 / 已提前解冻 ⇒ None。
+
+    ★ 原来只比 `cooling_until > now`（samchen #4 ④）：窗口已重置、或冷却后读到新额度，代理早已重新挑它，
+      泳道还画着「冷却到 HH:MM」。"""
     try:
         u = float((slot or {}).get("cooling_until") or 0)
     except (TypeError, ValueError):
         return None
-    return u if u > now else None
+    if u <= now:
+        return None
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        import cooling as _c       # 仓库根（安装包里是 `scripts/`，同层）
+        still = _c.cooling(slot, now)
+    except Exception:
+        still = True               # ★ 判据载不进来 ⇒ 照原样报冷却（宁可多说一句冷却，不编造「可用」）
+    return u if still else None
 
 
 def _day_bounds(start, end):

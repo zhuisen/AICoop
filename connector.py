@@ -52,7 +52,7 @@ PROXY_PORT = int(os.environ.get("CRP_PORT", "8011"))
 
 #: 运行时需要哪些文件。★ 少一个的症状是「服务装上了但起不来」，而 launchd 只会安静地反复重启。
 RUNTIME_FILES = [
-    "codex-rotate", "portalock.py", "resume_provenance.py", "connector.py", "dawn_sched.py",
+    "codex-rotate", "portalock.py", "resume_provenance.py", "connector.py", "dawn_sched.py", "cooling.py",
     "proxy/proxy.py", "proxy/cxp", "proxy/cxd", "proxy/auth-token",
     "proxy/codex-profile-scope.sh",
     "daemon/quota_daemon.py",

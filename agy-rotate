@@ -1252,6 +1252,8 @@ def cmd_probe(args):
 DAWN_KEY = "dawn_probe"
 #: 超过这个秒数的 `running` 视为进程遗骸（`kill -9` 连 `failed` 都写不下）。同 codex 的 `DAWN_STALE_SECS`。
 DAWN_STALE_SECS = 1800
+#: 一小时内探过且成功的号，定时探针不再探（窗口已被那一次启动）。
+DAWN_RECENT_SECS = 3600
 
 
 def _dawn_sched():
@@ -1337,6 +1339,12 @@ def cmd_dawn_probe(args):
             time.sleep(left)
 
     targets = _dawn_targets(pool)
+    # ★ 刚被手动探过且成功的号跳过：它的 5h 窗口已经启动了，再探一次只是白花钱（上一次定时被手动探针让路时尤其如此）
+    now = int(time.time())
+    recent = [s for s in targets
+              if ((_accounts(pool)[s].get("last_probe") or {}).get("ok")
+                  and now - int((_accounts(pool)[s].get("last_probe") or {}).get("at") or 0) < DAWN_RECENT_SECS)]
+    targets = [s for s in targets if s not in recent]
     claimed = {"n": 0, "state": None, "age": 0}
     # ★★ 先占天，再探。持池锁读-改-写，所以占坑是原子的（同 codex `_mutate_state(_claim)`）。
     with P._lock(P.POOL):
@@ -1360,9 +1368,10 @@ def cmd_dawn_probe(args):
 
     if not targets:
         # ★ 没号可探是**事实**不是故障 —— 照样落痕，否则明天分不出「跑了没号」和「压根没跑」。
-        _dawn_save({"date": today, "at": int(time.time()), "state": "done", "ok": 0, "total": 0,
-                    "started": 0, "note": "池里没有参与轮换的号"})
-        print("没有参与轮换的 agy 号可探")
+        note = ("%d 个号一小时内刚探过（窗口已启动），不再花钱" % len(recent)) if recent else "池里没有参与轮换的号"
+        _dawn_save({"date": today, "at": int(time.time()), "state": "done", "ok": len(recent), "total": len(recent),
+                    "started": 0, "note": note})
+        print("agy dawn-probe：" + note)
         return
     labels = [_accounts(pool)[s].get("label") or s for s in targets]
     print("Gemini 定时探针 · %d 个号：%s" % (len(targets), " ".join(labels)))
@@ -1376,14 +1385,18 @@ def cmd_dawn_probe(args):
                     "note": ("%s: %s" % (type(e).__name__, e))[:200]})
         raise
     if out is None:
-        # 另一个探针进程正在跑（多半就是手动全池探针）⇒ 今天不再探，避免同一批号二次计费
-        _dawn_save({"date": today, "at": int(time.time()), "state": "done", "ok": 0, "total": 0,
-                    "started": 0, "note": "跳过：另一个进程正在跑 Gemini 探针"})
+        # ★★ 另一个探针进程正在跑（多半是手动探针）⇒ **退还今天的占位**，下一分钟的 tick 再试（samchen #4 ②）。
+        #   原来记成 `done 0/0`：一次单号的手动探针就让整池今天不再定时探，界面还写「0/0 可用」。
+        #   重试时上面那条「一小时内刚探过」会跳过手动探针已经探过的号 —— 同一批号不会被花两次钱。
+        _dawn_save({"date": rec.get("date"), "at": int(time.time()), "state": "deferred", "ok": None,
+                    "note": "让路：另一个进程正在跑 Gemini 探针，下一分钟重试"})
+        say("agy dawn-probe：另一个进程正在跑 Gemini 探针 —— 今天的定时探针让路，稍后重试")
         return
     ok_n = sum(1 for r in out if r[1])
     started = sum(1 for r in out if r[4] and r[4].get("started"))
     _dawn_save({"date": today, "at": int(time.time()), "state": "done",
-                "ok": ok_n, "total": len(out), "started": started, "note": ""})
+                "ok": ok_n + len(recent), "total": len(out) + len(recent), "started": started,
+                "note": ("另有 %d 个号一小时内刚探过，没再花钱" % len(recent)) if recent else ""})
     _log("dawn [%d/%d 可用 · 5h 启动 %d]" % (ok_n, len(out), started))
 
 

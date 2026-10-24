@@ -4,6 +4,7 @@ state.json
 *.tmp
 *.log
 .keepalive.lock
+.keepalive.last
 .refresh.lock
 .state.lock
 .probe-*.lock
