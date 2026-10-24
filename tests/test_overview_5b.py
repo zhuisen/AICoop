@@ -432,7 +432,9 @@ class HoverAndTheDisabledStrip(unittest.TestCase):
         self.assertEqual([c["act"] for c in main], [i == 1 for i in range(len(main))], "★★ 动作只该出现在悬停那张卡上")
         self.assertFalse(main[1]["def"], "★ 悬停时默认页脚没让位")
         self.assertTrue(main[0]["def"])
-        self.assertNotIn("switch", main[0]["abs"], "★★ 在用的那张卡有「切换」")
+        # ★ 契约改了（用户 2026-10-24「无法手动换号」）：「在用」只是代理最后挑过的号、不看多久以前，
+        #   锁住它就可能没号可切 ⇒ 在用的卡也给「切换」。只有「直连」（当前号）没有。见 test_manual_switch.py
+        self.assertIn("switch", main[0]["abs"], "★★ 在用的那张卡也能手动切换")
 
     def test_the_strip_folds_but_stays_in_the_dom(self):
         # ★ P5（2026-10-21）：停轮换的号回到主网格（标签「不轮换」），折叠条只剩失效号（`kind="dead"`）。
