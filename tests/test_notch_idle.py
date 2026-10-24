@@ -242,6 +242,7 @@ class OnTheRealBundle(unittest.TestCase):
 
 
 
+@unittest.skipUnless(_harness_up(), "harness 3304 没起 / 没有 Chrome —— 这是 skip 不是绿")
 class HoverWorksWithTheAppInTheBackground(unittest.TestCase):
     """刘海与菜单栏同步（用户 2026-10-24）：悬停格子 ⇒ 高亮 + 右上角换成 ×，点 × 藏到重置（同悬停面板 B1）。
     ★ 刘海窗口不是 key 窗口，app 在后台时网页收不到鼠标移动 ⇒ 悬停只能靠 Rust 推的 `notch-hover`。
