@@ -499,7 +499,8 @@ export function mixParts(a: Bucket, mode: CacheMode): { name: string; pct: numbe
   if (countsCacheWrite(mode)) parts.push(["缓存写", a.cache_write]);
   parts.push(["输出", a.output]);
   const tot = parts.reduce((s, [, x]) => s + x, 0);
-  return tot ? parts.map(([name, x]) => ({ name, pct: (x / tot) * 100 })) : [];
+  // ★ 按 token 降序（用户 2026-10-25「都要这样排序」）。原来固定「缓存读 → 输入 → 缓存写 → 输出」。
+  return tot ? parts.sort((a, b) => b[1] - a[1]).map(([name, x]) => ({ name, pct: (x / tot) * 100 })) : [];
 }
 
 const EMPTY: Bucket = {
@@ -702,19 +703,6 @@ export function prevNote(st: RangeState, today: string): string {
   return `vs ${md(pr.s)} → ${md(pr.e)}`;
 }
 
-
-/**
- * 用量页底部平台卡的顺序：按卡上那个「今日」数降序（用户 2026-10-15：「按今日的 token 消耗进行排序」）。
- * 「今日」与卡片大字同一个取值：今日档 = 整档合计，其余档 = 最后一个桶。相同时保持传入顺序（稳定排序）。
- * ★ 只排卡片；列表与图例仍按用户自己排的顺序（2026-08-12 定稿），图层仍按占比。
- */
-export function cardTodayOf(p: { total: number; buckets: Bucket[] }, isToday: boolean): number {
-  return isToday ? p.total : (p.buckets.length ? p.buckets[p.buckets.length - 1].total : 0);
-}
-
-export function sortCardsByToday<T extends { total: number; buckets: Bucket[] }>(list: T[], isToday: boolean): T[] {
-  return [...list].sort((a, b) => cardTodayOf(b, isToday) - cardTodayOf(a, isToday));
-}
 
 function addClasses(a: Classes | undefined, b: Classes): Classes {
   return { uncached_in: (a?.uncached_in ?? 0) + (b.uncached_in ?? 0), cache_read: (a?.cache_read ?? 0) + (b.cache_read ?? 0),

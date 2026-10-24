@@ -176,7 +176,7 @@ export default function TkArea({ t, width, height, labels, layers, fmt, unit, ti
                     display: "flex", flexDirection: "column", gap: 4, pointerEvents: "none", fontSize: 12, zIndex: 3 }}>
         <span style={{ fontFamily: MONO, color: p.label, fontSize: 11 }}>{sh >= 0 ? tipTitle(sh) : ""}</span>
         {tipRows.map((r) => (
-          <span key={r.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span key={r.key} data-tip-row={r.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {rowLogo ? <PLogo k={r.key} color={r.color} size={13} isDark={t.isDark} />
                      : <span style={{ width: 9, height: 9, borderRadius: 2, background: r.color, flexShrink: 0 }} />}
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: p.text2 }}>{r.name}</span>

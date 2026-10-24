@@ -34,7 +34,7 @@ class TwoColumnsNeverLoseAPlatform(unittest.TestCase):
         cls.code = strip_comments(SRC.read_text(encoding="utf-8"))
 
     def test_both_columns_split_at_the_same_index(self):
-        m = re.search(r"const left = list\.slice\(0, (\w+(?:\.\w+)?)\), right = list\.slice\((\w+(?:\.\w+)?)\);", self.code)
+        m = re.search(r"const left = byTotal\.slice\(0, (\w+(?:\.\w+)?)\), right = byTotal\.slice\((\w+(?:\.\w+)?)\);", self.code)
         self.assertTrue(m, "探针失准：没找到两列的切分")
         self.assertEqual(m.group(1), m.group(2), "★★ 两列切在不同下标 —— 中间那家会消失")
 

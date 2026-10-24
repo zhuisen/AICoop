@@ -138,7 +138,8 @@ export function mergeModels(days: readonly (DayLite | null)[]): DayLite["models"
       acc.set(m.model, x);
     }
   }
-  return [...acc.values()].sort((a, b) => b.actual_cost - a.actual_cost);
+  // ★ 按 token 降序（用户 2026-10-25「都要这样排序」），原来按实付金额。
+  return [...acc.values()].sort((a, b) => b.total_tokens - a.total_tokens);
 }
 
 /**

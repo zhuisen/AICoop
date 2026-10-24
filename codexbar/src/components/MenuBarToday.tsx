@@ -244,8 +244,8 @@ function breakdown(
 ): React.ReactElement {
   const rows = series
     .map((s) => ({ name: s.name, key: s.key, v: s.values[i] ?? 0 }))
-    .filter((r) => r.v > 0)
-    .sort((a, b) => b.v - a.v);
+    // ★ 顺序跟图例走 = 今天的 token 总量降序（用户 2026-10-25「都要这样排序」），不按这一小时的值重排。
+    .filter((r) => r.v > 0);
   if (!rows.length) return <span style={{ opacity: 0.6 }}>该小时无用量</span>;
   return (
     <span style={{ display: "inline-flex", gap: 8 }}>

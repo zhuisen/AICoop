@@ -99,8 +99,10 @@ export default function RequestsPage({ t, privacy, nav }: { t: Theme; privacy: b
   // 右上角跟着左边的筛选走（用户 2026-10-22）：选哪家就是哪家今天的数，「全部」= 今天所有请求
   const m = useMemo(() => dayMetrics(list), [list]);
   // 右侧「今天总计」：选了一家 ⇒ 这一家；「全部」⇒ 各家一行（不跨 AI 合计）
+  //   ★ 各家按当天 token（输入含缓存 + 输出）降序（用户 2026-10-25「都要这样排序」），原来是固定的平台顺序。
   const sums = useMemo(() => (f === "all" ? PLATFORM_ORDER : [f]).map((p) => ({ p, s: daySummary(filterPlatform(all, p)) }))
-    .filter((x) => f !== "all" || x.s.n > 0), [all, f]);
+    .filter((x) => f !== "all" || x.s.n > 0)
+    .sort((a, b) => (b.s.input + b.s.output) - (a.s.input + a.s.output)), [all, f]);
   const sel = selectedIndex(list, selKey);
   const r: ReqRow | undefined = list[sel];
   const stale = err != null;

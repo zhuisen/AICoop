@@ -671,8 +671,9 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
  * ★ **停用 = 整家从数据里移除,总 token / 总费用跟着扣**(用户定稿)。实现在 `useTraffic` 出口,
  *   不在这里 —— 下游 30+ 处自动跟上。这里只写偏好。
  *
- * ★ 排序**只影响列表与图例**。堆叠图层仍按占比降序("占大头的铺满基线比悬在半空清楚",
- *   2026-08-09 看了两版实物定的),这次没动它。
+ * ★ 排序**只影响不带数字的平台胶囊**（与这张设置列表本身）。带 token 数的列表、卡片、图例、浮层一律按本期
+ *   token 总量降序（用户 2026-10-25「审查所有地方，都要这样进行排序」，取代原「排序影响列表与图例」）。
+ *   堆叠图层一直按占比降序("占大头的铺满基线比悬在半空清楚",2026-08-09 看了两版实物定的)。
  *
  * 用 ↑↓ 而不是拖拽:四五行的列表,拖拽要处理 HTML5 DnD 的一堆边界,而本项目键盘可达性本来就是 0,
  * 再加一个只能用鼠标的交互没有收益。
@@ -695,10 +696,9 @@ function PlatformSection({ t, snap }: { t: Theme; snap: TrafficData | null }) {
   //   所以枚举 = 快照里的键 ∪ 偏好里记过的键。
   const keys = useMemo(() => {
     const all = new Set([...Object.keys(snap?.platforms ?? {}), ...Object.keys(prefs.by), ...prefs.order]);
-    const vol = (k: string) =>
-      Object.values(snap?.platforms[k]?.days ?? {}).reduce((s, b) => s + b.total, 0);
-    return orderedKeys([...all], prefs, vol);
-  }, [snap, prefs]);
+    // ★ 没排过的按**显示的那个数**（近 30 天）降序 —— 原来按快照里全部天数之和，与行上的数对不上。
+    return orderedKeys([...all], prefs, (k) => vol30(k) ?? 0);
+  }, [snap, prefs, vol30]);
 
   const patch = (k: string, v: Partial<PlatformPrefs["by"][string]>) =>
     setPrefs({ order: keys, by: { ...prefs.by, [k]: { ...prefs.by[k], ...v } } });

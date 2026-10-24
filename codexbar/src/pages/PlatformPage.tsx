@@ -358,8 +358,12 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
   }, [data, raw, pk, st, today]);
   const kpis = data && me ? buildKpis({ t, data, raw, rows, sel: [pk], st, today, L, cacheMode, single: true }) : [];
 
-  const totalClasses = TOTAL_CLASSES.filter(
-    (cl) => (cl.key !== "cache_read" || countsCacheRead(cacheMode)) && !isoCls.has(cl.key));
+  // ★ 总量档的三类也按**本期 token** 降序（堆叠层 / 浮层 / 图例同一个顺序，用户 2026-10-25「都要这样排序」）。
+  //   原来写死「缓存读 → 新输入 → 输出」：缓存读多数时候最大，但不计入缓存或缓存少的平台上就不是。
+  const clsSum = (cl: (typeof TOTAL_CLASSES)[number]) => (v?.buckets ?? []).reduce((n, b) => n + cl.pick(b), 0);
+  const clsOrder = [...TOTAL_CLASSES].filter((cl) => cl.key !== "cache_read" || countsCacheRead(cacheMode))
+    .sort((a, b) => clsSum(b) - clsSum(a));
+  const totalClasses = clsOrder.filter((cl) => !isoCls.has(cl.key));
   const shown = (v?.models ?? []).filter((m) => !iso.has(m.m));
   const layers: TkLayer[] = mode === "models"
     ? shown.map((m) => ({ key: m.m, name: modelLabel(m.m), color: modelColor(m.m),
@@ -468,12 +472,12 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
         )}
         {mode === "total" && v && (
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: MONO, color: p.text2, flexShrink: 0 }}>
-            {TOTAL_CLASSES.filter((cl) => cl.key !== "cache_read" || countsCacheRead(cacheMode)).map((cl) => {
+            {clsOrder.map((cl) => {
               const sum = v.buckets.reduce((n, b) => n + cl.pick(b), 0);
               const pct = v.agg.total ? (sum / v.agg.total) * 100 : 0;
               const off = isoCls.has(cl.key);
               return (
-                <span key={cl.key} title={`${cl.full}\n点击可把它从图里摘掉（只影响这张图，不改口径/费用/总量）`}
+                <span key={cl.key} data-cls-legend={cl.key} data-sum={sum} title={`${cl.full}\n点击可把它从图里摘掉（只影响这张图，不改口径/费用/总量）`}
                       onClick={() => setIsoCls((z) => {
                         const nx = new Set(z);
                         if (nx.has(cl.key)) nx.delete(cl.key); else nx.add(cl.key);

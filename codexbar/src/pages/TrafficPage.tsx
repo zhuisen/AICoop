@@ -104,11 +104,14 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
   const soloOk = solo && rows.some((r) => r.key === solo) ? solo : null;
   // ★ 数字滚动（设置「数字滚动」）：进页面、换档、换单选平台、首份数据到位时从 0 滚一次。dep 是身份不是数据（见 `useIntro`）
   const roll = useNumberRoll(`${st.preset === "custom" ? `custom:${range.s}:${range.e}` : st.preset}|${soloOk ?? ""}|${data ? 1 : 0}`);
-  /** 两列行 / 胶囊的顺序：用户在设置里排过就照用户的，没排过的按本期 Token 降序。 */
+  /** 胶囊（不带数字）的顺序：用户在设置里排过就照用户的，没排过的按本期 Token 降序。 */
   const list = useMemo(() => {
     const by = new Map(rows.map((r) => [r.key, r]));
     return orderedKeys(rows.map((r) => r.key), prefs, (k) => by.get(k)?.total ?? 0).map((k) => by.get(k)!).filter(Boolean);
   }, [rows, prefs]);
+  // ★ 带 token 数的列表一律按**本期 Token 总量**降序（用户 2026-10-25「审查所有地方，都要这样进行排序」）：
+  //   两列行、平台卡片、浮层逐行与堆叠层（`platRows` 已按本期总量降序）同一个顺序。
+  const byTotal = rows;
   const labels = rows[0]?.labels ?? [];
   // 价格待核：最近 30 天用过的模型（不随所选区间变，口径见 `recentModels`）
   const priceWarns = useMemo(() => (data ? priceWarnings(recentModels(data, today), today) : []), [data, today]);
@@ -120,10 +123,9 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
     key: r.key, name: r.name, color: r.color, num: r.num,
     values: r.buckets.map((b) => (soloOk && soloOk !== r.key ? 0 : b.total)),
   }));
-  // 浮层逐行 = 平台注册顺序（不按值排、零值也列）；选中单平台时只列它。
-  const regOrder = data ? Object.keys(data.platforms) : [];
-  const tipRows = (soloOk ? layers.filter((l) => l.key === soloOk)
-    : regOrder.map((k) => layers.find((l) => l.key === k)).filter((x): x is TkLayer => !!x));
+  // 浮层逐行 = 本期 Token 总量降序（与堆叠层、两列行、卡片同一个顺序；零值也列）；选中单平台时只列它。
+  //   ✗ 已被 2026-10-25 取代：原来按平台注册顺序（不按值排）。
+  const tipRows = soloOk ? layers.filter((l) => l.key === soloOk) : layers;
   const thisYear = today.slice(0, 4);
   const tipTitle = (i: number) => {
     const l = labels[i] ?? "";
@@ -132,15 +134,15 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
   };
   const CH = L === 0 ? 236 : L === 1 ? 222 : 210;
   const soloRow = soloOk ? rows.find((r) => r.key === soloOk) ?? null : null;
-  const tc = useMemo(() => twoCol(list.length), [list.length]);
-  const left = list.slice(0, tc.perCol), right = list.slice(tc.perCol);
+  const tc = useMemo(() => twoCol(byTotal.length), [byTotal.length]);
+  const left = byTotal.slice(0, tc.perCol), right = byTotal.slice(tc.perCol);
   const rowCols = L === 0 ? "16px 112px minmax(0,1fr) 68px 50px 78px 10px"
     : L === 1 ? "16px 96px minmax(0,1fr) 62px 46px 72px 10px" : "16px minmax(0,1fr) 60px 46px 70px 10px";
   const maxTot = Math.max(1, rows[0]?.total ?? 1);
   const grand = Math.max(1, rows.reduce((s, r) => s + r.total, 0));
-  // 卡片按「今天这一天」的 token 降序（用户 2026-10-15），与卡底「今日」和 `data-today` 同一个数。
-  const cards = useMemo(() => [...list].sort((a, b) => todayTok(data, b.key, today) - todayTok(data, a.key, today)),
-                        [list, data, today]);
+  // 卡片按**本期 Token 总量**降序 = 卡上那个大数（用户 2026-10-25）。
+  //   ✗ 已被取代：2026-10-15 的「按今天这一天的 token 降序」（选年度档时卡片顺序与卡上的大数对不上）。
+  const cards = byTotal;
   const periodName = st.preset === "7d" ? "近 7 天" : st.preset === "30d" ? "近 30 天" : st.preset === "year" ? "年度"
     : `${range.s.slice(5)} → ${range.e.slice(5)}`;
 
@@ -272,7 +274,7 @@ function TkCard({ t, r, L, data, today, st, isToday, periodName, thisYear, hot, 
   const cov = coveragePct(coverage);
   return (
     // ★ 整卡可点（旧卡就是，保留；稿只有「明细 →」可点，偏离 R2-10）。
-    <section className="tk-entc" data-plat-card={r.name} data-today={todayTok(data, r.key, today)}
+    <section className="tk-entc" data-plat-card={r.name} data-today={todayTok(data, r.key, today)} data-total={r.total}
              onClick={onDrill} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
              style={{ borderRadius: 12, background: p.panel, padding: "12px 14px 10px", display: "flex",
                       flexDirection: "column", gap: 6, minWidth: 0, cursor: "pointer",
