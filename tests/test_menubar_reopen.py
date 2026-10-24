@@ -29,6 +29,7 @@ class ReopenRule(unittest.TestCase):
         self.assertIn("onFocusChanged", body)
         self.assertIn('listen("menubar-shown"', body)
         self.assertRegex(body, r"reopenResets\(hiddenAt\.current, Date\.now\(\)\)")
+        self.assertRegex(body, r"const reset = !shownOnce\.current \|\| reopenResets\(", "★ 启动后第一次弹出也回默认（2026-10-24）")
         self.assertIn('setTab("acc")', body)
         self.assertIn('setPlat("codex")', body)
 

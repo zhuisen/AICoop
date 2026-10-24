@@ -35,9 +35,13 @@ pub const PAD_L: f64 = 1.0;
 pub const PAD_R: f64 = 3.0;
 /// 灰色剪影的不透明度（画板 `ghostOp: .3`）。
 pub const GHOST_ALPHA: f64 = 0.3;
-/// 光晕：平台色 50%（P11_Spec §4「鼠标靠近」）。稿里是 14 pt logo 配 22 pt 光晕；logo 放大到 18 后按同比例放大到 ≈28 ——
-/// 仍用 22 的话光晕只比 logo 多出 2 pt、那一圈不透明度 < 9%，等于看不见（2026-10-24）。上下超出 22 pt 高的部分被托盘裁掉。
+/// 光晕：平台色 50%，径向线性渐变到透明（P11_Spec §4「鼠标靠近」，稿里 14 pt logo 配 22 pt 光晕）。
+/// ★ logo 放大到 18 后（2026-10-22）按同比例放大到 ≈28：仍用 22 的话 logo 外只剩 2 pt、不透明度 < 9%，等于看不见（2026-10-24）。
+///   代价：上下超出 22 pt 高的位图、最左那只的左缘会被裁（那里不透明度 ≈ 0.15）。试过「直径 22 + 三段渐变」不裁，
+///   但 logo 后面成了实心圆、外圈几乎没光，否了（样张 `~/Downloads/aicoop_screenshots_20261024_nearglow/tray_near_glow_v2.png`）。
 pub const GLOW_D: f64 = 22.0 * LOGO / 14.0;
+/// 光晕在 logo 边缘（半径 `LOGO / 2`）处的不透明度（相对圆心）：取线性渐变在那一点的值，三段渐变就等于原来的直线。
+pub const GLOW_EDGE: f64 = 1.0 - (LOGO / 2.0) / (GLOW_D / 2.0);
 /// 红点 #FF8A73，直径 4.5 pt、描边 1 pt #2C333F、右上角各外伸 2 pt（画板 9px / 2px / -4px，2×）。
 pub const DOT_D: f64 = 4.5;
 pub const DOT_RGB: (u8, u8, u8) = (0xFF, 0x8A, 0x73);
@@ -99,7 +103,8 @@ const FLASH_DELAY: f64 = 0.6;
 const FLASH_DUR: f64 = 0.8;
 const HELLO_STAGGER: f64 = 0.09;
 const HELLO_DUR: f64 = 0.7;
-const HELLO_LIFT: f64 = 2.5;
+/// 打招呼上跳的高度。★ 18 pt logo 在 22 pt 位图里上下各只剩 2 pt：原来的 2.5 会把 logo 顶出位图、裁掉 0.5 pt（四方评审 2026-10-24 4/4）。
+const HELLO_LIFT: f64 = (crate::tray_pill::H - LOGO) / 2.0;
 
 fn cut_spring(v: f64) -> Spring { Spring::new(v, 0.66, 1.0, 0.05) }   // ≈700 ms 落定，无回弹
 fn x_spring(v: f64) -> Spring { Spring::new(v, 0.38, 1.0, 0.05) }     // ≈550 ms（同 Page 1）

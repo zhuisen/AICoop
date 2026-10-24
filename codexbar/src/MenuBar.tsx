@@ -257,10 +257,13 @@ export default function MenuBar() {
   // ★ 用户 2026-10-22：重新打开回到默认（账号页 · Codex 档）；1 分钟内重开（多半是误关）保持上一次的样子。
   //   改写了交接稿 §3「记忆上次停留页」。收起的时刻取失焦（弹窗失焦即收起，见 lib.rs `toggle_menubar`）。
   const hiddenAt = useRef<number | null>(null);
+  // ★ 启动后第一次弹出也回默认（2026-10-24 四方评审：`hiddenAt` 为空时原来保持存下的档，重启 / 部署后总是回到上次的 Gemini）
+  const shownOnce = useRef(false);
   useEffect(() => {
     const a = getCurrentWindow().onFocusChanged(({ payload: focused }) => { if (!focused) hiddenAt.current = Date.now(); });
     const b = listen("menubar-shown", () => {
-      const reset = reopenResets(hiddenAt.current, Date.now());
+      const reset = !shownOnce.current || reopenResets(hiddenAt.current, Date.now());
+      shownOnce.current = true;
       hiddenAt.current = null;
       if (!reset) return;
       setTab("acc");

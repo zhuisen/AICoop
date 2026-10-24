@@ -242,14 +242,15 @@ class ClickingARowGoesToTheOverviewNotTheUsagePage(unittest.TestCase):
         """★★ 只发不收等于没发。判据打在**监听那一侧**。"""
         # ★ 2026-10-19：`navigate-overview` 删除，统一走 `main-open-page {page, platform}`（PLAN §2.3）。
         c = code(APP)
-        i = c.index('listen<{ page?: string; platform?: string | null }>("main-open-page"')
+        # ★ 2026-10-24：没点名平台时按「新的一次打开」落档（landingProvider，见 test_overview_landing.py）
+        i = c.index('("main-open-page", (e) => {')
         seg = c[i:c.index("}),", i)]
         self.assertIn('} else if (pg === "overview") {', seg)
-        self.assertIn('const pk = pf === "agy" ? "gemini" : pf;', seg, "★★ Gemini 行（键 agy）落不到 Gemini 档")
-        self.assertIn("setProvider(pk)", seg, "★★ 主窗收到了档位却不切")
-        # ★ 缺省必须不动 provider —— 不带档 / 脏值都不改档
-        self.assertIn('if (pk === "codex" || pk === "claude" || pk === "gemini" || pk === "grok") setProvider(pk);', seg,
+        self.assertIn('const pk0 = pf === "agy" ? "gemini" : pf;', seg, "★★ Gemini 行（键 agy）落不到 Gemini 档")
+        self.assertIn('const named: PoolKey | null = pk0 === "codex" || pk0 === "claude" || pk0 === "gemini" || pk0 === "grok" ? pk0 : null;', seg,
                       "★ 没有校验载荷 ⇒ 脏值能改档")
+        self.assertIn('const ovNamed = pg === "overview" ? named : null;', seg, "点名只对总览生效")
+        self.assertIn("setProvider((cur) => landingProvider(cur, ovNamed, fresh))", seg, "★★ 主窗收到了档位却不切")
         self.assertNotIn('"navigate-overview"', c, "★ 旧事件的监听又回来了 —— 一次点击会跳两回")
 
     def test_clicking_an_agy_row_does_not_switch(self):

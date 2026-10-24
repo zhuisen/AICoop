@@ -69,20 +69,34 @@ export const poolKeyAt = (idx: number): PoolKey | undefined =>
 const STORE_KEY = "codexbar_provider";
 
 /**
- * 记住的分档。★★ **必须认旧值**：2026-09-13 之前存的是 `google` / `xai`，
- * 不迁移的话，停在 Gemini 档的用户下次打开会**静默跳回 Codex**，
- * 而那看起来就像"我的选择没被记住"。本仓「读不到 ≠ 没有」的另一种形态。
+ * 记住的分档 —— **只在这一次运行里记**（sessionStorage）。
+ * ★ 用户 2026-10-24「为什么默认还是跳到 gemini？超过 1 分钟后也是」：原来存 localStorage、跨启动永远记住，
+ *   上次停在 Gemini，之后每次重启 / 部署、每次没点名平台的打开都回 Gemini。WKWebView 退出即清 sessionStorage ⇒
+ *   冷启动恒为 Codex；运行中隐藏 ≥ 1 分钟再打开回 Codex 由 `landingProvider` + Rust 的 `fresh` 管（同菜单栏弹窗 10-22 那条）。
+ * 仍认旧值 `google` / `xai`（2026-09-13 之前的写法）。
  */
 export function loadPoolKey(): PoolKey {
   try {
-    const v = localStorage.getItem(STORE_KEY);
+    const v = sessionStorage.getItem(STORE_KEY);
     if (v === "google" || v === "gemini") return "gemini";
     if (v === "xai" || v === "grok") return "grok";
     if (v === "claude") return "claude";
-  } catch { /* 隐私模式下读不了，落到默认 */ }
+  } catch { /* 读不了，落到默认 */ }
   return "codex";
 }
 
 export function savePoolKey(k: PoolKey): void {
-  try { localStorage.setItem(STORE_KEY, k); } catch { /* 隐私模式下写不了，忽略 */ }
+  try { sessionStorage.setItem(STORE_KEY, k); } catch { /* 写不了，忽略 */ }
+}
+
+/** 默认档。 */
+export const DEFAULT_POOL_KEY: PoolKey = "codex";
+
+/**
+ * 主窗口这次打开落在哪一档。`named` = 入口点名的平台（托盘右键 / 账号行 / 额度格子）；
+ * `fresh` = 冷启动或隐藏 ≥ 1 分钟后再打开（Rust 判，`main-open-page` 带过来）。
+ * 点名的优先；没点名：新的一次打开回默认，否则保持当前档（1 分钟内重开多半是误关）。
+ */
+export function landingProvider(cur: PoolKey, named: PoolKey | null, fresh: boolean): PoolKey {
+  return named ?? (fresh ? DEFAULT_POOL_KEY : cur);
 }

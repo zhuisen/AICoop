@@ -99,8 +99,10 @@ class TheOverviewIsTabbedByProvider(unittest.TestCase):
         self.assertRegex(OV, r"const codexShown = p\.preview \? applyOrder\(codexSorted,[^;]*: codexSorted;")
 
     def test_the_choice_is_remembered(self):
-        """★ 这一档是"我在管哪一家账号"，不是一次性筛选 —— 切到别的页再回来不该跳回第一档。"""
-        self.assertIn('localStorage.setItem(STORE_KEY, k)', PLAT, "★ 分档没有被记住")
+        """★ 这一档是"我在管哪一家账号"，不是一次性筛选 —— 切到别的页再回来不该跳回第一档。
+        2026-10-24 起只在**这一次运行里**记（sessionStorage）：跨启动记住会让每次重启都回到上次的 Gemini
+        （用户「为什么默认还是跳到 gemini」；规则与闸见 test_overview_landing.py）。"""
+        self.assertIn('sessionStorage.setItem(STORE_KEY, k)', PLAT, "★ 分档没有被记住")
         # ★★ 旧值必须还认得：2026-09-13 之前存的是 `google`/`xai`，
         #   不迁移的话停在 Gemini 档的用户下次打开会**静默跳回 Codex**。
         self.assertIn('v === "google"', PLAT, "★★ 没有迁移旧的 provider 值")

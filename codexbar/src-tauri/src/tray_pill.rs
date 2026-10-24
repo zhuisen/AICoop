@@ -278,6 +278,13 @@ impl Fade {
     pub(crate) fn done(&self, now: f64) -> bool { now - self.t0 >= FADE }
 }
 
+/// 设置「数字滚动」（用户 2026-10-24）：关掉 ⇒ 在跑胶囊的数字直接换、不滚。进程内开关，App.tsx 启动时重发（同 `set_tps_tray`）。
+static NUMBER_ROLL: AtomicBool = AtomicBool::new(true);
+
+pub fn set_number_roll(on: bool) { NUMBER_ROLL.store(on, Ordering::SeqCst); }
+
+fn number_roll() -> bool { NUMBER_ROLL.load(Ordering::SeqCst) }
+
 /// 逐位滚动：只有变了的位从下方 7 pt 滑入（SwiftUI `numericText` 同形）。
 #[derive(Clone, Debug)]
 pub struct Roll { pub from: String, pub to: String, pub p: Spring }
@@ -414,8 +421,10 @@ impl Anim {
                             } else {
                                 s.x_r.target = x_r;
                                 s.num_w.target = g.num_w; s.unit_w.target = g.unit_w; s.sess_w.target = g.sess_w;
-                                if let Some(t) = g.num.as_deref() { s.num.set(t, r); }
-                                if let Some(t) = g.sess.as_deref() { s.sess.set(t, r); }
+                                // 数字滚动关掉 ⇒ 数字直接换（同减弱动态效果）
+                                let instant = r || !number_roll();
+                                if let Some(t) = g.num.as_deref() { s.num.set(t, instant); }
+                                if let Some(t) = g.sess.as_deref() { s.sess.set(t, instant); }
                                 s.num_a.go(if g.num.is_some() { 1.0 } else { 0.0 }, now, r);
                                 s.unit_a.go(if g.unit_w > 0.0 { 1.0 } else { 0.0 }, now, r);
                                 s.sess_a.go(if g.sess.is_some() { 1.0 } else { 0.0 }, now, r);
@@ -1169,7 +1178,7 @@ pub mod draw {
 
     /// 空闲托盘那一层（P11）：logo 右对齐画在 `right` 以左；整层随过渡淡出 / 缩小（同文字标题）。
     unsafe fn idle_layer(f: &crate::tray_idle::IdleFrame, right: f64, a: f64, k: f64, ap: Appearance) {
-        use crate::tray_idle::{BACKING_R, DOT_D, DOT_RGB, GHOST_ALPHA, GLOW_D, GLOW_RGB, LOGO as IL};
+        use crate::tray_idle::{BACKING_R, DOT_D, DOT_RGB, GHOST_ALPHA, GLOW_D, GLOW_EDGE, GLOW_RGB, LOGO as IL};
         let light = ap == Appearance::Light;
         if a <= 0.001 || f.width <= 0.0 { return; }
         let r = res();
@@ -1177,6 +1186,37 @@ pub mod draw {
         let rgb = |c: (u8, u8, u8)| (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
         save();
         scale_about(right - f.width / 2.0, H / 2.0, k);
+        // 光晕：平台色，圆心 50% → logo 边缘 `GLOW_EDGE` → 半径 `GLOW_D / 2` 处 0（三段，见 `tray_idle::GLOW_D`）。
+        //   `clip` = 只画在这只的镂空圆里（半径 `BACKING_R`）：镂空刚把那一圈擦掉，补回这只自己的光（含 1 pt 缝，否则缝成一道暗圈）。
+        let glow = |l: &crate::tray_idle::IdleDraw, la: f64, clip: bool| {
+            if l.glow <= 0.001 { return; }
+            let c = rgb(GLOW_RGB[l.logo]);
+            let a0 = 0.5 * l.glow * la;
+            let cx = x0 + l.x + IL / 2.0;
+            let cy = H / 2.0 + l.lift;
+            let arr: *mut AnyObject = msg_send![class!(NSMutableArray), array];
+            for a in [a0, a0 * GLOW_EDGE, 0.0] { let _: () = msg_send![arr, addObject: color(c, a)]; }
+            let locs = [0.0f64, (IL / 2.0) / (GLOW_D / 2.0), 1.0];
+            let cs: *mut AnyObject = msg_send![class!(NSColorSpace), sRGBColorSpace];
+            let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
+            let g: *mut AnyObject = msg_send![g, initWithColors: arr, atLocations: locs.as_ptr(), colorSpace: cs];
+            if let Some(g) = Retained::<AnyObject>::from_raw(g) {
+                save();
+                scale_about(cx, cy, l.scale);
+                if clip {
+                    let o = NSRect::new(NSPoint::new(cx - BACKING_R, cy - BACKING_R), NSSize::new(2.0 * BACKING_R, 2.0 * BACKING_R));
+                    let p: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: o];
+                    let _: () = msg_send![p, addClip];
+                }
+                let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
+                    toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
+                restore();
+            }
+        };
+        // ★ 光晕先单独画一遍、垫在所有 logo 下面（四方评审 2026-10-24 3/4）：混在逐只循环里时，左边那只的镂空
+        //   会把右边那只已画好的光晕切出一道硬弧。镂空仍会擦掉每只自己身后半径 10 内的光晕 ⇒ 第二遍在 logo 那一圈里补画
+        //   （10-21 原稿样张里 Codex 的 `>_` 透出平台色）。
+        for l in f.logos.iter() { glow(l, a * l.alpha, false); }
         // 堆叠（2026-10-22）：从右往左画，左边的压在上面；每只先把身后一圈擦成透明（镂空），把下面那只切开
         let mut order: Vec<&crate::tray_idle::IdleDraw> = f.logos.iter().collect();
         order.sort_by(|p, q| q.x.partial_cmp(&p.x).unwrap_or(std::cmp::Ordering::Equal));
@@ -1197,20 +1237,11 @@ pub mod draw {
                 let _: () = msg_send![p, fill];
                 let _: () = msg_send![gc, setCompositingOperation: 2usize];
             }
-            // 光晕：平台色 50%，径向渐变到透明。★ 必须画在镂空**之后**：先画再擦，半径 10 的镂空会把半径 14 的光晕吃掉大半
-            //   （2026-10-22 加镂空时顺序放反了，靠近光晕从此看不见；用户 2026-10-24「靠近亮光没了」）
-            if l.glow > 0.001 {
-                let c = rgb(GLOW_RGB[l.logo]);
-                let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
-                let g: *mut AnyObject = msg_send![g, initWithStartingColor: color(c, 0.5 * l.glow * la), endingColor: color(c, 0.0)];
-                if let Some(g) = Retained::<AnyObject>::from_raw(g) {
-                    let cx = x + IL / 2.0;
-                    let cy = y + IL / 2.0;
-                    // 从圆心起亮（同 10-21 原稿样张：Codex 的 `>_` 透出平台色）；从镂空边缘起亮会出一圈硬边，试过、否了
-                    let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
-                        toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
-                }
-            }
+            // 镂空圆里的光晕（镂空刚把它擦掉）；外圈在上面第一遍已画好
+            restore();
+            glow(l, la, true);
+            save();
+            scale_about(x + IL / 2.0, y + IL / 2.0, l.scale);
             let lr = NSRect::new(NSPoint::new(x, y), NSSize::new(IL, IL));
             // 灰色剪影（整只），再盖上「还剩的那部分」原色
             let ghost = (if light { r.ghosts_light[l.logo] } else { r.ghosts[l.logo] }) as *mut AnyObject;
@@ -1842,6 +1873,15 @@ mod tests {
             let added: f64 = off.chunks(4).zip(on.chunks(4)).map(|(a, b)| (b[3] as f64 - a[3] as f64).max(0.0) / 255.0).sum();
             let frac = added / (w as f64 * h as f64);
             assert!(frac > 0.08, "{ap:?}: 靠近只多出 {:.1}% 的不透明度 —— 光晕被镂空擦掉了或太小", frac * 100.0);
+            // ★ 外圈：位图最上 / 最下 1 pt 在所有 logo 的镂空圆（半径 10，圆心 y = 11）之外，只有第一遍的外圈光晕到得了
+            //   （只补镂空圆里那一遍时整体比例仍过上面那条，这条才红）
+            let band = (h as usize / 22).max(1);
+            let rows: Vec<usize> = (0..band).chain(h as usize - band..h as usize).collect();
+            let outer: f64 = rows.iter().map(|&y| (0..w as usize).map(|x| {
+                let i = (y * w as usize + x) * 4 + 3;
+                (on[i] as f64 - off[i] as f64).max(0.0) / 255.0
+            }).sum::<f64>()).sum::<f64>() / (rows.len() as f64 * w as f64);
+            assert!(outer > 0.03, "{ap:?}: 外圈只多出 {:.1}% —— 光晕只剩 logo 背后那一圈", outer * 100.0);
         }
     }
 

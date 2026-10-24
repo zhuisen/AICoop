@@ -202,13 +202,16 @@ export function PlatChips({ t, chips, sel, onPick, withAll, L, aria, fit }: {
 }
 
 export interface TkKpi {
-  label: string; value: string; full?: string; color?: string; sub?: string; subColor?: string;
+  /** `n` + `fmt`：可滚动的数值（数字滚动开着时从 0 滚到 `n`，滚完显示的仍是 `value`）。 */
+  label: string; value: string; n?: number; fmt?: (v: number) => string; full?: string; color?: string; sub?: string; subColor?: string;
   tip?: string; info?: boolean; labelLogo?: { k: string; color: string }; valueLogo?: { k: string; color: string };
 }
 
 /** 7 格指标条（稿：任何宽度一行 7 列，数字 24、标签 12.5，标签是青色）。 */
-export function KpiGrid({ t, items, borderColor, anim }: {
+export function KpiGrid({ t, items, borderColor, anim, roll = 1 }: {
   t: Theme; items: TkKpi[]; borderColor: string; anim?: string;
+  /** 数字滚动进度（`useNumberRoll`）；不给 = 1 = 直接显示。 */
+  roll?: number;
 }) {
   const p = tkPal(t);
   return (
@@ -229,7 +232,8 @@ export function KpiGrid({ t, items, borderColor, anim }: {
             <span data-kpi-value title={k.full} style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 24,
                                           fontWeight: 700, lineHeight: "30px", color: k.color ?? p.text,
                                           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {k.value}
+              {/* ★ 进度落在 [0,1) 才用它算（同旧 `KpiStrip` 的第二道防线）：滚完、或进度异常，一律显示真值 */}
+              {k.n != null && k.fmt && roll >= 0 && roll < 1 ? k.fmt(k.n * roll) : k.value}
             </span>
           </span>
           <span data-kpi-sub style={{ fontSize: 11.5, color: k.subColor ?? p.label, fontFamily: MONO, maxWidth: "100%",

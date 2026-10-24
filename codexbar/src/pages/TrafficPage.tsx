@@ -3,7 +3,7 @@ import { type Theme, modelColor } from "../theme";
 import PriceStack, { cacheNotes } from "../components/tk/PriceStack";
 import { priceWarnings, recentModels } from "../rates";
 import Toast from "../components/Toast";
-import { introEnabled } from "../hooks/useIntro";
+import { introEnabled, useNumberRoll } from "../hooks/useIntro";
 import type { Bucket, CacheMode, Coverage, PlatformPrefs, RangeState, TrafficData } from "../traffic";
 import { PILLS, addDays, countsCacheRead, coverageNote, coveragePct, diffDays, effGran, granLabel, orderedKeys, prevSum,
          resolveRange, tickTitle, todayOf, topModels } from "../traffic";
@@ -102,6 +102,8 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
 
   const rows = useMemo(() => (data ? platRows(t, data, st, today) : []), [t, data, st, today]);
   const soloOk = solo && rows.some((r) => r.key === solo) ? solo : null;
+  // ★ 数字滚动（设置「数字滚动」）：进页面、换档、换单选平台、首份数据到位时从 0 滚一次。dep 是身份不是数据（见 `useIntro`）
+  const roll = useNumberRoll(`${st.preset === "custom" ? `custom:${range.s}:${range.e}` : st.preset}|${soloOk ?? ""}|${data ? 1 : 0}`);
   /** 两列行 / 胶囊的顺序：用户在设置里排过就照用户的，没排过的按本期 Token 降序。 */
   const list = useMemo(() => {
     const by = new Map(rows.map((r) => [r.key, r]));
@@ -201,7 +203,7 @@ export default function TrafficPage({ t, data, raw, cacheMode, prefs, st, setSt,
           </>
         ) : (
           <>
-            <KpiGrid t={t} items={kpis} anim={anim} borderColor={soloRow ? `${soloRow.color}66` : p.border} />
+            <KpiGrid t={t} items={kpis} anim={anim} roll={roll} borderColor={soloRow ? `${soloRow.color}66` : p.border} />
             {!!labels.length && cw > 0 && (
               <div className="tk-dir" style={{ animation: anim?.replace(".22s", ".26s").replace("both", ".03s both") }}>
                 <TkArea t={t} width={cw} height={CH} labels={labels} layers={layers} rows={tipRows} rowLogo

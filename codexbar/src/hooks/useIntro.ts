@@ -33,11 +33,29 @@ const ease = (t: number): number => 1 - Math.pow(1 - t, 3);
  *   系统里关掉动效的人要的是「没有」，不是「短一点」。
  */
 export function useIntro(dep: string): number {
+  return useProgress(dep, introEnabled);
+}
+
+/**
+ * 要不要滚数字：设置页「数字滚动」（用户 2026-10-24，独立于入场动效）+ 系统 `prefers-reduced-motion`，任一关就不滚。
+ */
+export function numberRollEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return false;
+  try { return getSettings().numberRoll !== false; } catch { return true; }
+}
+
+/** KPI 数字滚动的进度 0→1（`dep` = 数据集身份，同 `useIntro`）。关掉时恒为 1。 */
+export function useNumberRoll(dep: string): number {
+  return useProgress(dep, numberRollEnabled);
+}
+
+function useProgress(dep: string, enabled: () => boolean): number {
   const [p, setP] = useState(1);
   const raf = useRef(0);
 
   useEffect(() => {
-    if (!introEnabled()) { setP(1); return; }
+    if (!enabled()) { setP(1); return; }
 
     const t0 = performance.now();
     setP(0);

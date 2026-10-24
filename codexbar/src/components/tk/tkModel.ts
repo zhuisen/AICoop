@@ -78,21 +78,21 @@ export function buildKpis(o: {
   const shareRow = one ? selRow : top;
   const share = shareRow && grand > 0 ? (shareRow.total / grand) * 100 : null;
   const out: TkKpi[] = [
-    { label: one ? "Token" : s2 ? "Token" : "总 Token", value: fmtTokL(tok, L), full: fmtTokL(tok, 0),
+    { label: one ? "Token" : s2 ? "Token" : "总 Token", value: fmtTokL(tok, L), n: tok, fmt: (v) => fmtTokL(v, L), full: fmtTokL(tok, 0),
       color: one && selRow ? selRow.num : undefined, labelLogo: one && selRow && !single ? { k: selRow.key, color: selRow.color } : undefined,
       sub: `环比 ${sgn(cTok)}`, subColor: tc(cTok) },
-    { label: s2 ? "请求" : "请求数", value: fmtIntL(rounds, L), full: fmtIntL(rounds, 0),
+    { label: s2 ? "请求" : "请求数", value: fmtIntL(rounds, L), n: rounds, fmt: (v) => fmtIntL(Math.round(v), L), full: fmtIntL(rounds, 0),
       sub: isToday ? "今日" : `日均 ${fmtIntL(rounds / days, L)}` },
     isToday
       ? { label: "较昨日", value: sgn(cTok), color: tc(cTok), sub: "vs 昨日" }
-      : { label: "日均", value: fmtTokL(tok / days, L), full: fmtTokL(tok / days, 0),
+      : { label: "日均", value: fmtTokL(tok / days, L), n: tok / days, fmt: (v) => fmtTokL(v, L), full: fmtTokL(tok / days, 0),
           sub: prev && cTok != null ? vsTxt : noPrev },
-    { label: s2 ? "费用" : "等效费用", value: fmtUsdL(cost, L), full: fmtUsdL(cost, 0), color: p.amber, info: true,
+    { label: s2 ? "费用" : "等效费用", value: fmtUsdL(cost, L), n: cost, fmt: (v) => fmtUsdL(v, L), full: fmtUsdL(cost, 0), color: p.amber, info: true,
       tip: "4 类 token × 牌价算出的等效 API 成本，订阅制下非实付",
       sub: saving > 0 ? `${s2 ? "省" : "缓存已省"} ${fmtUsdL(saving, L)}` : undefined },
     isToday
       ? { label: s2 ? "费用较昨" : "费用较昨日", value: sgn(cCost), color: tc(cCost) }
-      : { label: s2 ? "日均费" : "日均费用", value: fmtUsdL(cost / days, L), full: fmtUsdL(cost / days, 0),
+      : { label: s2 ? "日均费" : "日均费用", value: fmtUsdL(cost / days, L), n: cost / days, fmt: (v) => fmtUsdL(v, L), full: fmtUsdL(cost / days, 0),
           color: p.amber, sub: `环比 ${sgn(cCost)}`, subColor: tc(cCost) },
     { label: one ? (s2 ? "占比" : "占全部") : s2 ? "最大" : "最大占比",
       value: share == null ? "—" : `${Math.round(share)}%`, full: share == null ? undefined : `${share.toFixed(1)}%`,

@@ -94,10 +94,11 @@ STUB = """
     if (themeQ) localStorage.setItem('codexbar_theme', themeQ);
     else localStorage.removeItem('codexbar_theme');
     // ★ 总览（交接包 page5，2026-10-19）的几个开关 —— 不给的话这些态一个像素都截不到：
-    //   `?ovplat=codex|claude|gemini|grok` 停在哪一档（真源是 localStorage `codexbar_provider`）·
+    //   `?ovplat=codex|claude|gemini|grok` 停在哪一档（真源是 sessionStorage `codexbar_provider`）·
     //   `?ovhover=<序号|aid>` 把那张卡钉在悬停态（headless 里 JS 事件不激活 `:hover`，见 verification.md）·
     //   `?ovoff=1` 已停用 / 失效那两条折叠条默认展开。
-    if (p.get('ovplat')) localStorage.setItem('codexbar_provider', p.get('ovplat'));
+    // 2026-10-24 起总览档只在这一次运行里记（sessionStorage，冷启动恒 Codex）
+    if (p.get('ovplat')) sessionStorage.setItem('codexbar_provider', p.get('ovplat'));
     // 代理轮换页的时间档 / 平台（`?rotwin=168` 直开账号 × 时段；`?rotplat=agy` 直开 Gemini）。不给就清掉，默认 24h / Codex 恒定。
     if (p.get('rotwin')) localStorage.setItem('codexbar_rot_win', p.get('rotwin')); else localStorage.removeItem('codexbar_rot_win');
     if (p.get('rotplat')) localStorage.setItem('codexbar_rot_plat', p.get('rotplat')); else localStorage.removeItem('codexbar_rot_plat');

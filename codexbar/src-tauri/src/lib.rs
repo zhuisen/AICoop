@@ -627,17 +627,43 @@ fn apply_activation_policy(app: &AppHandle) {
     }
 }
 
+/// 主窗口上次被隐藏的时刻（这次运行内）。`None` = 还没隐藏过。
+static MAIN_HIDDEN_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// 隐藏不到这么久就再打开 = 多半是误关，保持原来的总览档；超过就回默认（同菜单栏弹窗 `mbLogic.ts::REOPEN_KEEP_MS`，用户 2026-10-22 定）。
+const MAIN_KEEP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 这次显示主窗口算不算「新的一次打开」：窗口本来就开着 ⇒ 不算；隐藏过且不到 1 分钟 ⇒ 不算；
+/// 其余（没隐藏过 / 隐藏 ≥ 1 分钟）⇒ 算，前端据此把总览档放回 Codex（用户 2026-10-24「默认还是跳到 gemini」）。
+fn fresh_open(visible: bool, hidden_for: Option<std::time::Duration>) -> bool {
+    !visible && hidden_for.map_or(true, |d| d >= MAIN_KEEP)
+}
+
+fn main_fresh(app: &AppHandle) -> bool {
+    let visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(false);
+    fresh_open(visible, MAIN_HIDDEN_AT.lock().unwrap().map(|t| t.elapsed()))
+}
+
+fn mark_main_hidden() { *MAIN_HIDDEN_AT.lock().unwrap() = Some(std::time::Instant::now()); }
+
+/// 显示主窗口；是新的一次打开就告诉前端（`main-open-page` `{page: null, fresh: true}`，只放回总览档、不切页）。
+fn show_main(app: &AppHandle) {
+    let fresh = main_fresh(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    if fresh { let _ = app.emit_to("main", "main-open-page", serde_json::json!({ "page": null, "fresh": true })); }
+}
+
 /// 显示/隐藏主窗口。**前端一切显示隐藏主窗的地方都要走这里**,不要直接 `win.hide()` ——
 /// 那样绕过了激活策略的同步,程序坞图标就会和窗口状态脱节。
 #[tauri::command]
 fn set_main_visible(app: AppHandle, show: bool) {
-    if let Some(w) = app.get_webview_window("main") {
-        if show {
-            let _ = w.show();
-            let _ = w.set_focus();
-        } else {
-            let _ = w.hide();
-        }
+    if show {
+        show_main(&app);
+    } else if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+        mark_main_hidden();
     }
     apply_activation_policy(&app);
 }
@@ -912,6 +938,12 @@ fn set_idle_tray(app: AppHandle, enabled: bool, slots: Value, cells: Option<usiz
     #[cfg(not(target_os = "macos"))]
     let _ = cells;
     tray_pill::set_idle_tray(&app, enabled, &slots);
+}
+
+/// 设置页「数字滚动」：菜单栏在跑胶囊的 t/s 逐位滚动开不开（主窗口 KPI 那半在前端，`useNumberRoll`）。
+#[tauri::command]
+fn set_number_roll(on: bool) {
+    tray_pill::set_number_roll(on);
 }
 
 /// 设置页「鼠标靠近光晕」「打招呼」（`off` / `daily` / `idle1h`），外加前端记下的「上次打招呼」与
@@ -3045,9 +3077,11 @@ pub fn run() {
                 use tauri::Listener;
                 let h2 = handle.clone();
                 handle.listen_any("open-main-page", move |ev| {
-                    let payload: Value = serde_json::from_str(ev.payload()).unwrap_or(Value::Null);
+                    let mut payload: Value = serde_json::from_str(ev.payload()).unwrap_or(Value::Null);
                     let h3 = h2.clone();
                     let _ = h2.run_on_main_thread(move || {
+                        // ★ 先判「新的一次打开」再显示（显示之后窗口就可见了）；随跳转一起带过去，前端没点名平台时回默认档
+                        if let Some(o) = payload.as_object_mut() { o.insert("fresh".into(), Value::Bool(main_fresh(&h3))); }
                         if let Some(w) = h3.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
@@ -3221,6 +3255,7 @@ pub fn run() {
                         api.prevent_close();
                         if let Some(win) = handle_close.get_webview_window("main") {
                             let _ = win.hide();
+                            mark_main_hidden();
                         }
                         // 关窗必须让出程序坞的位置,否则图标一直占着还点不出窗口
                         apply_activation_policy(&handle_close);
@@ -3269,7 +3304,7 @@ pub fn run() {
             set_notch_hud, notch_status, notch_geometry, notch_panel_height, notch_activity, notch_dismiss,
             notch_card_resize, notch_layout,
             read_requests, read_live, read_statusline_quota, claude_otel,
-            set_tps_tray, set_idle_tray, set_idle_prefs, tpshover_dismiss, tpshover_resize, tpshover_layout, tray_pill_hide_logos,
+            set_tps_tray, set_number_roll, set_idle_tray, set_idle_prefs, tpshover_dismiss, tpshover_resize, tpshover_layout, tray_pill_hide_logos,
             set_main_visible,
             read_auth_tokens,
             read_logs,
@@ -3286,10 +3321,7 @@ pub fn run() {
             //   "⌘Tab 切走后又点回来"这种场景。
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                show_main(app);
                 apply_activation_policy(app);
             }
             if let tauri::RunEvent::Exit = event {
@@ -3306,6 +3338,7 @@ pub fn run() {
                     api.prevent_exit();
                     if let Some(w) = app.get_webview_window("main") {
                         let _ = w.hide();
+                        mark_main_hidden();
                     }
                     apply_activation_policy(app);
                 }
@@ -3424,6 +3457,20 @@ mod popover_tests {
     fn tiny_screen_still_stays_on_screen() {
         let (x, y) = place_popover((10.0, 300.0, 16.0, 16.0), (0.0, 0.0, 400.0, 500.0), 352.0, 600.0);
         assert!(x >= 0.0 && y >= 0.0, "极小屏下越出屏幕 x={} y={}", x, y);
+    }
+}
+
+#[cfg(test)]
+mod main_landing_tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn a_new_open_is_fresh_only_after_a_minute_hidden() {
+        assert!(!fresh_open(true, None), "窗口本来就开着 ⇒ 不算新的一次打开");
+        assert!(!fresh_open(true, Some(Duration::from_secs(600))), "开着就不算，不论上次隐藏多久");
+        assert!(fresh_open(false, None), "这次运行还没隐藏过 ⇒ 算");
+        assert!(!fresh_open(false, Some(Duration::from_secs(59))), "1 分钟内重开（多半误关）⇒ 保持原来的档");
+        assert!(fresh_open(false, Some(Duration::from_secs(60))), "满 1 分钟 ⇒ 回默认");
     }
 }
 

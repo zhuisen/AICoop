@@ -54,7 +54,7 @@ def _measure(w, h, prov, grok="ok", probe=PROBE):
     with sync_playwright() as p:
         br = p.chromium.launch(executable_path=CHROME, headless=True)
         ctx = br.new_context(viewport={"width": w, "height": h})
-        ctx.add_init_script("localStorage.setItem('codexbar_provider', '%s')" % prov)
+        ctx.add_init_script("sessionStorage.setItem('codexbar_provider', '%s')" % prov)
         pg = ctx.new_page()
         pg.goto("%s&grok=%s" % (URL, grok), timeout=30000)
         pg.wait_for_timeout(2200)

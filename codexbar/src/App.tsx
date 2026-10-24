@@ -28,7 +28,7 @@ import { useIntegration } from "./hooks/useIntegration";
 import { useCardOrder } from "./hooks/useCardOrder";
 import { useCardDrag } from "./hooks/useCardDrag";
 import { useRotationBoard } from "./hooks/useRotationBoard";
-import { loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
+import { landingProvider, loadPoolKey, poolKeyAt, savePoolKey, type PoolKey } from "./platforms";
 import { useAgyPool } from "./hooks/useAgyPool";
 import Overview from "./components/ov/Overview";
 import { useLive } from "./hooks/useLive";
@@ -108,6 +108,8 @@ export default function App() {
     if (st.notchHud) invoke("set_notch_hud", { on: true }).catch(() => {});
     // 「在跑时显示 t/s」同理：Rust 的 `tray_pill::ENABLED` 默认关、进程内 atomic，默认开要靠这一句。
     invoke("set_tps_tray", { enabled: st.tpsTray }).catch(() => {});
+    // 「数字滚动」同理：Rust 默认开，关掉的人重启后要再告诉它一次
+    invoke("set_number_roll", { on: st.numberRoll !== false }).catch(() => {});
     // 菜单栏标题样式同理:Rust 侧的 TRAY_STYLE 是进程内 atomic,重启就回默认,
     // 得由主窗口 webview 每次启动重新告诉它一次。
     invoke("set_tray_style", { style: TRAY_STYLES.indexOf(st.trayStyle) }).catch(() => {});
@@ -127,8 +129,16 @@ export default function App() {
       //   （请求页的 `reqNav.n` 会加 2）。闸 `tests/test_overview_5b.py::NavigationArrivesOnce`。
       //   payload `{page, platform}`；platform 用请求账本的键（codex/claude/agy/grok）。
       //   ★ 菜单栏账号行点击（原 `navigate-overview`）也走这条，停在那一行所属的平台档 —— 旧事件已无人发，监听一并删掉。
-      listen<{ page?: string; platform?: string | null }>("main-open-page", (e) => {
-        const pg = e.payload?.page, pf = e.payload?.platform ?? null;
+      // ★ `fresh`（Rust 带）= 主窗口这次是从隐藏 ≥ 1 分钟后打开的；`page` 为空 = 只是显示窗口（Dock / 菜单栏「打开工作台」等），
+      //   不切页，只按 `landingProvider` 把总览档放回默认（用户 2026-10-24「默认还是跳到 gemini」）。
+      listen<{ page?: string | null; platform?: string | null; fresh?: boolean }>("main-open-page", (e) => {
+        const pg = e.payload?.page, pf = e.payload?.platform ?? null, fresh = !!e.payload?.fresh;
+        const pk0 = pf === "agy" ? "gemini" : pf;
+        const named: PoolKey | null = pk0 === "codex" || pk0 === "claude" || pk0 === "gemini" || pk0 === "grok" ? pk0 : null;
+        // 总览档：点名的平台只对总览生效；新的一次打开不论去哪一页都把档放回默认（下次进总览不再停在旧档）
+        const ovNamed = pg === "overview" ? named : null;
+        if (fresh || ovNamed) setProvider((cur) => landingProvider(cur, ovNamed, fresh));
+        if (pg == null) return;
         setNavN((n) => n + 1);
         const reqPf = pf === "codex" || pf === "claude" || pf === "agy" || pf === "grok" ? pf : null;
         if (pg === "requests") {
@@ -138,8 +148,6 @@ export default function App() {
           setDrill(pf); setPage("traffic");
         } else if (pg === "overview") {
           setDrill(null); setPage("overview");
-          const pk = pf === "agy" ? "gemini" : pf;
-          if (pk === "codex" || pk === "claude" || pk === "gemini" || pk === "grok") setProvider(pk);
         } else return;
         void invoke("set_main_visible", { show: true });
       }),

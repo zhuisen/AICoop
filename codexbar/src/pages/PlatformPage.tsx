@@ -15,6 +15,7 @@ import { InfoI, KpiGrid, PLogo, PlatChips, RangeSeg, RefreshAgo } from "../compo
 import { buildKpis, platRows, rangeText } from "../components/tk/tkModel";
 import { MONO, SPR9, tkPal } from "../components/tk/tkPal";
 import { useDirAnim, useWidth, useWinDensity } from "./TrafficPage";
+import { useNumberRoll } from "../hooks/useIntro";
 import "../components/tk/tk.css";
 
 /** 「已省」的标题行写法：≥ $1000 取整到 K（`$53K`），以下取整到元（`$412`）；读不到写 —。 */
@@ -322,6 +323,8 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
   const rangeDays = diffDays(range.s, range.e);
   const isToday = st.preset === "today";
   const anim = useDirAnim(st.preset === "custom" ? `custom:${range.s}:${range.e}` : st.preset);
+  // 数字滚动：同消耗页（换档 / 换平台 / 首份数据到位时滚一次）
+  const roll = useNumberRoll(`${st.preset === "custom" ? `custom:${range.s}:${range.e}` : st.preset}|${pk}|${data ? 1 : 0}`);
   const toastT = useRef(0);
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -456,7 +459,7 @@ export default function PlatformPage({ t, data, raw, cacheMode, prefs, pk, st, s
       <div ref={host} data-platform-scroll style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", overflowX: "hidden",
                                                      display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8 }}>
         {busy && !data && <div style={{ fontSize: 12, color: p.label }}>扫描中…</div>}
-        {data && kpis.length > 0 && <KpiGrid t={t} items={kpis} anim={anim} borderColor={p.border} />}
+        {data && kpis.length > 0 && <KpiGrid t={t} items={kpis} anim={anim} roll={roll} borderColor={p.border} />}
         {!!labels.length && cw > 0 && (
           <div className="tk-dir" style={{ position: "relative", animation: anim?.replace(".22s", ".26s").replace("both", ".03s both") }}>
             <TkArea t={t} width={cw} height={CH} labels={labels} layers={layers} fmt={(n) => fmtTokL(n, L)} unit="token"

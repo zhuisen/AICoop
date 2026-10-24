@@ -98,7 +98,7 @@ class TheCardsDropTheBadge(unittest.TestCase):
 PROBE_ACTIVE = """() => { const on = [...document.querySelectorAll('[data-provtab]')]
   .filter(e => e.dataset.active === '1');
   return { active: on.map(e => e.dataset.provtab), n: document.querySelectorAll('[data-provtab]').length,
-           saved: localStorage.getItem('codexbar_provider') }; }"""
+           saved: sessionStorage.getItem('codexbar_provider') }; }"""
 WRAP = """() => { const T = window.__TAURI_INTERNALS__; const orig = T.invoke.bind(T); window.__calls = [];
   T.invoke = (c, a, o) => { window.__calls.push([c, JSON.stringify(a ?? null)]); return orig(c, a, o); }; }"""
 
@@ -113,7 +113,7 @@ def _drive(nav, keys):
     with sync_playwright() as p:
         br = p.chromium.launch(executable_path=CHROME, headless=True, args=["--use-mock-keychain"])
         ctx = br.new_context(viewport={"width": 1200, "height": 800})
-        ctx.add_init_script("localStorage.setItem('codexbar_provider', 'codex')")
+        ctx.add_init_script("sessionStorage.setItem('codexbar_provider', 'codex')")
         pg = ctx.new_page()
         pg.goto(f"{HARNESS}?nav={nav}", timeout=30000)
         pg.wait_for_timeout(2200)

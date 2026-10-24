@@ -61,6 +61,8 @@ interface Settings {
   tpsTray: boolean;
   trayStyle: TrayStyle;
   intro: boolean;
+  /** 数字滚动（用户 2026-10-24 单独一个开关，放在入场动效下面）：KPI 数字从 0 滚到实际值、菜单栏在跑时 t/s 逐位滚动。 */
+  numberRoll: boolean;
   autoRefresh: boolean;
   /** 空闲托盘（AICoop P11 §7）：空闲时菜单栏画 AI 图标（true）还是原来的文字标题（false）。 */
   idleIcons: boolean;
@@ -91,6 +93,7 @@ const DEFAULTS: Settings = {
   tpsTray: true,             // 「在跑时显示 t/s」默认**开**(交接包 page 1)。关 = 托盘始终是额度标题
   trayStyle: "full",         // 默认沿用现状,不动老用户的菜单栏
   intro: true,               // 入场动效默认开。关掉是**完全不播**,不是播快一点
+  numberRoll: true,          // 数字滚动默认开（v2.0.0 改版前一直在滚，那次重写把它弄丢了）
   autoRefresh: true,         // 后台自动保鲜默认**开**(现有行为)。关掉只停后台心跳,
                              // 「打开页面/弹出托盘就刷新」照旧 —— 见 useTraffic 的 autoRefreshEnabled()
   idleIcons: true,           // P11 §7 默认「AI 图标」；文字标题四档仍在（选它时 `trayStyle` 生效）
@@ -440,9 +443,20 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
           </div>
         </OneLineRow>
         {/* ★ 动效开关（用户 2026-08-16）。关掉＝**完全不播**，不是播快一点 —— 与 `prefers-reduced-motion` 同语义。 */}
-        <OneLineRow t={t} label="入场动效" desc="图表揭开、数字滚动"
+        <OneLineRow t={t} label="入场动效" desc="图表揭开、指标上浮"
                     title="打开「Token 消耗」页时，7 个指标依次上浮、平台卡片随后出现。关掉后直接到位（系统里开了「减弱动态效果」时本来就不播）。">
           <Toggle t={t} on={s.intro} onClick={() => update({ intro: !s.intro })} />
+        </OneLineRow>
+        {/* ★ 数字滚动（用户 2026-10-24「数字动效也没了，需要新增，并在设置处理」→ 单独新开关，放在入场动效下面）。
+            v2.0.0 消耗页重写（`1f12bb3`）把 KPI 的 0→实际值滚动删了，「入场动效」的说明却还写着「数字滚动」（四方评审 4/4）。
+            管两处：主窗口 KPI（`useNumberRoll`）· 菜单栏在跑胶囊的逐位滚动（Rust `set_number_roll`，启动时 App.tsx 重发）。 */}
+        <OneLineRow t={t} label="数字滚动" desc="指标从 0 滚到实际值；菜单栏 t/s 逐位滚动"
+                    title="打开「Token 消耗」或平台页、换时间档时，指标数字从 0 滚到实际值；菜单栏在跑时 t/s 变化逐位滚动。关掉后直接显示（系统里开了「减弱动态效果」时本来就不滚）。">
+          <Toggle t={t} on={s.numberRoll} attrs={{ "data-number-roll-toggle": "" }} onClick={() => {
+            const next = !s.numberRoll;
+            update({ numberRoll: next });
+            invoke("set_number_roll", { on: next }).catch(() => {});
+          }} />
         </OneLineRow>
       </SGroup>
 
