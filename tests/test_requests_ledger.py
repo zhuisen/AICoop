@@ -912,10 +912,6 @@ class AgyBulkResponsesAreEstimates(unittest.TestCase):
         self.assertIsNone(RQ._day_stats([{"tps": 20.0, "est": True}])["avg_tps"], "没有实测行 ⇒ null，不拿估值顶")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SinceReturnsOnlyTheTail(Base):
     """增量（用户 2026-10-23「增量显示，而不是再全量加载」）：`--since` 只回那之后（含余量）的行，汇总仍按全量算。"""
 
@@ -932,3 +928,7 @@ class SinceReturnsOnlyTheTail(Base):
         near = RQ.build_json(time.time(), 2, since=newest)
         self.assertIn(newest, [r["t_end"] for r in near["requests"]], "since 那一刻的行（含余量）要回")
         self.assertLess(len(near["requests"]) + 0, len(full["requests"]) + 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
