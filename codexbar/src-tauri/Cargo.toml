@@ -62,3 +62,7 @@ block2 = "0.6"
 # ★ 刘海光晕的「谁在跑」：FSEvents 推送，不轮询。Claude Code 加子 agent 有约 8000 个会话文件，
 #   每 2s 挨个 stat 一遍要约 50 ms（2026-10-18 实测），事件驱动时空闲不扫任何文件。只用 macOS 后端。
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+
+[dev-dependencies]
+# 托盘位图的像素闸（`tray_pill.rs::near_glow_is_visible`）解 PNG 用；已在依赖树里（0.17.16）
+png = "0.17"

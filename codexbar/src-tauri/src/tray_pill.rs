@@ -1187,18 +1187,6 @@ pub mod draw {
             let y = (H - IL) / 2.0 + l.lift;   // 位图左下原点：上跳 = y 变大
             save();
             scale_about(x + IL / 2.0, y + IL / 2.0, l.scale);
-            // 光晕：平台色 50%，径向渐变到透明
-            if l.glow > 0.001 {
-                let c = rgb(GLOW_RGB[l.logo]);
-                let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
-                let g: *mut AnyObject = msg_send![g, initWithStartingColor: color(c, 0.5 * l.glow * la), endingColor: color(c, 0.0)];
-                if let Some(g) = Retained::<AnyObject>::from_raw(g) {
-                    let cx = x + IL / 2.0;
-                    let cy = y + IL / 2.0;
-                    let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
-                        toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
-                }
-            }
             {
                 // 镂空：destination-out（NSCompositingOperationDestinationOut = 8）按不透明度擦掉已画的像素，画完改回 source-over（2）
                 let c = NSRect::new(NSPoint::new(x + IL / 2.0 - BACKING_R, y + IL / 2.0 - BACKING_R), NSSize::new(2.0 * BACKING_R, 2.0 * BACKING_R));
@@ -1208,6 +1196,20 @@ pub mod draw {
                 let _: () = msg_send![color((0.0, 0.0, 0.0), la), setFill];
                 let _: () = msg_send![p, fill];
                 let _: () = msg_send![gc, setCompositingOperation: 2usize];
+            }
+            // 光晕：平台色 50%，径向渐变到透明。★ 必须画在镂空**之后**：先画再擦，半径 10 的镂空会把半径 14 的光晕吃掉大半
+            //   （2026-10-22 加镂空时顺序放反了，靠近光晕从此看不见；用户 2026-10-24「靠近亮光没了」）
+            if l.glow > 0.001 {
+                let c = rgb(GLOW_RGB[l.logo]);
+                let g: *mut AnyObject = msg_send![class!(NSGradient), alloc];
+                let g: *mut AnyObject = msg_send![g, initWithStartingColor: color(c, 0.5 * l.glow * la), endingColor: color(c, 0.0)];
+                if let Some(g) = Retained::<AnyObject>::from_raw(g) {
+                    let cx = x + IL / 2.0;
+                    let cy = y + IL / 2.0;
+                    // 从圆心起亮（同 10-21 原稿样张：Codex 的 `>_` 透出平台色）；从镂空边缘起亮会出一圈硬边，试过、否了
+                    let _: () = msg_send![&*g, drawFromCenter: NSPoint::new(cx, cy), radius: 0.0f64,
+                        toCenter: NSPoint::new(cx, cy), radius: GLOW_D / 2.0, options: 0usize];
+                }
             }
             let lr = NSRect::new(NSPoint::new(x, y), NSSize::new(IL, IL));
             // 灰色剪影（整只），再盖上「还剩的那部分」原色
@@ -1804,6 +1806,45 @@ mod tests {
 
     /// 空闲托盘（P11）样张：TCC 挡截屏，托盘像素只能离线画出来看。
     /// 运行：`cargo test --lib render_idle_samples -- --ignored --nocapture`
+    /// 渲染空闲托盘（3 家）并返回 RGBA 像素（宽, 高, 数据）。
+    #[cfg(target_os = "macos")]
+    fn idle_pixels(near: bool, ap: Appearance) -> (u32, u32, Vec<u8>) {
+        use crate::tray_idle::{IdleAnim, IdleIn};
+        let s = |logo, rem: Option<f64>| IdleIn { logo, remaining: rem, red: false };
+        let mut ia = IdleAnim::new();
+        ia.retarget(&[s(0, Some(67.0)), s(1, Some(40.0)), s(2, Some(86.0))], 0.0);
+        if near { ia.set_near(true, 0.0); }
+        ia.step(0.5);
+        let idle = ia.frame(0.5);
+        let mut a = Anim::new();
+        a.idle_bg = true;
+        let mut f = a.frame(0.5);
+        f.width = idle.width;
+        let png = draw::render(&f, ap, false, &TitleLayer::Idle(&idle)).expect("render");
+        let dec = png::Decoder::new(std::io::Cursor::new(png));
+        let mut r = dec.read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size()];
+        let info = r.next_frame(&mut buf).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        buf.truncate(info.buffer_size());
+        (info.width, info.height, buf)
+    }
+
+    /// ★ 靠近光晕真的画得出来（用户 2026-10-24「靠近亮光没了」）。2026-10-22 加镂空时把光晕画在了镂空**之前**，
+    /// 半径 10 的镂空把半径 11 的光晕擦得只剩一圈 < 9% 的边 —— 代码、开关、轮询线程全在，位图里就是没有。
+    /// 判据看像素：靠近比不靠近多出来的不透明度，要占到整张图的可观比例。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn near_glow_is_visible() {
+        for ap in [Appearance::Dark, Appearance::Light] {
+            let (w, h, off) = idle_pixels(false, ap);
+            let (_, _, on) = idle_pixels(true, ap);
+            let added: f64 = off.chunks(4).zip(on.chunks(4)).map(|(a, b)| (b[3] as f64 - a[3] as f64).max(0.0) / 255.0).sum();
+            let frac = added / (w as f64 * h as f64);
+            assert!(frac > 0.08, "{ap:?}: 靠近只多出 {:.1}% 的不透明度 —— 光晕被镂空擦掉了或太小", frac * 100.0);
+        }
+    }
+
     #[test]
     #[ignore]
     #[cfg(target_os = "macos")]

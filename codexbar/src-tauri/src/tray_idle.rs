@@ -35,8 +35,9 @@ pub const PAD_L: f64 = 1.0;
 pub const PAD_R: f64 = 3.0;
 /// 灰色剪影的不透明度（画板 `ghostOp: .3`）。
 pub const GHOST_ALPHA: f64 = 0.3;
-/// 光晕：平台色 50%，直径 22 pt（P11_Spec §4「鼠标靠近」）。
-pub const GLOW_D: f64 = 22.0;
+/// 光晕：平台色 50%（P11_Spec §4「鼠标靠近」）。稿里是 14 pt logo 配 22 pt 光晕；logo 放大到 18 后按同比例放大到 ≈28 ——
+/// 仍用 22 的话光晕只比 logo 多出 2 pt、那一圈不透明度 < 9%，等于看不见（2026-10-24）。上下超出 22 pt 高的部分被托盘裁掉。
+pub const GLOW_D: f64 = 22.0 * LOGO / 14.0;
 /// 红点 #FF8A73，直径 4.5 pt、描边 1 pt #2C333F、右上角各外伸 2 pt（画板 9px / 2px / -4px，2×）。
 pub const DOT_D: f64 = 4.5;
 pub const DOT_RGB: (u8, u8, u8) = (0xFF, 0x8A, 0x73);
