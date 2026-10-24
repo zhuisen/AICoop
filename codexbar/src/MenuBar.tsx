@@ -243,9 +243,12 @@ export default function MenuBar() {
   useIdleTray(inUseAcct, trafficRaw, prefs, running.length > 0);
 
   // ★ 托盘弹出时按新鲜度重扫。30s 的阈值比定时器的 2 分钟更紧:用户主动点开就是想看现在的数。
+  // ★ 刘海卡片展开(`notch-shown`)同理:刘海自己不扫,靠这个常驻 webview 代扫 —— 否则菜单栏和主窗
+  //   都没打开时,刘海的「今日」会一直停在上一次扫描(2026-10-21 实测停了 40 分钟)。
   useEffect(() => {
-    const un = listen("menubar-shown", () => { refreshIfStale(30_000); });
-    return () => { void un.then((f) => f()); };
+    const uns = [listen("menubar-shown", () => { refreshIfStale(30_000); }),
+                 listen("notch-shown", () => { refreshIfStale(30_000); })];
+    return () => { uns.forEach((u) => { void u.then((f) => f()); }); };
   }, [refreshIfStale]);
 
   const setTab = useCallback((v: Tab) => {

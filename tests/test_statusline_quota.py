@@ -345,6 +345,17 @@ class ReadPicksTheFresherSource(_Tmp):
                          ("plan-usage-history", NOW, 12))
         self.assertIsNone(c["seven_day"])
 
+    def test_plan_usage_older_than_its_window_is_expired(self):
+        """Claude.app 记录没有重置时间：比窗口还老的读数一定属于已重置的旧窗口，不能当现值。"""
+        pp = self.plan([{"t": NOW * 1000, "org": "o1", "u": {"fh": 62, "sd": 8}}])
+        c = self.read(now=NOW + 5 * 3600 - 1, plan_path=pp)["claude"]
+        self.assertEqual((c["five_hour"]["expired"], c["seven_day"]["expired"]), (False, False))
+        c = self.read(now=NOW + 5 * 3600, plan_path=pp)["claude"]
+        self.assertEqual((c["five_hour"]["used_pct"], c["five_hour"]["expired"]), (62, True))
+        self.assertFalse(c["seven_day"]["expired"])
+        c = self.read(now=NOW + 7 * 86400, plan_path=pp)["claude"]
+        self.assertEqual((c["seven_day"]["used_pct"], c["seven_day"]["expired"]), (8, True))
+
     def test_expired_window_is_flagged_not_zeroed(self):
         self.ingest("claude", claude_payload({"used_percentage": 70, "resets_at": NOW + 60}))
         w = self.read(now=NOW + 61)["claude"]["five_hour"]
