@@ -38,7 +38,8 @@ TRAP = """(cfg) => {
 PROBE = """() => { const t = document.querySelector('[data-notch-toggle]');
   if (!t) return null;
   const row = t.parentElement;
-  return { desc: row.firstElementChild.textContent, knob: getComputedStyle(t.firstElementChild).transform,
+  const on = t.querySelector('[aria-pressed="true"]');
+  return { desc: row.firstElementChild.textContent, knob: on ? on.dataset.segOpt : null,
            calls: window.__notchCalls }; }"""
 
 
@@ -58,7 +59,7 @@ def _run(cfg, click=False):
         before = pg.evaluate(PROBE)
         after = None
         if click and before:
-            pg.click("[data-notch-toggle]")
+            pg.click('[data-notch-toggle] [data-seg-opt="notch"]')
             pg.wait_for_timeout(500)
             after = pg.evaluate(PROBE)
         br.close()
@@ -66,7 +67,7 @@ def _run(cfg, click=False):
 
 
 NO_NOTCH = {"active": False, "reason": "no_notch"}
-OFF_KNOB = "matrix(1, 0, 0, 1, 0, 0)"   # translateX(0)；开 = translateX(16px)
+OFF_KNOB = "menubar"   # 2026-10-24 起是「显示位置」菜单栏 / 刘海屏二选一；刘海关 = 选菜单栏
 
 
 @unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
@@ -76,7 +77,7 @@ class TheNotchRowSaysWhatIsOnScreen(unittest.TestCase):
         if r == "skip":
             self.skipTest("harness 3304 没起 —— skip 不是绿")
         before, after = r
-        self.assertIsNotNone(before, "★ 前提：设置页里真的有「刘海屏版本」那一行")
+        self.assertIsNotNone(before, "★ 前提：设置页里真的有「显示位置」那一行")
         return before, after
 
     def test_a_mac_without_a_notch_sees_the_row_off_and_told_why(self):

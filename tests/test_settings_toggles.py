@@ -55,9 +55,11 @@ class TheThreeRowsExistWithTheirDefaults(unittest.TestCase):
         self.s = code_only(SETTINGS)
 
     def test_rows(self):
-        for lab in ('label="外观"', 'label="刘海屏版本"', 'label="在跑时显示 t/s"'):
+        for lab in ('label="外观"', 'label="显示位置"', 'label="在跑时显示 t/s"'):
             self.assertEqual(self.s.count(lab), 1, lab)
-        self.assertNotIn('label="刘海额度条"', self.s, "旧名字已被「刘海屏版本」取代")
+        # 2026-10-24「刘海屏版本」开关换成「显示位置」菜单栏 / 刘海屏二选一（用户：不能同时出现两个）
+        for old in ('label="刘海额度条"', 'label="刘海屏版本"'):
+            self.assertNotIn(old, self.s, "旧名字已被「显示位置」取代")
 
     def test_defaults(self):
         d = block(self.s, "const DEFAULTS: Settings = {", "};")
@@ -75,7 +77,7 @@ class TheThreeRowsExistWithTheirDefaults(unittest.TestCase):
         self.assertIn('JSON.parse(localStorage.getItem(KEY) || "{}")', load)
         self.assertIn("return { ...DEFAULTS, ...raw };", load,
                       "存过的值盖默认值 ⇒ 旧设置里没有 tpsTray 时按默认开，有 notchHud 时沿用")
-        row = block(self.s, 'label="刘海屏版本"', "</OneLineRow>")
+        row = block(self.s, 'label="显示位置"', "</OneLineRow>")
         self.assertIn('invoke<NotchStatus>("set_notch_hud", { on: next })', row)
         self.assertIn("update({ notchHud: next })", row)
 
@@ -169,7 +171,8 @@ PROBE = """() => {
   const rows = [...document.querySelectorAll('[data-tps-toggle],[data-notch-toggle],[data-theme-row]')]
     .map(e => e.parentElement.firstElementChild.firstElementChild.textContent);
   let st = null; try { st = JSON.parse(localStorage.getItem('codexbar_settings')); } catch (e) {}
-  return { tps: knob('[data-tps-toggle]'), notch: knob('[data-notch-toggle]'), light: pick('light'), dark: pick('dark'),
+  const seg = (sel) => { const t = document.querySelector(sel + ' [aria-pressed="true"]'); return t ? t.dataset.segOpt : null; };
+  return { tps: knob('[data-tps-toggle]'), notch: seg('[data-notch-toggle]'), light: pick('light'), dark: pick('dark'),
            rows, calls: window.__calls, settings: st, theme: localStorage.getItem('codexbar_theme'),
            lightRoot: !!document.querySelector('.cb-light'), titlePick: document.querySelectorAll('[data-tauri-drag-region] [data-theme-pick]').length };
 }"""
@@ -211,14 +214,14 @@ class OnTheRealBundle(unittest.TestCase):
         if r == "skip":
             self.skipTest("harness 3304 没起 —— skip 不是绿")
         before, after = r
-        self.assertEqual(sorted(before["rows"]), sorted(["外观", "刘海屏版本", "在跑时显示 t/s"]),
+        self.assertEqual(sorted(before["rows"]), sorted(["外观", "显示位置", "在跑时显示 t/s"]),
                          "★ 前提：三行真的渲染出来了")
         return before, after
 
     def test_fresh_install_defaults(self):
         b, _ = self._get({})
         self.assertEqual(b["tps"], ON, "t/s 默认开")
-        self.assertEqual(b["notch"], OFF, "刘海屏版本默认关")
+        self.assertEqual(b["notch"], "menubar", "显示位置默认菜单栏（= 刘海关）")
         self.assertEqual((b["light"], b["dark"]), ("0", "1"), "默认深色")
         self.assertEqual(calls(b, "set_tps_tray"), [{"enabled": True}], "★★ 启动重发一次，Rust 才会出胶囊")
         self.assertEqual(calls(b, "set_notch_hud"), [], "默认关 ⇒ 启动不建刘海窗口")
@@ -226,7 +229,7 @@ class OnTheRealBundle(unittest.TestCase):
 
     def test_a_v1_11_user_keeps_the_notch_on(self):
         b, _ = self._get({"seed": {"notchHud": True}})
-        self.assertEqual(b["notch"], ON, "★ 旧键 notchHud 的「开」沿用")
+        self.assertEqual(b["notch"], "notch", "★ 旧键 notchHud 的「开」沿用 = 显示位置选刘海屏")
         self.assertEqual(calls(b, "set_notch_hud"), [{"on": True}], "启动时替他重新建窗")
         self.assertEqual(calls(b, "set_tps_tray"), [{"enabled": True}], "旧设置里没有 tpsTray ⇒ 默认开")
 

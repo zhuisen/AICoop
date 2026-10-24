@@ -1,5 +1,5 @@
 import { fullVersion, isWindowsUI } from "../helpers";
-import { NOTCH_DESC, notchRowDesc, notchRowWarn, type NotchStatus } from "../notchSegs";
+import { notchRowDesc, notchRowWarn, surfaceDesc, type NotchStatus } from "../notchSegs";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -447,19 +447,23 @@ export default function SettingsPage({ t, theme, onTheme }: { t: Theme; theme: T
       </SGroup>
 
       <SGroup t={t} id="menubar" title="菜单栏与刘海" note="托盘相关的设置都在这里">
-        {/* ★ 刘海屏版本（交接包 2026-10-19 DECISIONS「刘海屏版本」；取代 PR #1 的「刘海额度条」，开关与存储键沿用）。
+        {/* ★ 显示位置：菜单栏 / 刘海屏 **只能二选一**（用户 2026-10-24；选刘海屏 =「整个托盘图标都藏起来」）。
+            存储键与命令沿用刘海屏版本的 `notchHud` / `set_notch_hud`：刘海屏 = 开，菜单栏 = 关。藏托盘在 Rust `notch.rs::sync_tray`：
+            只在刘海窗口真的在时藏 —— 没有刘海屏（外接屏 / 合盖）或建窗失败，托盘照样显示，否则 app 没有入口。
             开 = Rust 建窗口 + 装鼠标监听，关 = 销毁窗口。启动时由 App.tsx 再应用一次。Windows 没有刘海，整行不画。
-            ★ 开着但没显示 ⇒ 第二行说出原因（`notchRowWarn`）。S1 的「显示位置」多选要能隐藏托盘图标 —— 没有后端（PLAN 43），仍是开关。 */}
+            ★ 选了刘海屏但没显示 ⇒ 第二行说出原因（`notchRowWarn`）。 */}
         {!win && (
-        <OneLineRow t={t} label="刘海屏版本" desc={NOTCH_DESC} warn={notchRowWarn(s.notchHud, notchSt, notchErr)}
+        <OneLineRow t={t} label="显示位置" desc={surfaceDesc(s.notchHud)} warn={notchRowWarn(s.notchHud, notchSt, notchErr)}
                     title={notchRowDesc(s.notchHud, notchSt, notchErr)}>
-          <Toggle t={t} on={s.notchHud} attrs={{ "data-notch-toggle": "" }} onClick={() => {
-            const next = !s.notchHud;
+          <SegSlide t={t} opts={["menubar", "notch"] as const} cur={s.notchHud ? "notch" : "menubar"} attrs={{ "data-notch-toggle": "" }}
+                    label={(v) => (v === "notch" ? "刘海屏" : "菜单栏")} on={(v) => {
+            const next = v === "notch";
+            if (next === s.notchHud) return;
             update({ notchHud: next });
             setNotchErr(null);
             invoke<NotchStatus>("set_notch_hud", { on: next })
               .then((st) => setNotchSt(st ?? null))
-              // ★ 失败就把开关拨回去并说原因 —— 不许出现「开关是开的、屏幕上什么都没有、也没人说为什么」
+              // ★ 失败就拨回去并说原因 —— 不许出现「选的是刘海屏、屏幕上什么都没有、也没人说为什么」
               .catch((e: unknown) => {
                 setS((p) => { const n = { ...p, notchHud: !next }; save(n); return n; });
                 setNotchErr(String(e).slice(0, 120));

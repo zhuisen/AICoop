@@ -70,7 +70,12 @@ export function agySegs(snap: AgySnapshot | null | undefined, off: boolean, noCu
 /** `set_notch_hud` / `notch_status` 的回答（见 `notch.rs::Status`）。 */
 export interface NotchStatus { active: boolean; reason?: string | null }
 
-export const NOTCH_DESC = "有 AI 在跑时刘海四周亮起它的颜色；鼠标靠近刘海展开卡片：在跑 / 今日 / 额度。只在刘海屏上显示，外接屏、合盖时不显示";
+export const NOTCH_DESC = "选刘海屏：有 AI 在跑时刘海四周亮起它的颜色；鼠标靠近刘海展开卡片：在跑 / 今日 / 额度。菜单栏图标藏起来。只在刘海屏上显示，外接屏、合盖时菜单栏图标照常显示";
+
+/** 设置「显示位置」的说明行（菜单栏 / 刘海屏二选一，用户 2026-10-24）。 */
+export function surfaceDesc(notch: boolean): string {
+  return notch ? "只在刘海显示，菜单栏图标藏起来；没有刘海屏时图标自动回来" : "AI 状态显示在菜单栏图标上";
+}
 
 /**
  * 设置页那一行的**第二行**：开关与屏幕对不上时的原因；对得上时 `null`。
@@ -83,7 +88,7 @@ export function notchRowWarn(on: boolean, st: NotchStatus | null, err: string | 
   if (err) return `⚠ 没能打开：${err}`;
   if (st?.reason === "no_notch") {
     return on
-      ? "⚠ 现在没有检测到刘海屏（外接屏 / 合盖），所以没显示；开关已记住，换回带刘海的屏幕后自动出现。"
+      ? "⚠ 现在没有检测到刘海屏（外接屏 / 合盖），菜单栏图标照常显示；换回带刘海的屏幕后刘海自动出现。"
       : "这台 Mac 现在没有刘海屏。";
   }
   return null;

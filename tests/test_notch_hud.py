@@ -289,7 +289,7 @@ class TheSettingsRowTellsTheTruth(unittest.TestCase):
     def test_the_toggle_uses_the_answer_and_rolls_back_on_error(self):
         code = code_only(SETTINGS)
         # ★ 2026-10-19 改名「刘海屏版本」（交接包 DECISIONS）；存储键与命令沿用，见 test_settings_toggles.py。
-        i = code.index('label="刘海屏版本"')
+        i = code.index('label="显示位置"')
         row = code[i:i + 1600]
         self.assertIn("warn={notchRowWarn(s.notchHud, notchSt, notchErr)}", row,
                       "原因单独一行（设置页文字不折行，跟在说明末尾会第一个被省略）")
@@ -336,7 +336,8 @@ class ReviewFindingsStayFixed(unittest.TestCase):
     def test_losing_the_notch_screen_removes_the_window(self):
         """★★ 合盖后层级 26 的窗口原来留在原地，被系统挪到外接屏菜单栏正中（一块黑块）。"""
         rc = self.rs[self.rs.index("fn reconcile("):self.rs.index("fn on_mouse(")]
-        self.assertRegex(rc, r"None => if app\.get_webview_window\(LABEL\)\.is_some\(\) \{ drop_window\(app\); \}")
+        self.assertRegex(rc, r"None => if app\.get_webview_window\(LABEL\)\.is_some\(\) \{ drop_window\(app\); sync_tray\(app, false\); \}",
+                         "★ 刘海屏没了 ⇒ 销毁窗口，并把托盘放回来（显示位置二选一的兜底）")
         self.assertIn("ensure_window(app, &g)", rc, "开盖后要能自己建出来")
         om = self.rs[self.rs.index("fn on_mouse("):self.rs.index("fn install_monitors(")]
         self.assertIn("reconcile(app)", om)
@@ -623,6 +624,30 @@ class ActivityWatcher(unittest.TestCase):
         se = code_only(RS)
         se = se[se.index("pub fn set_enabled("):se.index("pub fn status(")]
         self.assertNotIn("subscribe", se, "不能在 set_enabled 里无条件订阅 —— 没有刘海屏时也会跑")
+
+
+
+class OnlyOneOfMenuBarAndNotch(unittest.TestCase):
+    """设置「显示位置」菜单栏 / 刘海屏二选一（用户 2026-10-24：不能同时出现两个；选刘海屏 =「整个托盘图标都藏起来」）。
+    ★ 兜底：没有刘海屏 / 建窗失败时托盘必须还在，否则 app 一个入口都没有 —— 判据是「刘海窗口真的在」，不是开关。"""
+
+    def setUp(self):
+        self.rs = code_only(RS)
+
+    def test_the_rule_hides_the_tray_only_while_the_notch_window_is_up(self):
+        self.assertRegex(self.rs, r"fn tray_visible\(notch_chosen: bool, notch_window: bool\) -> bool \{ !\(notch_chosen && notch_window\) \}")
+        st = self.rs[self.rs.index("fn sync_tray("):]
+        st = st[:st.index("\n}")]
+        self.assertIn("tray_visible(ENABLED.load(Ordering::SeqCst), notch_window)", st)
+        self.assertRegex(st, r'app\.tray_by_id\("main"\)[^\n]*set_visible\(v\)')
+
+    def test_every_place_the_window_appears_or_goes_resyncs_the_tray(self):
+        se = self.rs[self.rs.index("pub fn set_enabled("):self.rs.index("fn set_enabled_inner(")]
+        self.assertRegex(se, r"let st = set_enabled_inner\(app, on\);\s*sync_tray\(app, matches!\(st, Ok\(Status \{ active: true, \.\. \}\)\)\);",
+                         "开 / 关都按结果同步：没刘海屏时 active=false ⇒ 托盘留着")
+        rc = self.rs[self.rs.index("fn reconcile("):self.rs.index("fn on_mouse(")]
+        self.assertIn("drop_window(app); sync_tray(app, false);", rc, "合盖 / 拔屏 ⇒ 托盘回来")
+        self.assertRegex(rc, r"let ok = ensure_window\(app, &g\)\.is_ok\(\);\s*sync_tray\(app, ok\);", "开盖 ⇒ 建窗成功才藏托盘")
 
 
 if __name__ == "__main__":

@@ -542,10 +542,12 @@ fn reconcile(app: &AppHandle) {
     let before = cached();
     let now = geometry();
     match now {
-        None => if app.get_webview_window(LABEL).is_some() { drop_window(app); },
+        // 刘海屏没了 / 又回来了 ⇒ 托盘跟着显示 / 藏起（二选一的兜底）
+        None => if app.get_webview_window(LABEL).is_some() { drop_window(app); sync_tray(app, false); },
         Some(g) => {
             if app.get_webview_window(LABEL).is_none() {
-                let _ = ensure_window(app, &g);
+                let ok = ensure_window(app, &g).is_ok();
+                sync_tray(app, ok);
             } else if before != Some(g) {
                 place(app, OPEN.load(Ordering::SeqCst));
                 let _ = app.emit_to(LABEL, "notch-geom", g);
@@ -636,6 +638,12 @@ fn remove_monitors() {
 /// ★ 监听**无论有没有刘海屏都装**：合盖时打开、之后开盖，下一次鼠标移动就由 `reconcile` 把窗口建出来。
 /// ★ 调用方是**同步**命令（Tauri 2 的同步命令在主线程跑），这里要读 NSScreen、直接操作 NSWindow。
 pub fn set_enabled(app: &AppHandle, on: bool) -> Result<Status, String> {
+    let st = set_enabled_inner(app, on);
+    sync_tray(app, matches!(st, Ok(Status { active: true, .. })));
+    st
+}
+
+fn set_enabled_inner(app: &AppHandle, on: bool) -> Result<Status, String> {
     ENABLE_GEN.fetch_add(1, Ordering::SeqCst);
     ENABLED.store(on, Ordering::SeqCst);
     if !on {
@@ -650,6 +658,17 @@ pub fn set_enabled(app: &AppHandle, on: bool) -> Result<Status, String> {
     };
     ensure_window(app, &g)?;
     Ok(Status { active: true, reason: None })
+}
+
+/// 托盘图标显不显示。设置「显示位置」菜单栏 / 刘海屏只能二选一（用户 2026-10-24「整个托盘图标都藏起来」）：
+/// 选了刘海屏 **且刘海窗口此刻真的在** ⇒ 藏起托盘；没有刘海屏（外接屏 / 合盖）或建窗失败 ⇒ 托盘照样显示 ——
+/// 否则 app 一个入口都没有。判据看窗口在不在，不看开关：开关开着不等于屏幕上有东西。
+/// `notch_window` 由调用方给（刚建好 / 刚销毁）—— `destroy()` 之后窗口不一定立刻从 `get_webview_window` 里消失。
+fn tray_visible(notch_chosen: bool, notch_window: bool) -> bool { !(notch_chosen && notch_window) }
+
+fn sync_tray(app: &AppHandle, notch_window: bool) {
+    let v = tray_visible(ENABLED.load(Ordering::SeqCst), notch_window);
+    if let Some(t) = app.tray_by_id("main") { let _ = t.set_visible(v); }
 }
 
 /// 设置页打开时问一句「现在有没有刘海屏」，不改任何状态（主线程）。
@@ -704,6 +723,13 @@ pub fn set_panel_height(app: &AppHandle, h: f64, idle: bool, w: Option<f64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tray_hides_only_while_the_notch_window_is_up() {
+        assert!(!tray_visible(true, true), "选了刘海屏且刘海在 ⇒ 托盘藏起（二选一）");
+        assert!(tray_visible(true, false), "★ 选了刘海屏但没有刘海屏 / 建窗失败 ⇒ 托盘照样显示，否则没有入口");
+        assert!(tray_visible(false, false), "选了菜单栏 ⇒ 托盘显示");
+        assert!(tray_visible(false, true), "开关已关、窗口还没销毁完 ⇒ 仍显示托盘");
+    }
     fn air13() -> Notch {
         Notch { left: 646.0, width: 179.0, height: 32.0, top: 0.0, primary_h: 956.0, screen_x: 0.0, screen_w: 1470.0 }
     }
