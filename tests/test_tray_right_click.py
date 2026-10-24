@@ -27,8 +27,8 @@ class RightClickOpensTheOverview(unittest.TestCase):
 
     def test_the_right_click_hides_the_popover_then_opens_the_overview(self):
         f = _fn("on_tray_right_click")
-        self.assertIn('app.emit("open-main-page", serde_json::json!({ "page": "overview" }))', f,
-                      "走与菜单栏 / 刘海同一条跳转")
+        self.assertIn('app.emit("open-main-page", serde_json::json!({ "page": "overview", "platform": "codex" }))', f,
+                      "★ 走与菜单栏 / 刘海同一条跳转，且固定落在 Codex 档（用户 2026-10-24），不停在上次那一档")
         self.assertLess(f.index('get_webview_window("menubar")'), f.index('app.emit("open-main-page"'), "弹窗开着先收起")
 
     def test_the_double_click_judge_is_gone(self):

@@ -2593,13 +2593,14 @@ fn place_popover(
 }
 
 /// 右键托盘图标 = 打开工作台总览（用户 2026-10-24「双击打开工作台，更改为鼠标右键」，取代 10-23 的双击）。
-/// 左键照旧只开 / 收菜单栏弹窗。弹窗若开着先收起；走 `open-main-page`（与菜单栏 / 刘海同一条跳转），
-/// 不带平台 ⇒ 停在总览当前那一档。
+/// 左键照旧只开 / 收菜单栏弹窗。弹窗若开着先收起；走 `open-main-page`（与菜单栏 / 刘海同一条跳转）。
+/// ★ 固定落在 Codex 档（用户 2026-10-24「为什么右键都去到 gemini 的总览？而不是默认的 codex」）——
+///   不带平台时会停在上次那一档，用户上次停在 Gemini 就总是回 Gemini。
 fn on_tray_right_click(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("menubar") {
         let _ = w.hide();
     }
-    let _ = app.emit("open-main-page", serde_json::json!({ "page": "overview" }));
+    let _ = app.emit("open-main-page", serde_json::json!({ "page": "overview", "platform": "codex" }));
 }
 
 fn toggle_menubar(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
