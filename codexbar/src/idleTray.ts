@@ -1,7 +1,8 @@
 /**
  * 空闲托盘「选谁上菜单栏」（AICoop 交接包 2026-10-21 · `11_idle/P11_Spec` §2，`P11_Final` ①）。
  *
- * ★ 零 import：测试用 `node --experimental-strip-types` 直接加载（CI 没有 node_modules，见 CLAUDE.md §4）。
+ * ★ 不 import 任何包：测试用 `node --experimental-strip-types` 直接加载（CI 没有 node_modules，见 CLAUDE.md §4）；
+ *   同目录的纯 TS 文件带 `.ts` 后缀 import 可以（同 `notchIdle.ts`）。
  *
  * 规则（逐条照稿）：
  *   · 位数：默认 3 家 = 常驻 2 + 动态 1；可改 2 家（只有常驻）。
@@ -16,6 +17,8 @@
  *     这里仍按「多个就取最紧」算，未接入额度或读不到 ⇒ 整只灰色剪影（`remaining = null`）。
  *   · 告警：剩余 < 10% 时右上角红点（判「显示的整数」，与 `LOW_PCT` 同口径）。
  */
+
+import { claudeNow, type ClaudeWin } from "./mbLogic.ts";
 
 export type RankBy = "requests" | "tokens";
 export type SlotKind = "resident" | "dynamic" | "insert";
@@ -117,12 +120,12 @@ export function mergeFrozen(keep: readonly string[], resident: readonly string[]
 }
 
 /**
- * Claude 的一个窗口此刻的剩余：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口 ⇒ 未知（读数 5 分钟才更新一次）。
+ * Claude 的一个窗口此刻的剩余：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口。规则在 `mbLogic.claudeNow`：
+ * 5h 传了周窗口且周额度还有余额 ⇒ 100%（未启动），否则未知（读数 5 分钟才更新一次）。
  * ★ 空闲托盘与刘海共用这一个判据（全方面评审 §9：刘海原来直接用 `rem`，过了重置点仍显示旧窗口、旧的 5% 还会告警）。
  */
-export function claudeRem(w: { idle?: boolean; resetsAt: number | null; rem: number | null } | null | undefined, now: number): number | null {
-  if (!w) return null;
-  return !w.idle && w.resetsAt !== null && w.resetsAt * 1000 <= now ? null : w.rem;
+export function claudeRem(w: ClaudeWin | null | undefined, now: number, week?: ClaudeWin | null): number | null {
+  return claudeNow(w, now, week)?.rem ?? null;
 }
 
 /** 托盘认得的六家（顺序 = Rust `tray_idle::KEYS`）。别的平台没有托盘 logo，不参与。 */

@@ -5,7 +5,7 @@ import { fmtEta, type Account } from "../helpers";
 import type { PlatformPrefs, TrafficData } from "../traffic";
 import { agyResetText, agyShown, agyWinRows, type AgySnapshot } from "../agy";
 import { grokLastGoodRemPct, grokRemPct, type GrokSnapshot } from "../grok";
-import { parseClaudeQuota, type ClaudeQuota } from "../mbLogic";
+import { claudeNow, parseClaudeQuota, type ClaudeQuota } from "../mbLogic";
 import { useAgyPool } from "./useAgyPool";
 import { getSettings, IDLE_TRAY_EVENT } from "../pages/SettingsPage";
 import { dayKey, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, panelCells, pickIdleSlots, shouldRerank, TRAY_KEYS, trayPayload, usageOf,
@@ -150,7 +150,9 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     const live = inUse && inUse.status !== "dead" ? inUse : null;
     // 大数字固定是 5h：没有 5h 窗口 ⇒ 写 —，不拿周窗口顶替（倒计时也会跟着换了含义）
     const w5 = live ? live.windows.find((w) => w.mins === 300) : undefined;
-    const c5 = claudeRem(claude?.fiveH, now);
+    // 5h 过了重置点、空闲没新读数：周额度还有余额 ⇒ 100% 未启动（用户 2026-10-26），不再写「—」
+    const c5w = claudeNow(claude?.fiveH, now, claude?.week ?? null);
+    const c5 = c5w?.rem ?? null;
     const a5 = agyWinRows(agyQuota).find((r) => r.label === "5h");
     const g = grok?.accounts[0];
     const gNow = g ? grokRemPct(g) : null;
@@ -168,7 +170,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     // 面板大数字 = 5h 剩余；grok 只有周窗口 ⇒ 用周。右上角：5h 倒计时（grok 是周）；按量计费（Kimi / DeepSeek）不写
     const main: Record<string, [number | null, string]> = {
       codex: [w5?.pct ?? null, w5 ? w5.reset : ""],
-      claude: [c5, c5 === null || !claude?.fiveH ? "" : claude.fiveH.idle ? "未启动" : fmtEta(claude.fiveH.resetsAt ?? undefined)],
+      claude: [c5, !c5w ? "" : c5w.idle ? "未启动" : fmtEta(c5w.resetsAt ?? undefined)],
       // ★ 倒计时走 `agyResetText`（与总览 AgyCard 同一个真源）：窗口没启动时它说「未启动」，
       //   直接 fmtEta 会画出一个跟着「现在」滑、永远走不到 0 的 ↻4h59m（复查 B3）。
       agy: [a5?.remaining ?? null, a5?.reset_at ? agyResetText(a5).text : ""],
@@ -181,7 +183,7 @@ export function useIdleTray(inUse: Account | undefined, traffic: TrafficData | n
     // agy 的 5h 行是沿用的旧读数（`seen_at`：这次没返回这个桶）⇒ 同样降一级灰（同刘海 / AgyCard，复查 B7）
     const stale: Record<string, boolean> = { agy: agyStale || a5?.seen_at != null, grok: gNow === null && gRem !== null };
     // ★ Codex 也按真实重置时刻藏（全方面评审 §8，三方一致：原来恒 null ⇒ 一律 5 h）；窗口没锚定 ⇒ null ⇒ 5 h
-    mainReset.current = { codex: w5?.resetsAtSec ?? null, claude: claude?.fiveH && !claude.fiveH.idle ? claude.fiveH.resetsAt : null,
+    mainReset.current = { codex: w5?.resetsAtSec ?? null, claude: c5w && !c5w.idle ? c5w.resetsAt : null,
                           agy: a5?.reset_at ?? null, grok: gPeriodEnd ?? null };
     return TRAY_KEYS.filter((k) => !!traffic?.platforms[k] || !prefs.by[k]?.off).map((k) => {
       const [m, r] = main[k] ?? [null, ""];

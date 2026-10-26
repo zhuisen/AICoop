@@ -368,7 +368,9 @@ class NotchClaudeExpiresAtReset(unittest.TestCase):
         s = code(SRC / "NotchHud.tsx")
         body = s[s.index("function claudeWin("):]
         body = body[:body.index("\n}")]
-        self.assertIn("claudeRem(w, Date.now())", body)
+        self.assertIn("claudeNow(w, Date.now(), week)", body)
+        self.assertIn("claudeWin(claudeQ?.fiveH ?? null, st, claudeQ?.week ?? null)", s)
+        self.assertIn("claudeNow(claude?.fiveH, now, claude?.week ?? null)", code(SRC / "hooks" / "useIdleTray.ts"))
 
     def test_collapsed_notch_reads_claude_without_a_timer(self):
         """§9 存疑（核实成立）：原来只在展开时读 ⇒ 没展开过时 Claude <10% 光晕不变红。"""

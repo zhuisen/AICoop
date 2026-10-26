@@ -17,12 +17,12 @@ import * as HL from "./tpsHoverLogic";
 import * as C from "./notchCard";
 import PlatformLogo, { logoSrc } from "./components/PlatformLogo";
 import { compactUSD } from "./components/MenuBarToday";
-import { parseClaudeQuota, isStale, type ClaudeQuota, type ClaudeWin } from "./mbLogic";
+import { claudeNow, parseClaudeQuota, isStale, type ClaudeQuota, type ClaudeWin } from "./mbLogic";
 import { grokLastGoodRemPct, grokQuotaVisible, grokRemPct, type GrokSnapshot } from "./grok";
 import { applyCacheMode, applyPlatformPrefs, colorOf, fmtTok, todayView, type TrafficData } from "./traffic";
 import { fmtUSD } from "./rates";
 import { dayKeys, dayMetrics, filterPlatform, parsePayload, rowsForDay, PLATFORM_ORDER as REQ_ORDER, todayStartSec } from "./requests";
-import { claudeRem, IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
+import { IDLE_PANEL_EVENT, IDLE_PANEL_WANT, type IdlePanelData } from "./idleTray";
 import * as NI from "./notchIdle";
 import NotchIdleGrid from "./components/NotchIdleGrid";
 import "./notch.css";
@@ -77,12 +77,12 @@ function winsFromSegs(segs: NotchSeg[], prefix: string): { w5: C.QWin; ww: C.QWi
   return { w5: pick("5h"), ww: pick("周") };
 }
 
-function claudeWin(w: ClaudeWin | null, stale: boolean): C.QWin {
+function claudeWin(w: ClaudeWin | null, stale: boolean, week?: ClaudeWin | null): C.QWin {
   if (!w) return { pct: null, refill: "—", title: "这一格读不到 —— 跑一次 Claude Code 后会补上" };
-  // ★ 过了重置点 ⇒ 那个读数属于旧窗口，写「—」不写旧数（同空闲托盘 `claudeRem`）
-  const rem = claudeRem(w, Date.now());
-  if (rem === null && w.rem !== null) return { pct: null, refill: "—", title: "重置点已过，等下一次读数" };
-  return { pct: rem, refill: w.idle ? "未启动" : w.resetsAt ? fmtEta(w.resetsAt) : "—", stale };
+  // ★ 过了重置点 ⇒ 那个读数属于旧窗口，不写旧数（同空闲托盘 `claudeRem`）：5h 在周额度还有余额时写 100% 未启动，否则写「—」
+  const v = claudeNow(w, Date.now(), week);
+  if (!v) return { pct: null, refill: "—", title: "重置点已过，等下一次读数" };
+  return { pct: v.rem, refill: v.idle ? "未启动" : v.resetsAt ? fmtEta(v.resetsAt) : "—", stale };
 }
 
 export default function NotchHud() {
@@ -301,7 +301,7 @@ export default function NotchHud() {
     }
     if (!isOff("claude")) {
       const st = !!claudeQ && isStale(claudeQ.capturedAt, nowSec);
-      out.push({ key: "claude", name: "本机", w5: claudeWin(claudeQ?.fiveH ?? null, st), ww: claudeWin(claudeQ?.week ?? null, st) });
+      out.push({ key: "claude", name: "本机", w5: claudeWin(claudeQ?.fiveH ?? null, st, claudeQ?.week ?? null), ww: claudeWin(claudeQ?.week ?? null, st) });
     }
     const agy = agySegs(agyShownSnap, isOff("agy"), agyPool.accounts.length > 0 && !agyCur);
     if (agy.length) {

@@ -157,6 +157,25 @@ class LogoFillIsTheFiveHourWindow(unittest.TestCase):
         self.assertEqual(cl[0]["remaining"], 99, "★ logo 水位应是 5h 剩余 99，不是周 67")
 
 
+
+@unittest.skipIf(not Path(CHROME).exists(), "没有 Chrome")
+class ClaudeIdleIsNotADash(unittest.TestCase):
+    """用户 2026-10-26「claude 空闲状态时显示 — 的问题」：5h 过了重置点、之后**没有任何新读数**（Claude 空闲的真实形状，
+    夹具 `claudeq=idlenoread`），周额度还有余额 ⇒ 托盘水位与面板格子都是 100「未启动」，不是 —。"""
+    def test_tray_and_panel_show_full_not_started(self):
+        r = _open("harness-menubar.html?w=352&claudeq=idlenoread", {"idlePinned": ["claude"]}, ())
+        if r is None:
+            self.skipTest("harness 3304 没起 —— skip 不是绿")
+        cl = [x for x in last(r[0], "set_idle_tray")["slots"] if x["key"] == "claude"]
+        self.assertEqual(len(cl), 1, "★ 前提：Claude 上了托盘")
+        self.assertEqual(cl[0]["remaining"], 100, "★★ 托盘 logo 水位：空闲时 5h 是 100，不是灰（null）")
+        panel = [c["a"]["payload"] for c in r[0] if c["c"] == "plugin:event|emit" and c["a"]["event"] == "idle-panel"]
+        self.assertTrue(panel, "★ 前提：菜单栏发过面板格子")
+        cell = [x for x in panel[-1]["cells"] if x.get("key") == "claude"]
+        self.assertEqual(len(cell), 1, "★ 前提：面板里有 Claude 格")
+        self.assertEqual(cell[0]["main"], 100, "★★ 面板大数字：空闲时写 100，不写 —")
+        self.assertIn("未启动", cell[0]["reset"])
+
 class SettingsRows(unittest.TestCase):
     def test_text_style_row_only_in_text_mode_and_the_change_is_broadcast(self):
         def to_text(pg):

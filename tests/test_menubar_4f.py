@@ -185,10 +185,29 @@ class ClaudeQuotaParse(unittest.TestCase):
         self.assertEqual(got["week"], {"rem": 4, "resetsAt": 9000})
 
     def test_reset_window_without_a_later_reading_stays_unknown(self):
-        """★ 重置后没有任何新读数 ⇒ 证不了它没被别处用掉，仍是「读不到」，不编一个满额。"""
+        """★ 重置后没有任何新读数、周额度也读不到 / 用完 ⇒ 仍是「读不到」，不编一个满额。"""
         got = node("[1500, 1000].map(c => m.parseClaudeQuota({claude:{source:'statusline',captured_at:c,"
                    "five_hour:{used_pct:56,resets_at:1500,expired:true}}}).fiveH)")
         self.assertEqual(got, [None, None])
+        got = node("m.parseClaudeQuota({claude:{source:'statusline',captured_at:1000,"
+                   "five_hour:{used_pct:56,resets_at:1500,expired:true},seven_day:{used_pct:100,resets_at:9000}}}).fiveH")
+        self.assertIsNone(got, "周额度用完 ⇒ 5h 不能写满")
+
+    def test_idle_5h_with_weekly_left_is_full(self):
+        """用户 2026-10-26：Claude 空闲（重置后没新读数）、周额度还有余额 ⇒ 5h 写 100% 未启动，不写「—」。"""
+        got = node("m.parseClaudeQuota({claude:{source:'statusline',captured_at:1000,"
+                   "five_hour:{used_pct:56,resets_at:1500,expired:true},seven_day:{used_pct:72,resets_at:9000}}})")
+        self.assertEqual(got["fiveH"], {"rem": 100, "resetsAt": None, "idle": True})
+        self.assertEqual(got["week"], {"rem": 28, "resetsAt": 9000})
+
+    def test_claude_now_at_render_time(self):
+        """读数没标 expired、但此刻已过 5h 重置点（菜单栏空闲时的真实形状）：周有余额 ⇒ 100% 未启动；周用完 / 过期 / 没传 ⇒ null。"""
+        got = node("[[{rem:96,resetsAt:1000},{rem:28,resetsAt:9000}], [{rem:96,resetsAt:1000},{rem:0,resetsAt:9000}],"
+                   " [{rem:96,resetsAt:1000},{rem:28,resetsAt:1500}], [{rem:96,resetsAt:1000},null],"
+                   " [{rem:96,resetsAt:3000},{rem:28,resetsAt:9000}]].map(([w,k]) => m.claudeNow(w, 2000*1000, k))"
+                   ".concat([m.claudeNow({rem:96,resetsAt:1000}, 2000*1000)])")
+        self.assertEqual(got, [{"rem": 100, "resetsAt": None, "idle": True}, None, None, None,
+                               {"rem": 96, "resetsAt": 3000}, None])
 
     def test_idle_window_says_not_started_on_every_surface(self):
         for f in ("codexbar/src/components/mb/ClaudeRow.tsx", "codexbar/src/NotchHud.tsx",
@@ -327,6 +346,11 @@ class TheBundleRenders(unittest.TestCase):
         self.assertIn("78%", t, "周剩余应为 100 − 22")
         self.assertNotIn("37%", t, "★★ 画成了已用")
         self.assertNotIn("切换", t)
+
+    def test_idle_claude_row_says_full_not_a_dash(self):
+        """用户 2026-10-26：Claude 空闲（5h 过了重置点、之后没新读数）、周还有余额 ⇒ 菜单栏 Claude 行 5h 写 100% 未启动。"""
+        t = text(dom("&mbplat=claude&claudeq=idlenoread"))
+        self.assertRegex(t, r"5h 100% ↻\s?未启动 周 78%", "★★ 空闲时 5h 不该是 —")
 
     def test_claude_unreadable_says_so(self):
         none = dom("&mbplat=claude&claudeq=none")

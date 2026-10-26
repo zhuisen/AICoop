@@ -215,7 +215,9 @@ const toSec = (v: unknown): number | null => {
   return v > 1e12 ? Math.floor(v / 1000) : v;
 };
 
-function claudeWin(w: unknown, capturedAt: number | null): ClaudeWin | null {
+const IDLE_FULL: ClaudeWin = { rem: 100, resetsAt: null, idle: true };
+
+function claudeWin(w: unknown, capturedAt: number | null, weekLeft = false): ClaudeWin | null {
   if (!w || typeof w !== "object") return null;
   const o = w as Record<string, unknown>;
   const used = o.used_pct;
@@ -223,13 +225,31 @@ function claudeWin(w: unknown, capturedAt: number | null): ClaudeWin | null {
   // ★ 窗口已过重置时刻：那个「已用」属于旧窗口，不能当现值（statusline_quota 标了 `expired`）。
   //   重置点之后又有一份状态栏读数（`capturedAt` 晚于重置点）却没再报这个窗口 ⇒ Claude Code 自己说
   //   「没有在走的窗口」，即未启动、剩 100%（实测 2026-10-19：重置后 Claude Code 不带 five_hour，
-  //   下一次请求后才带回 `used 0`）。重置后没有任何新读数 ⇒ 证不了，仍是「读不到」（同 codex
-  //   `test_expired_reset_without_a_fresh_reading_is_not_zero` 那条）。
+  //   下一次请求后才带回 `used 0`）。
+  //   重置后没有新读数（Claude 空闲时就是这样）：周额度还有余额 ⇒ 5h 也按 100% 未启动显示（用户 2026-10-26：
+  //   空闲时菜单栏写「—」要解决）。只管显示——选号器不读这里，`test_quota_never_fabricated` 那条不变量不受影响。
   if (o.expired === true) {
     const rs = toSec(o.resets_at);
-    return rs != null && capturedAt != null && capturedAt > rs ? { rem: 100, resetsAt: null, idle: true } : null;
+    return (rs != null && capturedAt != null && capturedAt > rs) || weekLeft ? IDLE_FULL : null;
   }
   return { rem: Math.max(0, Math.min(100, 100 - used)), resetsAt: toSec(o.resets_at) };
+}
+
+/** 周窗口此刻还有余额（读数没过重置点且剩 > 0；周窗口刚重置过也算）。读不到 ⇒ false。 */
+export function claudeWeekLeft(week: ClaudeWin | null | undefined, nowSec: number): boolean {
+  if (!week) return false;
+  if (week.idle) return true;
+  return week.rem > 0 && (week.resetsAt == null || week.resetsAt > nowSec);
+}
+
+/**
+ * Claude 的一个窗口此刻的值：读数之后又过了重置点 ⇒ 那个「已用」属于旧窗口。
+ * 传了周窗口（只给 5h 传）且周额度还有余额 ⇒ 100% 未启动（用户 2026-10-26）；否则未知（null）。
+ */
+export function claudeNow(w: ClaudeWin | null | undefined, now: number, week?: ClaudeWin | null): ClaudeWin | null {
+  if (!w) return null;
+  if (w.idle || w.resetsAt === null || w.resetsAt * 1000 > now) return w;
+  return week !== undefined && claudeWeekLeft(week, Math.floor(now / 1000)) ? IDLE_FULL : null;
 }
 
 /** 读不到 / 形状不对 ⇒ null（「读不到」，界面写 —，绝不当 0）。 */
@@ -244,11 +264,12 @@ export function parseClaudeQuota(raw: unknown): ClaudeQuota | null {
   const r = c as Record<string, unknown>;
   const src = r.source === "statusline" || r.source === "plan-usage-history" ? r.source : "none";
   const cap = toSec(r.captured_at);
+  const week = claudeWin(r.seven_day, cap);
   return {
     source: src,
     capturedAt: cap,
-    fiveH: claudeWin(r.five_hour, cap),
-    week: claudeWin(r.seven_day, cap),
+    fiveH: claudeWin(r.five_hour, cap, claudeWeekLeft(week, cap ?? 0)),
+    week,
   };
 }
 
