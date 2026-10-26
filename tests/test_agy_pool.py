@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -601,12 +602,56 @@ class TheQuotaComesFromTheSummaryEndpoint(unittest.TestCase):
                          "★★ 「成员最多的那组是 gemini」那条猜测又回来了")
 
     def test_the_required_headers_are_still_sent(self):
-        """★★ 只带 Bearer → **403**（实测）。换端点**不换**这三个头。"""
+        """★★ 只带 Bearer → **403**（实测）。换端点**不换**这几个头。
+        User-Agent 不再写在 ANTIGRAVITY_HEADERS 里（它带 agy 版本号，动态拼），
+        所以这里核的是 `_antigravity_headers()` —— 它把 UA 拼回去。"""
         for h in ("User-Agent", "X-Goog-Api-Client", "Client-Metadata"):
             with self.subTest(header=h):
                 self.assertIn(h, self.SRC)
         i = self.SRC.index("def fetch_quota(")
-        self.assertIn("**ANTIGRAVITY_HEADERS", self.SRC[i:i + 1600], "★ 请求没带那三个头")
+        self.assertIn("**_antigravity_headers()", self.SRC[i:i + 1600], "★ 请求没带那几个头")
+
+    def test_the_user_agent_carries_the_live_agy_version_not_a_hardcoded_one(self):
+        """★★★ 2026-10-26：Google 后端按 `antigravity/cli/<版本号>` 的**版本号**过滤额度组 ——
+        版本太旧 ⇒ 整个 Gemini 组被悄悄丢掉（实测 `cli/1.4.7` 回、`cli/1.0.0` 不回）。
+        这正是 B88「摘要不回 Gemini 组」的真因：不是 Google 删了组，是我们 UA 过期。
+        ★ 所以版本号必须**从 agy 二进制现取**（`agy --version`），绝不写死 ——
+        写死一个会随 agy 自动更新而过期，与原来硬编码 1.11.5 同一个坑。
+        ★ 取不到版本 ⇒ 退回旧 2 段 UA（不比改动前更差）。"""
+        store = Path(tempfile.mkdtemp()); tf = store / "t.json"
+        m = _load_pool(store, tf)
+
+        class Done:
+            def __init__(self, out): self.stdout = out
+
+        with mock.patch.object(m, "_bin_sig", lambda: "sigA"), \
+                mock.patch.object(m.subprocess, "run", lambda *a, **k: Done("9.9.9\n")):
+            m._UA_CACHE.clear()
+            # agy 报自己的版本 ⇒ UA 带那个版本，且是 /cli/ 三段形态
+            self.assertEqual(m.agy_ua(), "antigravity/cli/9.9.9")
+            self.assertEqual(m._antigravity_headers()["User-Agent"], "antigravity/cli/9.9.9")
+            self.assertNotIn("windows/amd64", m.agy_ua(), "★★ UA 还带着写死的旧串")
+
+        # 版本变了（agy 自动更新）⇒ 必须重取，不吃旧缓存
+        with mock.patch.object(m, "_bin_sig", lambda: "sigB"), \
+                mock.patch.object(m.subprocess, "run",
+                                  lambda *a, **k: Done("agy version 2.0.0 (darwin/arm64)")):
+            self.assertEqual(m.agy_ua(), "antigravity/cli/2.0.0", "★ 二进制签名变了却没重取版本")
+
+        # 取不到版本（agy 跑不起来）⇒ 退回旧 UA，不抛
+        def boom(*a, **k): raise FileNotFoundError()
+        with mock.patch.object(m, "_bin_sig", lambda: "sigC"), \
+                mock.patch.object(m.subprocess, "run", boom):
+            m._UA_CACHE.clear()
+            self.assertEqual(m.agy_ua(), m._UA_FALLBACK)
+
+    def test_no_hardcoded_cli_version_in_the_source(self):
+        """★★ 源码里不许出现写死的 `antigravity/cli/<版本号>` —— 那会复现 1.11.5 过期的坑。
+        兜底串 `_UA_FALLBACK` 是 2 段旧形态，不含 `/cli/`，不算。"""
+        import re as _re
+        code = _re.sub(r"#[^\n]*", "", _re.sub(r'"""[\s\S]*?"""', "", self.SRC))
+        self.assertIsNone(_re.search(r'cli/\d', code),
+                          "★★ 源码写死了 cli 版本号 ⇒ agy 更新后 UA 就过期")
 
     def test_an_empty_groups_list_is_treated_as_failure(self):
         """★★★ 200 但没有 `groups` = 上游形状变了，**当失败处理**。

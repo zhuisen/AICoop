@@ -115,12 +115,47 @@ MODELS_PATH = "/v1internal:fetchAvailableModels"
 #:   `strings` 里挖出来的，与本地 RPC `…/RetrieveUserQuotaSummary` 并列摆着。
 #:   见 `fetch_quota` 的说明 —— 它推翻了本仓「周窗口非当值号读不到」那个结论。
 QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary"
-#: ★★ 这三个头是**必需**的，不是装饰：只带 Bearer 会 403（2026-09-13 实测）。
+#: ★★ 这几个头是**必需**的，不是装饰：只带 Bearer 会 403（2026-09-13 实测）。
+#: User-Agent 不在这里 —— 它要带 agy 的真实版本号，走 `_antigravity_headers()` 动态拼。
 ANTIGRAVITY_HEADERS = {
-    "User-Agent": "antigravity/1.11.5 windows/amd64",
     "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
     "Client-Metadata": '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
 }
+
+#: 兜底 UA（取不到 agy 版本时用）。2 段、会丢 Gemini 组，但 `/usage` 报告与 5h-from-models 兜底仍在，
+#: 不比动态化之前更差。
+_UA_FALLBACK = "antigravity/1.11.5 windows/amd64"
+_UA_CACHE = {}
+
+
+def agy_ua():
+    """agy 的 User-Agent：`antigravity/cli/<version>`，**版本号动态取自 agy 自己**（`agy --version`，
+    按二进制签名记一次；agy 自动更新换了二进制就重取）。
+
+    ★★★ Google 后端按 `antigravity/cli/<version>` 的**版本号**过滤额度组：版本太旧 ⇒ 整个
+      `Gemini Models` 组被悄悄丢掉（2026-10-26 判别实测：`cli/1.4.7` 回 Gemini、`cli/1.0.0` 不回；
+      `/cli/` 这一段也必需，旧的 2 段 `antigravity/1.11.5 windows/amd64` 同样被过滤）。
+      这正是 B88「摘要不再回 Gemini 组」的真因 —— **不是 Google 删了组，是我们的 UA 过期了**，
+      又一次「只看默认响应就断言接口没能力 = 假阴性」（CLAUDE.md §6）。
+    ★ 所以**绝不写死版本号**：写死一个会随 agy 自动更新而过期的版本，与 OAuth client 缓存同一类坑。
+    ★ 取不到版本（agy 跑不起来）⇒ 退回 `_UA_FALLBACK`，不比改动前差。"""
+    sig = _bin_sig()
+    if _UA_CACHE.get("sig") == sig and _UA_CACHE.get("ua"):
+        return _UA_CACHE["ua"]
+    ua = _UA_FALLBACK
+    try:
+        out = subprocess.run([str(AGY_BIN), "--version"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"\d+\.\d+\.\d+", out.stdout or "")
+        if m:
+            ua = "antigravity/cli/%s" % m.group(0)
+    except Exception:                                 # noqa: BLE001 — 取不到就用兜底
+        pass
+    _UA_CACHE.update(sig=sig, ua=ua)
+    return ua
+
+
+def _antigravity_headers():
+    return {"User-Agent": agy_ua(), **ANTIGRAVITY_HEADERS}
 TIMEOUT = 25
 
 #: 低于这个剩余比例就该换号（自动切的阈值）。
@@ -679,7 +714,7 @@ def fetch_quota(access_token):
         c = HTTPSConnection(QUOTA_API_HOST, timeout=TIMEOUT)
         c.request("POST", QUOTA_SUMMARY_PATH, body="{}",
                   headers={"Authorization": "Bearer " + access_token,
-                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
+                           "Content-Type": "application/json", **_antigravity_headers()})
         r = c.getresponse()
         raw = r.read()
         c.close()
@@ -743,7 +778,7 @@ def _gemini_5h_from_models(access_token):
         c = HTTPSConnection(QUOTA_API_HOST, timeout=TIMEOUT)
         c.request("POST", MODELS_PATH, body="{}",
                   headers={"Authorization": "Bearer " + access_token,
-                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
+                           "Content-Type": "application/json", **_antigravity_headers()})
         r = c.getresponse()
         raw = r.read()
         c.close()
@@ -827,7 +862,7 @@ def fetch_tier(access_token):
                       "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED",
                       "pluginType": "GEMINI"}}),
                   headers={"Authorization": "Bearer " + access_token,
-                           "Content-Type": "application/json", **ANTIGRAVITY_HEADERS})
+                           "Content-Type": "application/json", **_antigravity_headers()})
         r = c.getresponse()
         raw = r.read()
         c.close()
