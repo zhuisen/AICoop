@@ -379,14 +379,23 @@ def cmd_quota(args):
 
     def _fetch(item):
         sub, a = item
-        due = report_on and _usage_report_due(a, sub == live_sub, activity)
-        # ★★ 要跑报告就先把 token 刷到够新：agy 拿到快到期的 token 会自己刷、再写钥匙串，
-        #   临时 HOME 里没有钥匙串 ⇒ 弹「Keychain Not Found」（2026-10-18 实测，见 `USAGE_TOKEN_MIN`）。
-        cred, err = _refresh_one(sub, a, pool, skew=USAGE_TOKEN_MIN if due else 120)
+        cred, err = _refresh_one(sub, a, pool)
         if err:
             return sub, a, None, err, True
         groups, err = P.fetch_quota(cred["token"]["access_token"])
         _maybe_tier(a, cred)
+        # ★★ 报告只是兜底（2026-10-26）：UA 修好后摘要本身就回 Gemini 周，有就不起 12s 的 agy 子进程。
+        #   摘要缺周 / 读失败时才跑。
+        due = (report_on and not P.has_gemini_weekly(groups)
+               and _usage_report_due(a, sub == live_sub, activity))
+        if due:
+            # ★★ 要跑报告就先把 token 刷到够新：agy 拿到快到期的 token 会自己刷、再写钥匙串，
+            #   临时 HOME 里没有钥匙串 ⇒ 弹「Keychain Not Found」（2026-10-18 实测，见 `USAGE_TOKEN_MIN`）。
+            fresh, ferr = _refresh_one(sub, a, pool, skew=USAGE_TOKEN_MIN)
+            if ferr:
+                due = False
+            else:
+                cred = fresh
         # ★★ B88：Gemini 周只有 agy 自己的 `/usage` 给得出。每个号在**自己的临时 HOME** 里跑
         #   （钥匙串查不到 ⇒ agy 读我们写的兜底文件），不碰真钥匙串，号与号之间不抢槽 ⇒ 可以并行。
         if due and not tripped:

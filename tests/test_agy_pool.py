@@ -298,7 +298,7 @@ class FailureNeverRendersAsZero(unittest.TestCase):
         """⚠️ 窗口从 1200 放宽到函数体全长（2026-09-15）：换端点后 docstring 变长，
         固定长度切片把真正的 `return` 切在外面了 —— 那是**定长切片**的老坑
         （`CLAUDE.md` §7.-1 第 3 条：定长切片会滑出被测范围）。改成切到下一个 `def`。"""
-        i = self.SRC.index("def fetch_quota(")
+        i = self.SRC.index("def _summary_once(")
         seg = self.SRC[i:self.SRC.index("\ndef ", i + 10)]
         # 2026-10-15：非 200 的说明改成带 reason/链接的 `QuotaErr`（仍是 str），
         #   行为闸在 `tests/test_agy_quota_403_reason.py::FetchQuotaCarriesTheStructure`。
@@ -587,7 +587,7 @@ class TheQuotaComesFromTheSummaryEndpoint(unittest.TestCase):
 
     def test_it_calls_the_summary_endpoint(self):
         self.assertIn('QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary"', self.SRC)
-        i = self.SRC.index("def fetch_quota(")
+        i = self.SRC.index("def _summary_once(")
         self.assertIn("QUOTA_SUMMARY_PATH", self.SRC[i:i + 1600],
                       "★★★ fetch_quota 没用那个能拿到周窗口的端点")
 
@@ -608,7 +608,7 @@ class TheQuotaComesFromTheSummaryEndpoint(unittest.TestCase):
         for h in ("User-Agent", "X-Goog-Api-Client", "Client-Metadata"):
             with self.subTest(header=h):
                 self.assertIn(h, self.SRC)
-        i = self.SRC.index("def fetch_quota(")
+        i = self.SRC.index("def _summary_once(")
         self.assertIn("**_antigravity_headers()", self.SRC[i:i + 1600], "★ 请求没带那几个头")
 
     def test_the_user_agent_carries_the_live_agy_version_not_a_hardcoded_one(self):
@@ -659,7 +659,7 @@ class TheQuotaComesFromTheSummaryEndpoint(unittest.TestCase):
         静默返回空会被上层画成"额度全是 0" —— 而 0 是"用光了"的合法值，
         用户没有第二个办法分辨。这条降级契约换端点也不能松。
         """
-        i = self.SRC.index("def fetch_quota(")
+        i = self.SRC.index("def _summary_once(")
         seg = self.SRC[i:i + 2200]
         self.assertIn("if not groups:", seg, "★★★ 空 groups 没有当失败处理")
 

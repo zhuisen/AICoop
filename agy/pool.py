@@ -690,26 +690,55 @@ def parse_google_error(raw):
     return reason, msg, url
 
 
-def fetch_quota(access_token):
-    """-> (额度摘要的 `groups` 列表, 错误说明)。
+#: 每次取额度读几次摘要（2026-10-26 实测：后端两套副本约各占一半，见 `merge_min_groups`）。
+SUMMARY_READS = 3
 
-    ★★★ 走 `retrieveUserQuotaSummary`，**不再走 `fetchAvailableModels`**（2026-09-15）。
-      后者每个号只回 2 个桶（一个 5h、一个 `resetTime=None` 的不限量），**没有周窗口**；
-      前者按账号返回完整摘要（`gemini-weekly` / `gemini-5h` / `3p-weekly` / `3p-5h`），
-      而且**与本机 loopback RPC 同形同源** —— 前端那套 `AgySnapshot` 可以直接吃。
 
-    ⚠️ 在这之前本仓一直写着「周窗口只有本机 RPC 有，非当值号结构性读不到」——
-      **那是错的**。它建立在"`fetchAvailableModels` 只回 5h"这**一个**观测上，
-      而从来没去找过第二个端点。正是 `CLAUDE.md` §6 那条最贵的错：
-      **只看默认响应就断言"接口没有这个能力" = 假阴性**。
-      端点是从 `agy` 二进制里 `strings` 出来的，与本地 RPC 方法名并列摆着。
+def merge_min_groups(reads):
+    """几次摘要读数 → 一份：**每个桶取剩余最低的那次**（各桶独立取）。不改输入。
 
-    ★ 顺带干掉一个启发式：旧实现按 `(remainingFraction, resetTime)` 分桶、再"按成员数最多
-      的那组是 gemini"来猜组名。新端点自带 `displayName` 与 `bucketId`，**组名不再靠猜**。
-
-    ★ 失败返回 `(None, 说明)`；**绝不返回空结构** —— 空会被上层当成"额度是 0"，
-      而 0 是"用光了"的合法值。这条降级契约一个字没变。
+    ★★★ 为什么要合并（2026-10-26 实测，`tests/test_agy_quota_replica_denoise.py` 文首）：
+      同一个号连读 15 次、期间没用 agy，Gemini 读数在两套值之间交替（tomyhuohuo
+      5h 92.22 / 周 78.95 ↔ 5h 92.03 / 周 79.36，重置时间逐字相同）。两套不是一新一旧——
+      一套 5h 低周高，另一套反过来 ⇒ 后端两个副本计数不一致（B81）。只读一次 ⇒ 每次刷新
+      随机落到一套上，界面就来回跳；agy 自己的 statusline 读的是同一后端，也一样跳。
+    ★ 取最低：哪套是真的分不出；固定重置的窗口里剩余只降不升，较低那份至少不会把已花掉的
+      额度算回来，也与选号的低水位方向一致。读数是真读回来的，不是编的。
+    ★ 缺 `remainingFraction` = 0（proto3 省略零值），参与取最低。
     """
+    def f(b):
+        v = b.get("remainingFraction")
+        return float(v) if isinstance(v, (int, float)) else 0.0
+
+    out = json.loads(json.dumps(reads[0]))
+    for groups in reads[1:]:
+        for g in groups:
+            name = g.get("displayName")
+            mine = next((x for x in out if x.get("displayName") == name), None)
+            if mine is None:
+                out.append(json.loads(json.dumps(g)))
+                continue
+            bs = mine.setdefault("buckets", [])
+            for b in g.get("buckets") or []:
+                bid = b.get("bucketId")
+                if not bid:
+                    continue
+                i = next((k for k, x in enumerate(bs) if x.get("bucketId") == bid), None)
+                if i is None:
+                    bs.append(json.loads(json.dumps(b)))
+                elif f(b) < f(bs[i]):
+                    bs[i] = json.loads(json.dumps(b))
+    return out
+
+
+def has_gemini_weekly(groups):
+    """摘要里有没有 Gemini 周那个桶（桶在、数缺也算有 —— 缺 = 0）。"""
+    return any(b.get("bucketId") == "gemini-weekly"
+               for g in groups or [] if str(g.get("displayName", "")).lower().startswith("gemini")
+               for b in g.get("buckets") or [])
+
+
+def _summary_once(access_token):
     try:
         c = HTTPSConnection(QUOTA_API_HOST, timeout=TIMEOUT)
         c.request("POST", QUOTA_SUMMARY_PATH, body="{}",
@@ -737,13 +766,42 @@ def fetch_quota(access_token):
         # ★ 200 但没有分组 = 上游形状变了。**当失败处理** —— 静默返回空会被画成
         #   "额度全是 0"，而那是一个看着很合理的谎。
         return None, "额度响应里没有 groups（上游形状可能变了）"
+    return groups, ""
+
+
+def fetch_quota(access_token):
+    """-> (额度摘要的 `groups` 列表, 错误说明)。
+
+    ★★★ 走 `retrieveUserQuotaSummary`，**不再走 `fetchAvailableModels`**（2026-09-15）。
+      后者每个号只回 2 个桶（一个 5h、一个 `resetTime=None` 的不限量），**没有周窗口**；
+      前者按账号返回完整摘要（`gemini-weekly` / `gemini-5h` / `3p-weekly` / `3p-5h`），
+      而且**与本机 loopback RPC 同形同源** —— 前端那套 `AgySnapshot` 可以直接吃。
+
+    ⚠️ 在这之前本仓一直写着「周窗口只有本机 RPC 有，非当值号结构性读不到」——
+      **那是错的**。它建立在"`fetchAvailableModels` 只回 5h"这**一个**观测上，
+      而从来没去找过第二个端点。正是 `CLAUDE.md` §6 那条最贵的错：
+      **只看默认响应就断言"接口没有这个能力" = 假阴性**。
+      端点是从 `agy` 二进制里 `strings` 出来的，与本地 RPC 方法名并列摆着。
+
+    ★★ 并行读 `SUMMARY_READS` 次、按桶取最低（`merge_min_groups`，2026-10-26）。
+      部分失败用成功的那几次；全失败才返回第一次的错误。
+
+    ★ 失败返回 `(None, 说明)`；**绝不返回空结构** —— 空会被上层当成"额度是 0"，
+      而 0 是"用光了"的合法值。这条降级契约一个字没变。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=SUMMARY_READS) as ex:
+        reads = list(ex.map(lambda _: _summary_once(access_token), range(SUMMARY_READS)))
+    good = [g for g, _ in reads if g]
+    if not good:
+        return None, reads[0][1]
+    groups = merge_min_groups(good)
     if not any(str(g.get("displayName", "")).lower().startswith("gemini") for g in groups):
-        # ★★ 2026-10-16 05:06 起摘要对每个号都不再回 Gemini 组（换 UA / 元数据 / project / 用 agy 自己的
-        #   token 都一样，2026-10-17 复测）。5h 从模型端点补；**周没有云端来源**：当值号由
-        #   `agy-rotate` 跑 agy 自己的 `/usage` 报告补（B88，见 `groups_from_usage_report`），
-        #   其余号交给 `carry_missing_groups` 沿用并标龄。补的失败不影响摘要本身。
-        # ⚠️ 生产 host 的周（B83）已停用：2026-10-17 实测它停在**上一个窗口**的旧账
-        #   （剩 38.7%、reset 10-21），agy 自己报的是剩 98.1%、reset 10-24 —— 见 B88。
+        # ★★ 摘要缺 Gemini 组 ⇒ 5h 从模型端点补；周交给 `agy-rotate` 的 `/usage` 兜底（B88）
+        #   与 `carry_missing_groups` 沿用并标龄。补的失败不影响摘要本身。
+        # ⚠️ 更正（2026-10-26）：B88 记的「10-16 起摘要不再回 Gemini 组」是**假阴性** ——
+        #   真因是我们写死的旧 UA，Google 按 UA 里的版本号过滤（见 `agy_ua`）。这条分支留作兜底。
+        # ⚠️ 生产 host 的周（B83）已停用：2026-10-17 实测它停在**上一个窗口**的旧账。
         g5 = _gemini_5h_from_models(access_token)
         if g5:
             groups = list(groups) + [g5]
@@ -906,7 +964,7 @@ def carry_missing_groups(old_groups, old_at, new_groups, now=None):
         return nb
 
     by_name = {str(g.get("displayName")): i for i, g in enumerate(new_groups or [])}
-    out = [dict(g) for g in new_groups or []]
+    out = [dict(g, buckets=_hold_small_rises(old_groups, g)) for g in new_groups or []]
     for g in old_groups or []:
         i = by_name.get(str(g.get("displayName")))
         if i is None:
@@ -917,6 +975,40 @@ def carry_missing_groups(old_groups, old_at, new_groups, now=None):
         extra = [carried(b) for b in g.get("buckets") or [] if b.get("bucketId") not in have]
         if extra:
             out[i] = dict(out[i], buckets=list(out[i].get("buckets") or []) + extra)
+    return out
+
+
+#: 同一窗口里回升不到这么多 = 副本抖动，沿用上次（2026-10-26 实测副本差最大 0.66pp，n=4 号）。
+RISE_TOL = 0.01
+
+
+def _hold_small_rises(old_groups, g):
+    """新读数这一组的桶：同一 resetTime 内比上次回升 < `RISE_TOL` 的，数字沿用上次（返回新列表，不改输入）。
+
+    ★★ 为什么（2026-10-26）：`fetch_quota` 已读 3 次取最低，但 3 次仍可能全落到同一副本 ——
+      真跑 8 轮，samyhuohuo 的桶 3/16 次在两套值间跳（副本约 11:4）。跨刷新再压一层。
+    ★ 两种假说下都成立：窗口固定 ⇒ 剩余本就只降不升，回升全是噪声；窗口其实滚动恢复 ⇒
+      ≥ 1pp 的回升照常放行，被压住的不到 1pp。新窗口（resetTime 变了）不压。
+    """
+    def num(b):
+        v = b.get("remainingFraction")
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    prev = {}
+    for og in old_groups or []:
+        if str(og.get("displayName")) == str(g.get("displayName")):
+            for b in og.get("buckets") or []:
+                if b.get("bucketId"):
+                    prev[b["bucketId"]] = b
+    out = []
+    for b in g.get("buckets") or []:
+        o = prev.get(b.get("bucketId"))
+        nv, ov = num(b), (num(o) if o else None)
+        rs_new, rs_old = _iso_ts(b.get("resetTime")), _iso_ts((o or {}).get("resetTime"))
+        if (nv is not None and ov is not None and rs_new is not None and rs_old is not None
+                and abs(rs_new - rs_old) <= 60 and 0 < nv - ov < RISE_TOL):
+            b = dict(b, remainingFraction=ov)
+        out.append(b)
     return out
 
 

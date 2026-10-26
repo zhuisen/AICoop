@@ -160,6 +160,7 @@ class EachAccountGetsItsOwnReport(unittest.TestCase):
         cli.P = types.SimpleNamespace(
             load=lambda: self.pool,
             fetch_quota=lambda token: (json.loads(json.dumps(CLOUD)), ""),
+            has_gemini_weekly=P.has_gemini_weekly,
             quota_by_group=P.quota_by_group,
             carry_missing_groups=lambda old, at, new, now=None: new,
             save=lambda p: None, merge_back=lambda snap, before, keys=(): snap,
