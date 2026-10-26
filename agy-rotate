@@ -396,7 +396,7 @@ def cmd_quota(args):
                 due = False
             else:
                 cred = fresh
-        # ★★ B88：Gemini 周只有 agy 自己的 `/usage` 给得出。每个号在**自己的临时 HOME** 里跑
+        # ★★ B88 兜底：摘要缺 Gemini 周时由 agy 自己的 `/usage` 补。每个号在**自己的临时 HOME** 里跑
         #   （钥匙串查不到 ⇒ agy 读我们写的兜底文件），不碰真钥匙串，号与号之间不抢槽 ⇒ 可以并行。
         if due and not tripped:
             rgroups, ran_as, rerr = _usage_report(cred)

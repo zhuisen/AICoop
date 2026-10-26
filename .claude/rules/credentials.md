@@ -352,7 +352,7 @@ paths:
     不带 ⇒ `401 missing CSRF token`；用 `ANTIGRAVITY_CSRF_TOKEN` 自设 ⇒ `invalid CSRF token`；
     日志 / 进程环境 / `presence/`（空锁文件）里都找不到。落成 `csrf_required`（**不是**「会自动重试」的 `rpc_error`），
     采样器据 sidecar 退避一小时。**云端 `retrieveUserQuotaSummary` 成为唯一来源**，由菜单栏 webview 后台每 10 分钟保鲜。
-    （2026-10-16 起摘要不回 Gemini 组，Gemini 5h 改由 `fetchAvailableModels` 补，见下方 B82 条。）
+    （2026-10-16 ~ 10-26 摘要曾不回 Gemini 组，真因是我们写死的旧 UA，见下方 B92 条。）
   - ★★★ **云端摘要必须打 `daily-cloudcode-pa.googleapis.com`，不是 `cloudcode-pa`**（2026-09-24，B69）。
     agy 1.2.x 的后端换了 host；旧 host 同样回 200 同形响应，但**四桶恒 1.0、reset 恒 now+窗口**（空账本）——
     打错 host 没有任何报错。判据：与 agy 自己的 `/usage` 状态栏（`⏱ 5h% (重置时刻) · 📅 周%`）对照，
@@ -450,8 +450,16 @@ paths:
   写入一律经 `agy/pool.py::carry_missing_groups` —— 缺的组沿用上次那组、每桶标 `seenAt`，重置过的桶改成读不到。
   **新增任何写 `quota_summary` 的路径都要过它**（闸 `tests/test_agy_missing_group_carried.py::EveryWritePathCarries` 按源码逐个核）。
   前端 `seen_at` 的画法 AgyCard / AgyRow 必须一致（降不透明度 + 标龄）。
-  ★ 2026-10-16 起摘要对所有号都不回 Gemini 组（B82）：5h 由 `fetch_quota` 从 `fetchAvailableModels` 补；
-  **周来自 agy 自己的 `/usage --output-format json`**（B88，零 token、约 12s，`groups_from_usage_report`）：`agy-rotate quota` 给每个到期的号
+  ★★★ **UA 的版本号决定摘要回不回 Gemini 组**（2026-10-26，CHANGELOG B92）：Google 按 `User-Agent: antigravity/cli/<版本号>`
+  里的**版本号**过滤（`cli/1.4.7` 回；`cli/1.0.0`、`cli/0.0.0`、旧的两段式 `antigravity/1.11.5 windows/amd64` 都不回；os/arch 无关）。
+  10-16 ~ 10-26 B82/B88 记的「摘要对所有号都不回 Gemini 组」是**假阴性** —— 是我们写死的旧 UA。
+  版本号由 `pool.agy_ua()` 现取 `agy --version`（按二进制签名缓存），**绝不写死**（闸 `test_no_hardcoded_cli_version_in_the_source`）。
+  ★★ **摘要后端有两套副本，读数来回切**（2026-10-26 实测，B81 判别完成）：同一号连读 15 次、没用 agy，两套值约各半、
+  重置时间逐字相同（号 A 5h 92.22/周 78.95 ↔ 92.03/79.36），不是一新一旧。`fetch_quota` 并行读 `SUMMARY_READS`=3 次、
+  按桶取最低；`carry_missing_groups` 里同一 resetTime 内回升 < `RISE_TOL`（1pp，实测副本差最大 0.66pp）沿用上次。
+  闸 `tests/test_agy_quota_replica_denoise.py`。agy 自己的 statusline 读同一后端，同样会跳 —— 拿它对照时别当真值。
+  兜底（摘要缺 Gemini 组时才走）：5h 由 `fetch_quota` 从 `fetchAvailableModels` 补；
+  **周来自 agy 自己的 `/usage --output-format json`**（B88，零 token、约 12s，`groups_from_usage_report`；摘要已有 `gemini-weekly` ⇒ 不跑）：`agy-rotate quota` 给每个到期的号
   在**临时 HOME** 里跑（钥匙串查不到、不弹窗 ⇒ agy 读临时目录里我们写的 token 文件）⇒ 不碰真钥匙串、号与号可并行。
   归属用临时目录里 agy 日志的 `applyAuthResult:` 核对（唯一才认），对不上不用。读不到时沿用（桶级，最长 `CARRY_MAX_SECS`=24h）。
   ★★★ **临时 HOME 下 agy 只能「读」不能「写」钥匙串**：写会弹「Keychain Not Found」（2026-10-18 用户截图）。agy 拿到快到期的 token 会自己刷新再写 ⇒
