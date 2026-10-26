@@ -208,12 +208,49 @@ class ClientPairsAreProbedNotGuessed(unittest.TestCase):
         self.assertIn("for i in ids:", seg)
         self.assertIn("for s in secs:", seg, "★★ 没有做笛卡儿积 ⇒ 退回「按顺序配」")
 
-    def test_only_invalid_client_is_worth_retrying(self):
-        """★ 凭证本身失效（`invalid_grant`）换几对 client 都一样 ——
-        继续试只是把同一个错误问四遍，还让用户等四倍的时间。"""
-        i = self.SRC.index("def refresh(")
-        seg = self.SRC[i:self.SRC.index("\ndef ", i + 10)]
-        self.assertIn('!= "invalid_client"', seg, "★ 任何错误都重试整轮 client")
+    def test_wrong_client_errors_keep_trying_but_a_dead_token_stops(self):
+        """★★ 2026-10-26：agy 1.4.7 新增第 3 个 OAuth client。钥匙串空时候选排序把不对的 client 排前面，
+        它对我们的 token 返回 `unauthorized_client` —— 原来当「凭证已死」立即返回 ⇒ 永远试不到正确那对，
+        4 个号的额度一起冻住。`invalid_client` 与 `unauthorized_client` 都该换下一对再试；
+        `invalid_grant`（token 真失效）换几对都一样，停。"""
+        store = Path(tempfile.mkdtemp()); tf = store / "t.json"
+        m = _load_pool(store, tf)
+
+        class Resp:
+            def __init__(self, body): self._b = body.encode(); self.status = 200 if b"access_token" in self._b else 401
+            def read(self): return self._b
+
+        def run(first_error):
+            tried = []
+
+            class Conn:
+                def __init__(self, *a, **k): pass
+                def request(self, method, path, body="", headers=None):
+                    cid = dict(x.split("=", 1) for x in body.split("&"))["client_id"]
+                    tried.append(cid)
+                    self._r = Resp('{"access_token":"new"}' if cid == "RIGHT"
+                                   else '{"error":"%s"}' % first_error)
+                def getresponse(self): return self._r
+                def close(self): pass
+
+            m.HTTPSConnection = Conn
+            pool = {"oauth_client": {}}
+            m.oauth_candidates = lambda _p=None: ([("WRONG", "s"), ("RIGHT", "s")], "")
+            cred = {"token": {"refresh_token": "rt"}}
+            fresh, err = m.refresh(cred, pool)
+            return fresh, err, tried
+
+        fresh, err, tried = run("unauthorized_client")
+        self.assertIsNotNone(fresh, "★★ unauthorized_client 应继续试下一对，却停在了第一对：%s" % err)
+        self.assertEqual(fresh["token"]["access_token"], "new")
+        self.assertEqual(tried, ["WRONG", "RIGHT"], "★ 两对都要试到")
+
+        fresh, err, tried = run("invalid_client")
+        self.assertIsNotNone(fresh, "★ invalid_client 也要继续试")
+
+        fresh, err, tried = run("invalid_grant")
+        self.assertIsNone(fresh, "★★ invalid_grant = token 真失效，换 client 没用，必须停")
+        self.assertEqual(tried, ["WRONG"], "★ 不该把同一个 invalid_grant 问四遍")
 
     def test_the_winner_is_cached_against_the_binary_signature(self):
         seg = self.SRC[self.SRC.index("def remember_client("):]

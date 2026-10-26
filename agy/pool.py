@@ -555,9 +555,14 @@ def refresh(cred, pool=None):
             remember_client(pool, cid, sec)
             break
         last = "HTTP %s: %s" % (status, str(j)[:100])
-        # ★ 只有「这对 client 不对」才值得换一对再试。凭证本身失效（invalid_grant）
-        #   换几对都一样，继续试只是把同一个错误问四遍。
-        if j.get("error") != "invalid_client":
+        # ★ 「这对 client 不对」才值得换一对再试 —— 两种形态都算：`invalid_client`（id/secret 配错）
+        #   与 `unauthorized_client`（这个 refresh_token 是另一个 client 签发的）。
+        #   ★★ 2026-10-26：agy 1.4.7 自动更新新增了第 3 个 OAuth client。agy 没在跑时钥匙串为空，
+        #   候选按二进制原序排 ⇒ 不对的那个 client 排在正确那对之前，对我们的 token 返回
+        #   `unauthorized_client`。原来把它当「凭证已死」立即返回 ⇒ 永远试不到返回 200 的那对，
+        #   4 个号的额度一起冻住、周额度停在旧窗口（实测：正确那对真能 200）。
+        #   凭证本身失效（`invalid_grant`）换几对都一样，继续试只是把同一个错误问四遍。
+        if j.get("error") not in ("invalid_client", "unauthorized_client"):
             return None, "刷新 %s" % last
     else:
         return None, "刷新失败（试完 %d 对 client 都不行）：%s" % (len(cands), last)
