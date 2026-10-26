@@ -88,7 +88,8 @@ CACHE = _STORE / ".traffic-cache.json"
 CACHE_V = 1
 # ★ 改任何 _scan_* 的解析逻辑(改变 rows 里存什么/怎么算)必须 +1,否则那些此生不再变 mtime 的文件
 #   会永远沿用旧结果,产出一份新旧混血、无法察觉的数据集。
-PARSER_V = 15         # +1 于 2026-10-23:长上下文档(row[10] 提示词) · Grok 自报费用(row[11]) · `[1m]` 归一 · Codex 首个 turn_context 前的行回填模型
+PARSER_V = 16         # +1 于 2026-10-26:agy 库结构解不出改抛 ScanReadError(原来静默 0 行)
+# 15 = 2026-10-23:长上下文档(row[10] 提示词) · Grok 自报费用(row[11]) · `[1m]` 归一 · Codex 首个 turn_context 前的行回填模型
 # 14 = 2026-10-23:agy 按生成结束时刻(steps.metadata f7)分日,与 requests.py / 其余几家一致
 # 13         # +1 于 2026-10-19:Claude row 多第 10 位 = requestId(与 OTel 账本对账去重)
 #                       ★ 必须 +1:旧缓存里的 Claude 行没有 requestId,对账集合会是空的 ⇒ OTel 整本双计。
@@ -1291,6 +1292,7 @@ def _scan_agy_db(path):
                         return int(t)
             return None
 
+        bad = 0
         for k, (blob,) in enumerate(gens):
             if not blob:
                 continue
@@ -1304,15 +1306,23 @@ def _scan_agy_db(path):
             if ts is None:
                 # 兜底：`last_step_index` 缺失时退回序数猜测（改动前的行为）。
                 ts = ts_list[k] if k < len(ts_list) else None
+            # ★★ 结构解不出 ≠ 这一条没用 token（2026-10-26，CLAUDE.md §7.0b）。单条坏的照旧跳过（半个会话的数
+            #   也比整份丢掉强，见 `test_a_corrupt_blob_does_not_lose_the_whole_file`）；但**一条都解不出**时
+            #   （agy 换了消息结构就是这个样子）不能返回 0 行 —— 连同签名进缓存就是永久 0 token、零报错。见循环后。
+            #   实测 2026-10-26：502 个库 6068 条，解不开 / 缺 f1 / 缺 usage(f4) 一条都没有 ⇒ 出现就是真变了。
+            #   最后一条可能还在写，不计（下次签名变了再读）。
+            try:
+                top = _pb(blob)
+                inner = _pb(top[1][0]) if 1 in top else None
+                u = _pb(inner[4][0]) if inner is not None and 4 in inner else None
+            except Exception:
+                inner = u = None
+            if u is None:
+                bad += k < len(gens) - 1
+                continue
             if ts is None:
                 # ★ 拿不到时间戳的**整条丢掉**,不拿文件 mtime 顶替 ——
                 #   那会把一整段历史压进"今天",而它看起来完全正常。
-                continue
-            try:
-                top = _pb(blob)
-                inner = _pb(top[1][0]) if 1 in top else {}
-                u = _pb(inner[4][0]) if 4 in inner else {}
-            except Exception:
                 continue
             g = lambda fno: (u.get(fno, [0])[0] if isinstance(u.get(fno, [0])[0], int) else 0)
             m = inner.get(19)
@@ -1322,6 +1332,9 @@ def _scan_agy_db(path):
             i_tok, cr_tok, o_tok = g(2), g(5), g(3)
             if i_tok or cr_tok or o_tok:
                 rows.append((float(ts), conv, _agy_model(model), i_tok, cr_tok, o_tok))
+        if bad and not rows:
+            raise ScanReadError("解不出 %s：%d 条已完成的 gen_metadata 一条都解不开（缺 ChatModelMetadata/usage，"
+                                "agy 可能改了结构）" % (path, bad))
     finally:
         con.close()
     return rows

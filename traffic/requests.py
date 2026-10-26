@@ -910,13 +910,29 @@ def _agy_db(path, ent, horizon, emit):
             raise ReadFail("查不了 %s: %s" % (S._tilde(path), e)) from e
         if stt.get("title") is None:
             stt["title"] = _agy_title(con, conv)
-        parsed = []
-        for gidx, blob in gens:
+        parsed, bad = [], []
+        for gi, (gidx, blob) in enumerate(gens):
             if not blob:
                 parsed.append((gidx, None))
                 continue
-            top = S._pb(bytes(blob))
-            inner = S._pb(bytes(top[1][0])) if isinstance(_pb1(top, 1), (bytes, bytearray)) else {}
+            # ★★ 结构解不出 ≠ 这一条没用 token（2026-10-26，同 `scan._scan_agy_db`）：原来缺 usage(f4) 就照常入账一条
+            #   0 token、游标推过去 ⇒ 永久 0；解码异常更是不在 `_do_agy` 的 except 里 ⇒ 整个 `--tick` 崩掉。
+            #   最后一条可能还在写 ⇒ 停在它前面，下次接着读。更早的单条坏的跳过往后读（同取消步骤那条，
+            #   别让游标永远卡住）；这一批里**一条都解不出**（agy 换了结构）⇒ 读失败，游标不动。
+            try:
+                top = S._pb(bytes(blob))
+                inner = S._pb(bytes(top[1][0])) if isinstance(_pb1(top, 1), (bytes, bytearray)) else None
+                ok = inner is not None and isinstance(_pb1(inner, 4), (bytes, bytearray))
+                if ok:
+                    S._pb(bytes(inner[4][0]))
+            except Exception:
+                ok = False
+            if not ok:
+                if gi == len(gens) - 1:
+                    break
+                bad.append(gidx)
+                parsed.append((gidx, None))
+                continue
             lsi = None
             for kv in inner.get(20, []):
                 if isinstance(kv, (bytes, bytearray)):
@@ -925,6 +941,9 @@ def _agy_db(path, ent, horizon, emit):
                         t = _pb1(d, 2).decode("ascii", "replace")
                         lsi = int(t) if t.lstrip("-").isdigit() else None
             parsed.append((gidx, (inner, lsi)))
+        if bad and not any(x[1] for x in parsed):
+            raise ReadFail("解不出 %s：%d 条 gen_metadata 一条都解不开（#%s 起；缺 ChatModelMetadata/usage，agy 可能改了结构）"
+                           % (S._tilde(path), len(bad), bad[0]))
         need = [x[1][1] for x in parsed if x[1] and x[1][1] is not None]
         steps = {}
         if need:
@@ -1022,6 +1041,9 @@ def _do_agy(cur, rt, horizon, emit, err, seen):
             cur["files"][k] = {"sig": sig, "mtime": mt, "state": state}
         except (ReadFail, sqlite3.Error) as e:
             err.append(str(e))
+        except (ValueError, IndexError, KeyError, TypeError) as e:
+            # ★ 解码异常（protobuf 形状不对）也是「读不到」：记下来、游标不动，不让一个库弄崩整轮 `--tick`。
+            err.append("解不出 %s: %s: %s" % (S._tilde(p), type(e).__name__, e))
 
 
 # ── Grok ───────────────────────────────────────────────────────────────────────

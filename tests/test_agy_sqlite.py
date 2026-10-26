@@ -416,5 +416,43 @@ class TheFrontendCopyMatchesTheBackend(unittest.TestCase):
                         "当前主源应是 SQLite —— 若不是，上面两条会被静默 skip")
 
 
+
+BAD_GENS = {                                   # 结构解不出的三种形状（2026-10-26：本机 502 库 6068 条里一条都没有）
+    "缺 usage(f4)": _bytes(1, _bytes(19, b"gemini-x")),
+    "缺 ChatModelMetadata(f1)": _bytes(2, b"x"),
+    "不是 protobuf": b"\xff\xff\xff",
+}
+
+
+class AnUndecodableGenIsAReadFailure(unittest.TestCase):
+    """★★ 解不出 ≠ 没用 token（CLAUDE.md §7.0b）。原来静默 `continue`：agy 改了结构 ⇒ 整库 0 行连同签名进缓存。
+    单条坏的照旧跳过（`test_a_corrupt_blob_does_not_lose_the_whole_file`）；**一条都解不出**才报读失败。"""
+
+    def _rows(self, gens):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "c.db")
+            make_db(p, gens, [(15, step_meta(TS + i * 5)) for i in range(len(gens))])
+            return scan._scan_agy_db(p)
+
+    def test_nothing_decodable_raises(self):
+        for name, bad in BAD_GENS.items():
+            with self.subTest(name), self.assertRaises(scan.ScanReadError, msg="★★ %s 整库被当成 0 token" % name):
+                self._rows([bad, bad, bad])
+
+    def test_one_bad_gen_among_good_ones_keeps_the_rest(self):
+        for name, bad in BAD_GENS.items():
+            with self.subTest(name):
+                self.assertEqual(len(self._rows([bad, gen_blob(100, 50, 900, 0, "gemini-x"),
+                                                 gen_blob(10, 5, 90, 0, "gemini-x")])), 2)
+
+    def test_only_the_last_gen_bad_is_still_being_written(self):
+        for name, bad in BAD_GENS.items():
+            with self.subTest(name):
+                self.assertEqual(self._rows([bad]), [], "唯一一条且是最后一条：可能还在写，不算读失败")
+
+    def test_well_formed_zero_token_gens_are_not_a_failure(self):
+        self.assertEqual(self._rows([gen_blob(0, 0, 0, 0, "gemini-x")] * 3), [])
+
+
 if __name__ == "__main__":
     unittest.main()

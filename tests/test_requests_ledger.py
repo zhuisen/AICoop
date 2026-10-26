@@ -945,5 +945,48 @@ class SinceReturnsOnlyTheTail(Base):
         self.assertFalse(got[key]["est"], "换成实测")
 
 
+
+class AgyUndecodableGenIsAReadFailure(Base):
+    """★★ 解不出 ≠ 没用 token（2026-10-26）：原来缺 usage 照常入账 0 token、游标推过去；解码异常直接弄崩 `--tick`。"""
+
+    def _put(self, idx, blob):
+        con = sqlite3.connect(str(self.tmp / "agy" / (self.conv + ".db")))
+        con.execute("UPDATE gen_metadata SET data = ? WHERE idx = ?", (blob, idx))
+        con.commit()
+        con.close()
+
+    def _agy(self, out):
+        return [r for r in out["requests"] if r["platform"] == "agy"]
+
+    def test_nothing_decodable_is_reported_not_zero(self):
+        for name, blob in (("缺 usage", _fb(1, _fb(19, b"gemini-x"))), ("不是 protobuf", b"\xff\xff\xff")):
+            with self.subTest(name):
+                self.tearDown(); self.setUp()
+                self._put(0, blob)
+                self._put(1, blob)
+                out = self.run_json()
+                self.assertEqual(self._agy(out), [], "★★ 解不出的被记成了 0 token")
+                self.assertIn("agy", out["failed"], "★ 读失败要让界面知道是 agy")
+                self.assertIn("解不出", out["error"])
+                self.assertIn("agy", self.run_json()["failed"], "★ 游标不能前进：下一轮还是读失败，不是突然变成「没有」")
+
+    def test_one_bad_gen_is_skipped_and_the_rest_still_counts(self):
+        self._put(0, _fb(1, _fb(19, b"gemini-x")))
+        out = self.run_json()
+        self.assertEqual(len(self._agy(out)), 1, "★ 坏的那条跳过，后面的照常入账（游标别卡死）")
+        self.assertNotIn("agy", out["failed"])
+
+    def test_the_last_gen_may_still_be_written(self):
+        con = sqlite3.connect(str(self.tmp / "agy" / (self.conv + ".db")))
+        good = con.execute("SELECT data FROM gen_metadata WHERE idx = 1").fetchone()[0]
+        con.close()
+        self._put(1, _fb(1, _fb(19, b"gemini-x")))
+        out = self.run_json()
+        self.assertEqual(len(self._agy(out)), 1, "前面那条照常入账")
+        self.assertNotIn("agy", out["failed"], "最后一条可能还在写，不算读失败")
+        self._put(1, good)                              # 写完了
+        self.assertEqual(len(self._agy(self.run_json())), 2, "★★ 写完之后要补读进来，游标不能已经越过它")
+
+
 if __name__ == "__main__":
     unittest.main()
